@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: audit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: audit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Apply every migration
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
+          for migration in supabase/migrations/*.sql; do
+            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "7"
+      - name: Verify builder quantity enforcement
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
+      - name: Build connector image
+        run: docker build -f supabase/connector/Dockerfile supabase
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.1
+          channel: stable
+          cache: true
+      - name: Install Linux build and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev tesseract-ocr
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build linux --release
+      - name: Verify bundled native libraries
+        run: |
+          if ldd build/linux/x64/release/bundle/inventorinator | grep -q "not found"; then
+            ldd build/linux/x64/release/bundle/inventorinator
+            exit 1
+          fi
+          if ldd assets/ocr/linux_x64/tesseract | grep -q "not found"; then
+            ldd assets/ocr/linux_x64/tesseract
+            exit 1
+          fi
+      - name: Exercise native Code 128 decoder
+        env:
+          INVENTORINATOR_NATIVE_DECODER_TEST: "1"
+          LD_LIBRARY_PATH: build/linux/x64/release/bundle/lib
+        run: flutter test test/widget_test.dart --plain-name "ingest decoder reads a tilted alphanumeric Code 128 FNSKU"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inventorinator-linux-x64
+          path: build/linux/x64/release/bundle
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.1
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --debug
+      - name: Android app lint
+        working-directory: android
+        run: ./gradlew :app:lintDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inventorinator-android-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.1
+          channel: stable
+          cache: true
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build windows --release
+      - name: Package Windows bundle
+        shell: pwsh
+        run: Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "build\Inventorinator-Windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inventorinator-windows-x64
+          path: build/Inventorinator-Windows-x64.zip

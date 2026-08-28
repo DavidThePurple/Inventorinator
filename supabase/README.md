@@ -15,7 +15,7 @@ extract full administrator access. Therefore:
 - an outdated server is rejected with its installed and required versions;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current required schema: **v6**.
+Current required schema: **v7**.
 
 ## Add the connector to a self-hosted Supabase stack
 

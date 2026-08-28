@@ -23,7 +23,20 @@ class LocalDatabase {
     final database = sqlite3.open(databasePath);
     final result = LocalDatabase._(databasePath, database);
     result._createSchema();
+    await _hardenLocalPermissions(databasePath);
     return result;
+  }
+
+  static Future<void> _hardenLocalPermissions(String databasePath) async {
+    if (!Platform.isLinux && !Platform.isMacOS) return;
+    try {
+      await Process.run('chmod', ['700', path_util.dirname(databasePath)]);
+      if (await File(databasePath).exists()) {
+        await Process.run('chmod', ['600', databasePath]);
+      }
+    } catch (_) {
+      // SQLite remains usable on unusual POSIX systems without chmod.
+    }
   }
 
   void _createSchema() {
@@ -116,6 +129,7 @@ class LocalDatabase {
   Future<Uint8List> exportPortableDatabase() async {
     final exportPath = '$path.export-${DateTime.now().microsecondsSinceEpoch}';
     final exported = sqlite3.open(exportPath);
+    await _hardenLocalPermissions(exportPath);
     try {
       exported.execute('''
         CREATE TABLE app_state (
@@ -147,6 +161,7 @@ class LocalDatabase {
     final importPath = '$path.import-${DateTime.now().microsecondsSinceEpoch}';
     final file = File(importPath);
     await file.writeAsBytes(bytes, flush: true);
+    await _hardenLocalPermissions(importPath);
     Database? imported;
     try {
       imported = sqlite3.open(importPath, mode: OpenMode.readOnly);
@@ -213,6 +228,7 @@ class LocalDatabase {
     }
     _database = sqlite3.open(path);
     _createSchema();
+    await _hardenLocalPermissions(path);
   }
 
   void close() => _database.close();

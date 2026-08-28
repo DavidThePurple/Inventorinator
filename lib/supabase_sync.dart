@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-const requiredInventorinatorSchemaVersion = 6;
+const requiredInventorinatorSchemaVersion = 7;
 
 enum WorkspaceRole {
   admin,
@@ -56,8 +56,14 @@ class SupabaseConfig {
   final DateTime? lastSyncedAt;
   final String? lastSyncedStateJson;
 
-  bool get isConfigured =>
-      Uri.tryParse(url)?.hasScheme == true && publishableKey.isNotEmpty;
+  bool get isConfigured {
+    final server = Uri.tryParse(url);
+    return server != null &&
+        {'http', 'https'}.contains(server.scheme) &&
+        server.host.isNotEmpty &&
+        publishableKey.isNotEmpty;
+  }
+
   bool get hasSession => userId != null && refreshToken != null;
 
   SupabaseConfig copyWith({
@@ -158,6 +164,15 @@ class SupabaseSyncService {
 
   final SupabaseConfig config;
   final http.Client _client;
+  static const _requestTimeout = Duration(seconds: 20);
+
+  Future<http.Response> _request(Future<http.Response> request) =>
+      request.timeout(
+        _requestTimeout,
+        onTimeout: () => throw const SupabaseSyncException(
+          'The sync server did not respond within 20 seconds.',
+        ),
+      );
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final base = Uri.parse(config.url.replaceFirst(RegExp(r'/$'), ''));
@@ -170,9 +185,8 @@ class SupabaseSyncService {
   };
 
   Future<void> verifyServer() async {
-    final response = await _client.get(
-      _uri('/auth/v1/health'),
-      headers: _baseHeaders,
+    final response = await _request(
+      _client.get(_uri('/auth/v1/health'), headers: _baseHeaders),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw SupabaseSyncException(_message(response));
@@ -180,28 +194,30 @@ class SupabaseSyncService {
   }
 
   Future<SupabaseSession> signIn(String email, String password) async {
-    final response = await _client.post(
-      _uri('/auth/v1/token', {'grant_type': 'password'}),
-      headers: _baseHeaders,
-      body: jsonEncode({'email': email.trim(), 'password': password}),
+    final response = await _request(
+      _client.post(
+        _uri('/auth/v1/token', {'grant_type': 'password'}),
+        headers: _baseHeaders,
+        body: jsonEncode({'email': email.trim(), 'password': password}),
+      ),
     );
     return _sessionFromResponse(response);
   }
 
   Future<SupabaseSession> signInAnonymously() async {
-    final response = await _client.post(
-      _uri('/auth/v1/signup'),
-      headers: _baseHeaders,
-      body: '{}',
+    final response = await _request(
+      _client.post(_uri('/auth/v1/signup'), headers: _baseHeaders, body: '{}'),
     );
     return _sessionFromResponse(response);
   }
 
   Future<void> signUp(String email, String password) async {
-    final response = await _client.post(
-      _uri('/auth/v1/signup'),
-      headers: _baseHeaders,
-      body: jsonEncode({'email': email.trim(), 'password': password}),
+    final response = await _request(
+      _client.post(
+        _uri('/auth/v1/signup'),
+        headers: _baseHeaders,
+        body: jsonEncode({'email': email.trim(), 'password': password}),
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw SupabaseSyncException(_message(response));
@@ -213,10 +229,12 @@ class SupabaseSyncService {
     if (token == null) {
       throw const SupabaseSyncException('Sign in before syncing.');
     }
-    final response = await _client.post(
-      _uri('/auth/v1/token', {'grant_type': 'refresh_token'}),
-      headers: _baseHeaders,
-      body: jsonEncode({'refresh_token': token}),
+    final response = await _request(
+      _client.post(
+        _uri('/auth/v1/token', {'grant_type': 'refresh_token'}),
+        headers: _baseHeaders,
+        body: jsonEncode({'refresh_token': token}),
+      ),
     );
     return _sessionFromResponse(response);
   }
@@ -239,15 +257,17 @@ class SupabaseSyncService {
     if (workspaceId == null) {
       throw const SupabaseSyncException('Connect this device before syncing.');
     }
-    final response = await _client.get(
-      _uri('/rest/v1/workshop_states', {
-        'select': 'state_json,updated_at',
-        'workspace_id': 'eq.$workspaceId',
-      }),
-      headers: {
-        ..._baseHeaders,
-        'Authorization': 'Bearer ${session.accessToken}',
-      },
+    final response = await _request(
+      _client.get(
+        _uri('/rest/v1/workshop_states', {
+          'select': 'state_json,updated_at',
+          'workspace_id': 'eq.$workspaceId',
+        }),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw SupabaseSyncException(_message(response));
@@ -262,15 +282,17 @@ class SupabaseSyncService {
   }
 
   Future<int> schemaVersion(SupabaseSession session) async {
-    final response = await _client.get(
-      _uri('/rest/v1/inventorinator_schema', {
-        'select': 'version',
-        'singleton': 'eq.true',
-      }),
-      headers: {
-        ..._baseHeaders,
-        'Authorization': 'Bearer ${session.accessToken}',
-      },
+    final response = await _request(
+      _client.get(
+        _uri('/rest/v1/inventorinator_schema', {
+          'select': 'version',
+          'singleton': 'eq.true',
+        }),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw const SupabaseSyncException(
@@ -307,17 +329,19 @@ class SupabaseSyncService {
     if (workspaceId == null) {
       throw const SupabaseSyncException('Connect this device before syncing.');
     }
-    final response = await _client.post(
-      _uri('/rest/v1/rpc/save_inventorinator_workshop_state'),
-      headers: {
-        ..._baseHeaders,
-        'Authorization': 'Bearer ${session.accessToken}',
-      },
-      body: jsonEncode({
-        'target_workspace': workspaceId,
-        'next_state': jsonDecode(stateJson),
-        'audit_events': auditEvents,
-      }),
+    final response = await _request(
+      _client.post(
+        _uri('/rest/v1/rpc/save_inventorinator_workshop_state'),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+        body: jsonEncode({
+          'target_workspace': workspaceId,
+          'next_state': jsonDecode(stateJson),
+          'audit_events': auditEvents,
+        }),
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw SupabaseSyncException(_message(response));
@@ -405,13 +429,15 @@ class SupabaseSyncService {
     String function,
     Map<String, Object?> parameters,
   ) async {
-    final response = await _client.post(
-      _uri('/rest/v1/rpc/$function'),
-      headers: {
-        ..._baseHeaders,
-        'Authorization': 'Bearer ${session.accessToken}',
-      },
-      body: jsonEncode(parameters),
+    final response = await _request(
+      _client.post(
+        _uri('/rest/v1/rpc/$function'),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+        body: jsonEncode(parameters),
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw SupabaseSyncException(_message(response));

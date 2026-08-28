@@ -5,6 +5,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/local_database.dart';
 
 void main() {
+  test('POSIX database and support directory are private', () async {
+    if (!Platform.isLinux && !Platform.isMacOS) return;
+    final parent = await Directory.systemTemp.createTemp(
+      'inventorinator-private-db-',
+    );
+    addTearDown(() => parent.delete(recursive: true));
+    final support = Directory('${parent.path}/support');
+    final path = '${support.path}/inventory.sqlite3';
+
+    final database = await LocalDatabase.open(overridePath: path);
+    expect((await support.stat()).mode & 0x1ff, 0x1c0); // 0700
+    expect((await File(path).stat()).mode & 0x1ff, 0x180); // 0600
+    database.close();
+  });
+
   test('SQLite state survives close and reopen', () async {
     final directory = await Directory.systemTemp.createTemp(
       'inventorinator-db-',

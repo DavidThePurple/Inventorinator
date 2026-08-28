@@ -34,9 +34,11 @@ class _SyncOnboardingDialogState extends State<SyncOnboardingDialog> {
   Future<void> _connect() async {
     final server = serverController.text.trim();
     final key = keyController.text.trim();
-    if (Uri.tryParse(server)?.hasScheme != true || key.isEmpty) {
+    final candidate = SupabaseConfig(url: server, publishableKey: key);
+    if (!candidate.isConfigured) {
       setState(
-        () => error = 'Enter the Supabase server address and publishable key.',
+        () => error =
+            'Enter an HTTP(S) Supabase server address and publishable key.',
       );
       return;
     }

@@ -7862,6 +7862,9 @@ class AddItemDialog extends StatefulWidget {
 }
 
 class _AddItemDialogState extends State<AddItemDialog> {
+  static const _webRequestTimeout = Duration(seconds: 20);
+  static const _maximumProductPageBytes = 8 * 1024 * 1024;
+  static const _maximumProductImageBytes = 12 * 1024 * 1024;
   final formKey = GlobalKey<FormState>();
   late final TextEditingController nameController;
   late final TextEditingController compatibilityController;
@@ -9213,16 +9216,21 @@ class _AddItemDialogState extends State<AddItemDialog> {
     }
     setState(() => importingProductPage = true);
     try {
-      final response = await http.get(
-        uri,
-        headers: const {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: const {
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          )
+          .timeout(_webRequestTimeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('page returned HTTP ${response.statusCode}');
+      }
+      if (response.bodyBytes.length > _maximumProductPageBytes) {
+        throw Exception('product page is larger than 8 MB');
       }
       final document = html_parser.parse(response.body);
       Map<String, dynamic>? product;
@@ -9266,18 +9274,20 @@ class _AddItemDialogState extends State<AddItemDialog> {
         try {
           final imageUri = uri.resolve(imageUrl);
           if (!{'http', 'https'}.contains(imageUri.scheme)) continue;
-          final imageResponse = await http.get(
-            imageUri,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36',
-              'Accept':
-                  'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
-              'Referer': uri.toString(),
-            },
-          );
+          final imageResponse = await http
+              .get(
+                imageUri,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36',
+                  'Accept': 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
+                  'Referer': uri.toString(),
+                },
+              )
+              .timeout(_webRequestTimeout);
           final contentType = imageResponse.headers['content-type'] ?? '';
           if (imageResponse.statusCode == 200 &&
               imageResponse.bodyBytes.isNotEmpty &&
+              imageResponse.bodyBytes.length <= _maximumProductImageBytes &&
               contentType.startsWith('image/') &&
               !contentType.contains('svg')) {
             downloadedImage = imageResponse.bodyBytes;

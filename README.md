@@ -16,6 +16,10 @@ flutter run -d linux
 Android, Windows, and Linux use the same Flutter application and workshop data
 format.
 
+Automated checks build all three targets in [CI](.github/workflows/ci.yml).
+See the [release checklist](docs/release-checklist.md) before publishing a
+binary. Windows contributors may also run `tool/build_windows.ps1` locally.
+
 ## Android release signing
 
 Release builds are never signed with Flutter's shared debug key. Generate your
@@ -38,6 +42,12 @@ arguments.
 
 See [Supabase self-hosting and updates](supabase/README.md) for initial setup,
 Dockge integration, automatic migrations, backups, and upgrades.
+
+## Privacy and security
+
+Read [PRIVACY.md](PRIVACY.md) before enabling OCR, web imports, or cloud sync.
+Security reports should follow [SECURITY.md](SECURITY.md). Contributor setup
+and migration rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

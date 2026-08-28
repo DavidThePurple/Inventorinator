@@ -11,6 +11,20 @@ void main() {
     publishableKey: 'sb_publishable_test',
   );
 
+  test('sync configuration only accepts HTTP(S) server addresses', () {
+    expect(config.isConfigured, isTrue);
+    expect(
+      config.copyWith(url: 'http://192.168.1.230:8010').isConfigured,
+      isTrue,
+    );
+    expect(
+      config.copyWith(url: 'ftp://inventory.example').isConfigured,
+      isFalse,
+    );
+    expect(config.copyWith(url: 'not a server').isConfigured, isFalse);
+    expect(config.copyWith(publishableKey: '').isConfigured, isFalse);
+  });
+
   test(
     'server and publishable key are verified before authentication',
     () async {

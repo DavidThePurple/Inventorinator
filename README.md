@@ -63,6 +63,12 @@ Installation, self-hosting, development, and build documentation belong in the
 - Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 - Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
+## AI assistance
+
+ChatGPT and OpenAI Codex were used as development tools during Inventorinator's
+design, implementation, testing, and documentation. Project direction and
+final decisions remain with the human maintainer.
+
 ## License
 
 Inventorinator is released under the [MIT License](LICENSE). You may use,

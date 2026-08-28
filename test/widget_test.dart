@@ -1754,6 +1754,9 @@ Bed Temperature: 80°C
     expect(find.text('Shared'), findsOneWidget);
 
     await tester.tap(find.text('Use 1'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(find.byKey(const Key('build-completion-confetti')), findsOneWidget);
     await tester.pumpAndSettle();
     expect(find.textContaining('2 / 2 used'), findsOneWidget);
     await tester.tap(find.byKey(const Key('complete-build')));

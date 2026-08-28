@@ -4977,15 +4977,21 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
     return result;
   }
 
+  bool get _allBuildLinesUsed => widget.build.lines.every(
+    (line) => line.usedQuantity >= line.requiredQuantity,
+  );
+
+  void _celebrateCompletion() {
+    completionCelebration.forward(from: 0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final grouped = <String, List<BuildLine>>{};
     for (final line in widget.build.lines) {
       grouped.putIfAbsent(line.section, () => []).add(line);
     }
-    final allLinesUsed = widget.build.lines.every(
-      (line) => line.usedQuantity >= line.requiredQuantity,
-    );
+    final allLinesUsed = _allBuildLinesUsed;
     final completed = widget.build.completedAt != null;
     final stock = _stockStatus();
     final kitStock = _kitStockStatus();
@@ -5150,7 +5156,7 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
                   final completing = !completed;
                   if (await widget.onCompletedChanged(completing) && mounted) {
                     setState(() {});
-                    if (completing) completionCelebration.forward(from: 0);
+                    if (completing) _celebrateCompletion();
                   }
                 }
               : null,
@@ -5363,8 +5369,12 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
                         stock.available <= 0
                     ? null
                     : () async {
+                        final wasFullyUsed = _allBuildLinesUsed;
                         if (await widget.onAdjust(line.id, true) && mounted) {
                           setState(() {});
+                          if (!wasFullyUsed && _allBuildLinesUsed) {
+                            _celebrateCompletion();
+                          }
                         }
                       },
                 child: Text(multiple ? 'Use 1' : 'Use'),

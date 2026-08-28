@@ -15,7 +15,7 @@
 
 ## Download
 
-**[Download the latest Inventorinator release](https://github.com/DavidThePurple/Inventorinator/releases/latest)**
+**[Download Inventorinator](https://github.com/DavidThePurple/Inventorinator/releases)**
 
 Release downloads are provided for:
 

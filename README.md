@@ -1,53 +1,67 @@
-# Inventorinator
+<p align="center">
+  <img src="assets/images/inventorinator-raygun-v2.png" width="180" alt="Inventorinator raygun logo">
+</p>
 
-Inventorinator is a Linux-first, cross-platform workshop inventory and build
-management app. It uses local SQLite for offline operation and can synchronize
-multiple devices through hosted or self-hosted Supabase.
+<h1 align="center">Inventorinator</h1>
 
-## Development
+<p align="center">
+  Take over <s>the world</s> the shop!
+</p>
 
-```sh
-flutter pub get
-flutter analyze
-flutter test
-flutter run -d linux
-```
+<p align="center">
+  A Linux-first workshop inventory, consumables, machine, kit, and build
+  manager for makers of anything.
+</p>
 
-Android, Windows, and Linux use the same Flutter application and workshop data
-format.
+## Download
 
-Automated checks build all three targets in [CI](.github/workflows/ci.yml).
-See the [release checklist](docs/release-checklist.md) before publishing a
-binary. Windows contributors may also run `tool/build_windows.ps1` locally.
+**[Download the latest Inventorinator release](https://github.com/David-Everlasting-Media/Inventorinator/releases/latest)**
 
-## Android release signing
+Release downloads are provided for:
 
-Release builds are never signed with Flutter's shared debug key. Generate your
-own upload keystore, copy `android/key.properties.example` to
-`android/key.properties`, and fill in its private values. Both the properties
-file and keystores are ignored by Git. A release build fails clearly when
-signing has not been configured.
+- Linux x64
+- Windows x64
+- Android (`arm64-v8a` for most current phones and tablets)
 
-## Self-hosted synchronization
+Inventorinator is under active development. Back up important inventory with
+the built-in database export before upgrading.
 
-The Flutter app connects with a client-safe Supabase publishable key. Database
-migrations are deliberately handled by the server-side Inventorinator
-connector; database administrator credentials are never stored on phones or
-desktop clients.
+## What it does
 
-Public builds ship with no server address or key. Users enter their own hosted
-or self-hosted Supabase connector details during onboarding. Maintainers may
-provide deployment-specific defaults with the documented `--dart-define`
-arguments.
+- Tracks supplies, parts, tools, machines, storage, cost, quantity, and
+  compatibility.
+- Handles filament drying, moisture lifespan, deployment, low-stock alerts,
+  and material-specific instructions.
+- Creates kits and editable bills of materials, then turns them into persistent
+  shared build queues.
+- Scans QR codes and product barcodes with ordinary phone and webcam cameras.
+- Captures and OCRs labels, imports product pages, and generates downloadable
+  item QR labels.
+- Works locally with SQLite and supports optional multi-device synchronization
+  through hosted or self-hosted Supabase.
+- Supports owner, admin, manager, editor, and builder access boundaries.
+- Allows custom item types and contextual fields, so it is not limited to 3D
+  printing.
 
-See [Supabase self-hosting and updates](supabase/README.md) for initial setup,
-Dockge integration, automatic migrations, backups, and upgrades.
+## Getting started
 
-## Privacy and security
+Download the package for your platform from
+[Releases](https://github.com/David-Everlasting-Media/Inventorinator/releases).
+Inventorinator works locally immediately; cloud synchronization is optional
+and can be connected from inside the app.
 
-Read [PRIVACY.md](PRIVACY.md) before enabling OCR, web imports, or cloud sync.
-Security reports should follow [SECURITY.md](SECURITY.md). Contributor setup
-and migration rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Installation, self-hosting, development, and build documentation belong in the
+**[Inventorinator Wiki](https://github.com/David-Everlasting-Media/Inventorinator/wiki)**.
+
+## Help and project information
+
+- Report bugs or request features in
+  [GitHub Issues](https://github.com/David-Everlasting-Media/Inventorinator/issues).
+- Read the [privacy notes](PRIVACY.md) before enabling OCR, web imports, or
+  cloud synchronization.
+- Report vulnerabilities according to the [security policy](SECURITY.md).
+- Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+- Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

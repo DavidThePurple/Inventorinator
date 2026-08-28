@@ -3,18 +3,11 @@
 Issues and pull requests are welcome. Keep data formats generic and preserve
 offline SQLite operation; no hosted service may be required for basic use.
 
-Before submitting a change:
-
-```sh
-flutter pub get
-flutter analyze
-flutter test
-flutter build linux --release
-```
-
-Also build the platform you changed. Windows contributors can run
-`tool/build_windows.ps1`. Android release signing is intentionally maintainer
-controlled; contributors may use a debug APK.
+Development environment and build instructions are maintained in the
+[Inventorinator Wiki](https://github.com/David-Everlasting-Media/Inventorinator/wiki).
+Before submitting a change, run the documented analysis and test checks and
+verify the platform you changed. Android release signing is intentionally
+maintainer controlled; contributors may use a debug APK.
 
 Do not commit credentials, local Supabase configuration, signing keystores,
 database exports, customer inventory, product images, or captured labels.

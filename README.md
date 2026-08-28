@@ -15,7 +15,7 @@
 
 ## Download
 
-**[Download the latest Inventorinator release](https://github.com/David-Everlasting-Media/Inventorinator/releases/latest)**
+**[Download the latest Inventorinator release](https://github.com/DavidThePurple/Inventorinator/releases/latest)**
 
 Release downloads are provided for:
 
@@ -46,17 +46,17 @@ the built-in database export before upgrading.
 ## Getting started
 
 Download the package for your platform from
-[Releases](https://github.com/David-Everlasting-Media/Inventorinator/releases).
+[Releases](https://github.com/DavidThePurple/Inventorinator/releases).
 Inventorinator works locally immediately; cloud synchronization is optional
 and can be connected from inside the app.
 
 Installation, self-hosting, development, and build documentation belong in the
-**[Inventorinator Wiki](https://github.com/David-Everlasting-Media/Inventorinator/wiki)**.
+**[Inventorinator Wiki](https://github.com/DavidThePurple/Inventorinator/wiki)**.
 
 ## Help and project information
 
 - Report bugs or request features in
-  [GitHub Issues](https://github.com/David-Everlasting-Media/Inventorinator/issues).
+  [GitHub Issues](https://github.com/DavidThePurple/Inventorinator/issues).
 - Read the [privacy notes](PRIVACY.md) before enabling OCR, web imports, or
   cloud synchronization.
 - Report vulnerabilities according to the [security policy](SECURITY.md).

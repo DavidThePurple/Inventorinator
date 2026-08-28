@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Inventorinator
+Comment=Workshop inventory and build management
+Exec=inventorinator
+Icon=media.everlasting.inventorinator
+Terminal=false
+Categories=Utility;
+StartupWMClass=Media.everlasting.inventorinator

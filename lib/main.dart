@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -4902,8 +4903,19 @@ class BuildQueueDialog extends StatefulWidget {
   State<BuildQueueDialog> createState() => _BuildQueueDialogState();
 }
 
-class _BuildQueueDialogState extends State<BuildQueueDialog> {
+class _BuildQueueDialogState extends State<BuildQueueDialog>
+    with SingleTickerProviderStateMixin {
   bool showKit = false;
+  late final AnimationController completionCelebration = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  );
+
+  @override
+  void dispose() {
+    completionCelebration.dispose();
+    super.dispose();
+  }
 
   String _kitLineName(KitBomEntry line) =>
       line.name ??
@@ -4979,94 +4991,117 @@ class _BuildQueueDialogState extends State<BuildQueueDialog> {
     final kitStock = _kitStockStatus();
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 900),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 16, 12, 12),
-                    child: _buildHeader(allLinesUsed, completed),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        ...grouped.entries.map(
-                          (section) => _buildSection(section, stock),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              width: showKit ? 360 : 0,
-              decoration: const BoxDecoration(
-                color: Color(0xff111620),
-                border: Border(left: BorderSide(color: Color(0xff333b4d))),
-              ),
-              child: showKit
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Text(
-                            widget.kit.name,
-                            style: const TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w800,
+      child: Stack(
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 900),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(22, 16, 12, 12),
+                        child: _buildHeader(allLinesUsed, completed),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            ...grouped.entries.map(
+                              (section) => _buildSection(section, stock),
                             ),
-                          ),
+                          ],
                         ),
-                        const Divider(height: 1),
-                        Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            itemCount: widget.kit.bom.length,
-                            itemBuilder: (context, index) {
-                              final line = widget.kit.bom[index];
-                              final name = _kitLineName(line);
-                              final lineStock = kitStock[index]!;
-                              final available = lineStock.available;
-                              final missing = lineStock.missing;
-                              return Card(
-                                color: missing > 0.0001
-                                    ? const Color(0xff351a22)
-                                    : null,
-                                child: ListTile(
-                                  dense: true,
-                                  leading: missing > 0.0001
-                                      ? const Icon(
-                                          Icons.error_outline_rounded,
-                                          color: Color(0xffff7b8e),
-                                        )
-                                      : null,
-                                  title: Text(name),
-                                  subtitle: Text(
-                                    '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
-                                  ),
-                                  trailing: Text(
-                                    '× ${_formatBomQuantity(line.quantity)}',
-                                  ),
+                      ),
+                    ],
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: showKit ? 360 : 0,
+                  decoration: const BoxDecoration(
+                    color: Color(0xff111620),
+                    border: Border(left: BorderSide(color: Color(0xff333b4d))),
+                  ),
+                  child: showKit
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(18),
+                              child: Text(
+                                widget.kit.name,
+                                style: const TextStyle(
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w800,
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    )
-                  : const SizedBox.shrink(),
+                              ),
+                            ),
+                            const Divider(height: 1),
+                            Expanded(
+                              child: ListView.builder(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                                itemCount: widget.kit.bom.length,
+                                itemBuilder: (context, index) {
+                                  final line = widget.kit.bom[index];
+                                  final name = _kitLineName(line);
+                                  final lineStock = kitStock[index]!;
+                                  final available = lineStock.available;
+                                  final missing = lineStock.missing;
+                                  return Card(
+                                    color: missing > 0.0001
+                                        ? const Color(0xff351a22)
+                                        : null,
+                                    child: ListTile(
+                                      dense: true,
+                                      leading: missing > 0.0001
+                                          ? const Icon(
+                                              Icons.error_outline_rounded,
+                                              color: Color(0xffff7b8e),
+                                            )
+                                          : null,
+                                      title: Text(name),
+                                      subtitle: Text(
+                                        '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
+                                      ),
+                                      trailing: Text(
+                                        '× ${_formatBomQuantity(line.quantity)}',
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: completionCelebration,
+                builder: (context, _) =>
+                    completionCelebration.value == 0 ||
+                        completionCelebration.isCompleted
+                    ? const SizedBox.shrink()
+                    : CustomPaint(
+                        key: const Key('build-completion-confetti'),
+                        painter: _BuildCompletionConfettiPainter(
+                          completionCelebration.value,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -5112,8 +5147,10 @@ class _BuildQueueDialogState extends State<BuildQueueDialog> {
           key: const Key('complete-build'),
           onPressed: widget.canUse && (completed || allLinesUsed)
               ? () async {
-                  if (await widget.onCompletedChanged(!completed) && mounted) {
+                  final completing = !completed;
+                  if (await widget.onCompletedChanged(completing) && mounted) {
                     setState(() {});
+                    if (completing) completionCelebration.forward(from: 0);
                   }
                 }
               : null,
@@ -5338,6 +5375,79 @@ class _BuildQueueDialogState extends State<BuildQueueDialog> {
       ),
     );
   }
+}
+
+class _BuildCompletionConfettiPainter extends CustomPainter {
+  const _BuildCompletionConfettiPainter(this.progress);
+
+  final double progress;
+
+  static const colors = [
+    Color(0xffa987ff),
+    Color(0xff45d2bd),
+    Color(0xffffc857),
+    Color(0xffff6f91),
+    Color(0xff58a6ff),
+    Colors.white,
+  ];
+
+  double _noise(int seed) {
+    final value = math.sin(seed * 12.9898) * 43758.5453;
+    return value - value.floorToDouble();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final time = Curves.easeOut.transform(progress);
+    final fade = progress < .72 ? 1.0 : (1 - progress) / .28;
+    final paint = Paint()..style = PaintingStyle.fill;
+
+    for (var index = 0; index < 96; index++) {
+      final fromLeft = index.isEven;
+      final horizontal = _noise(index * 5 + 1);
+      final vertical = _noise(index * 5 + 2);
+      final flutter = _noise(index * 5 + 3);
+      final pieceWidth = 5.0 + (_noise(index * 5 + 4) * 8);
+      final pieceHeight = 3.0 + (_noise(index * 5 + 5) * 7);
+      final direction = fromLeft ? 1.0 : -1.0;
+      final origin = Offset(fromLeft ? 12 : size.width - 12, size.height - 8);
+      final velocityX = size.width * (.12 + horizontal * .82) * direction;
+      final velocityY = size.height * (.72 + vertical * .62);
+      final gravity = size.height * 1.18;
+      final position = Offset(
+        origin.dx + velocityX * time,
+        origin.dy - velocityY * time + gravity * time * time,
+      );
+      if (position.dx < -20 || position.dx > size.width + 20) continue;
+
+      paint.color = colors[index % colors.length].withValues(
+        alpha: fade.clamp(0, 1),
+      );
+      canvas.save();
+      canvas.translate(position.dx, position.dy);
+      canvas.rotate((time * (5 + flutter * 12)) * direction);
+      if (index % 4 == 0) {
+        canvas.drawCircle(Offset.zero, pieceWidth * .48, paint);
+      } else {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: Offset.zero,
+              width: pieceWidth,
+              height: pieceHeight,
+            ),
+            const Radius.circular(2),
+          ),
+          paint,
+        );
+      }
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BuildCompletionConfettiPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 class CatalogManagerDialog extends StatefulWidget {

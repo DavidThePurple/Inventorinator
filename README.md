@@ -13,6 +13,12 @@
   manager for makers of anything.
 </p>
 
+> [!WARNING]
+> **NOT PRODUCTION READY**
+>
+> Inventorinator is experimental. Features may be incomplete, unstable, or
+> change without notice. Back up important data. **Use at your own risk.**
+
 ## Download
 
 **[Download Inventorinator](https://github.com/DavidThePurple/Inventorinator/releases)**

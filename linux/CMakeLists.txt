@@ -105,7 +105,7 @@ install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
 install(FILES "${CMAKE_SOURCE_DIR}/../assets/images/inventorinator-raygun-v2.png"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" RENAME "app_icon.png"
   COMPONENT Runtime)
-install(FILES "${CMAKE_SOURCE_DIR}/../assets/images/inventorinator-raygun-v2.png"
+install(FILES "${CMAKE_SOURCE_DIR}/packaging/app_icon_512.png"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/512x512/apps"
   RENAME "media.everlasting.inventorinator.png" COMPONENT Runtime)
 install(FILES "${CMAKE_SOURCE_DIR}/packaging/media.everlasting.inventorinator.desktop"

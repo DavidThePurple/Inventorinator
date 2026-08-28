@@ -10,7 +10,7 @@
 
 <p align="center">
   A Linux-first workshop inventory, consumables, machine, kit, and build
-  manager for makers of anything.
+  manager for makers.
 </p>
 
 > [!WARNING]
@@ -28,6 +28,9 @@ Release downloads are provided for:
 - Linux x64
 - Windows x64
 - Android (`arm64-v8a` for most current phones and tablets)
+
+On Linux, extract the archive and run `./install.sh`. This registers the
+raygun icon and adds Inventorinator to the application menu for your user.
 
 Inventorinator is under active development. Back up important inventory with
 the built-in database export before upgrading.

@@ -17,6 +17,23 @@ extract full administrator access. Therefore:
 
 Current required schema: **v7**.
 
+## One-command installer and updater
+
+Run the interactive installer shipped with Inventorinator:
+
+```sh
+./supabase/install-or-update.sh
+```
+
+Choose hosted Supabase or a self-hosted Docker stack. For hosted Supabase, paste
+the PostgreSQL connection string from the project's **Connect** dialog when
+prompted; it is read silently and is not saved. For self-hosting, the script
+uses the `supabase-db` container by default. It detects the installed schema,
+applies only missing migrations, and verifies the result.
+
+If `psql` is unavailable for a hosted project, the installer can use Docker's
+official PostgreSQL image instead.
+
 ## Add the connector to a self-hosted Supabase stack
 
 Place this `supabase` directory inside the Supabase Compose directory as
@@ -62,11 +79,11 @@ No SQL pasting or AI assistance is required during a normal update.
 
 ## Manual recovery
 
-If the connector service cannot be installed yet, an administrator can apply
-the same idempotent migrations directly:
+If the connector service cannot be installed yet, run the same installer in
+self-hosted mode:
 
 ```sh
-sh apply-migrations.sh
+./install-or-update.sh --self-hosted
 ```
 
 By default this targets the `supabase-db` container. Override it with

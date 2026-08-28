@@ -158,4 +158,5 @@ jobs:
           gh release create "$RELEASE_TAG" dist/* \
             --target "$GITHUB_SHA" \
             --title "Inventorinator $RELEASE_TAG" \
+            --prerelease \
             --generate-notes

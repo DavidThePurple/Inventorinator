@@ -2,7 +2,7 @@
 
 All notable changes to Inventorinator will be recorded here.
 
-## [Unreleased]
+## [1.0.0] - 2026-08-28
 
 ### Added
 
@@ -17,3 +17,8 @@ All notable changes to Inventorinator will be recorded here.
 - Server-enforced owner, admin, manager, editor, and builder boundaries.
 - Builder quantity changes must exactly match shared Build use/unuse actions.
 - Android release builds require a private maintainer keystore.
+
+### Known limitations
+
+- Cloud sync requires Inventorinator connector schema 7. Existing schema 6
+  servers must be migrated before connecting this release.

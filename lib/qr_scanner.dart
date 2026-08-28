@@ -1,0 +1,973 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
+import 'package:flutter_zxing/flutter_zxing.dart' as zxing;
+import 'package:image/image.dart' as img;
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:zxing2/qrcode.dart';
+
+enum ScanMode { find, ingest }
+
+enum ScanCaptureMode { barcode, ocr }
+
+typedef ScanResultCallback = void Function(
+  String code,
+  ScanMode mode,
+  Uint8List? imageBytes,
+);
+typedef LabelCaptureCallback = Future<void> Function(Uint8List imageBytes);
+
+class InventoryQrScanner extends StatefulWidget {
+  const InventoryQrScanner({
+    super.key,
+    required this.onCode,
+    this.onLabelCapture,
+  });
+
+  final ScanResultCallback onCode;
+  final LabelCaptureCallback? onLabelCapture;
+
+  @override
+  State<InventoryQrScanner> createState() => _InventoryQrScannerState();
+}
+
+class _InventoryQrScannerState extends State<InventoryQrScanner> {
+  ScanMode mode = ScanMode.find;
+  ScanCaptureMode captureMode = ScanCaptureMode.barcode;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Scan')),
+    body: Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+          child: SegmentedButton<ScanMode>(
+            key: const Key('scan-mode'),
+            segments: const [
+              ButtonSegment(
+                value: ScanMode.find,
+                icon: Icon(Icons.search_rounded),
+                label: Text('Find'),
+              ),
+              ButtonSegment(
+                value: ScanMode.ingest,
+                icon: Icon(Icons.add_box_outlined),
+                label: Text('Ingest'),
+              ),
+            ],
+            selected: {mode},
+            onSelectionChanged: (selection) =>
+                setState(() => mode = selection.first),
+          ),
+        ),
+        if (mode == ScanMode.ingest)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: SegmentedButton<ScanCaptureMode>(
+              key: const Key('scan-capture-mode'),
+              segments: const [
+                ButtonSegment(
+                  value: ScanCaptureMode.barcode,
+                  icon: Icon(Icons.barcode_reader),
+                  label: Text('Barcode'),
+                ),
+                ButtonSegment(
+                  value: ScanCaptureMode.ocr,
+                  icon: Icon(Icons.document_scanner_outlined),
+                  label: Text('OCR'),
+                ),
+              ],
+              selected: {captureMode},
+              onSelectionChanged: (selection) =>
+                  setState(() => captureMode = selection.first),
+            ),
+          ),
+        Text(
+          mode == ScanMode.find
+              ? 'Scan an Inventorinator QR to open an item.'
+              : captureMode == ScanCaptureMode.barcode
+              ? 'Scan a product UPC, EAN, Code 128, or QR to add an item.'
+              : 'Frame the label, then tap/click the camera view to process it.',
+          style: const TextStyle(color: Color(0xff929aac)),
+        ),
+        const SizedBox(height: 6),
+        Expanded(
+          child: Platform.isAndroid
+              ? _MobileCameraScanner(
+                  mode: mode,
+                  captureMode: captureMode,
+                  onCode: (code, image) => widget.onCode(code, mode, image),
+                  onLabelCapture: widget.onLabelCapture,
+                )
+              : Platform.isLinux
+              ? _LinuxCameraScanner(
+                  mode: mode,
+                  captureMode: captureMode,
+                  onCode: (code, image) => widget.onCode(code, mode, image),
+                  onLabelCapture: widget.onLabelCapture,
+                )
+              : _UnsupportedScanner(
+                  onCode: (code) => widget.onCode(code, mode, null),
+                ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _MobileCameraScanner extends StatefulWidget {
+  const _MobileCameraScanner({
+    required this.onCode,
+    required this.mode,
+    required this.captureMode,
+    this.onLabelCapture,
+  });
+  final void Function(String code, Uint8List? imageBytes) onCode;
+  final ScanMode mode;
+  final ScanCaptureMode captureMode;
+  final LabelCaptureCallback? onLabelCapture;
+
+  @override
+  State<_MobileCameraScanner> createState() => _MobileCameraScannerState();
+}
+
+class _MobileCameraScannerState extends State<_MobileCameraScanner> {
+  bool delivered = false;
+  final controller = MobileScannerController(
+    returnImage: true,
+    autoZoom: true,
+    cameraResolution: const Size(1920, 1080),
+  );
+
+  @override
+  void didUpdateWidget(covariant _MobileCameraScanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mode != widget.mode ||
+        oldWidget.captureMode != widget.captureMode) {
+      delivered = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.mode == ScanMode.ingest &&
+        widget.captureMode == ScanCaptureMode.ocr &&
+        widget.onLabelCapture != null) {
+      return _MobileOcrCamera(onLabelCapture: widget.onLabelCapture!);
+    }
+    return GestureDetector(
+      key: const Key('scanner-camera-surface'),
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          MobileScanner(
+            controller: controller,
+            onDetect: (capture) {
+              if (delivered) return;
+              final value = capture.barcodes.firstOrNull?.rawValue;
+              if (value == null) return;
+              if (widget.mode == ScanMode.ingest &&
+                  widget.captureMode == ScanCaptureMode.ocr) {
+                final image = capture.image;
+                if (image == null || widget.onLabelCapture == null) return;
+                delivered = true;
+                unawaited(widget.onLabelCapture!(image));
+                return;
+              }
+              delivered = true;
+              widget.onCode(value, capture.image);
+            },
+          ),
+          _ScanGuide(wide: widget.mode == ScanMode.ingest),
+        ],
+      ),
+    );
+  }
+}
+
+class _MobileOcrCamera extends StatefulWidget {
+  const _MobileOcrCamera({required this.onLabelCapture});
+  final LabelCaptureCallback onLabelCapture;
+
+  @override
+  State<_MobileOcrCamera> createState() => _MobileOcrCameraState();
+}
+
+class _MobileOcrCameraState extends State<_MobileOcrCamera>
+    with WidgetsBindingObserver {
+  CameraController? camera;
+  bool capturing = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_initialize());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      final previous = camera;
+      camera = null;
+      unawaited(previous?.dispose());
+    } else if (state == AppLifecycleState.resumed && camera == null) {
+      unawaited(_initialize());
+    }
+  }
+
+  Future<void> _initialize() async {
+    try {
+      final cameras = await availableCameras();
+      final description = cameras.firstWhere(
+        (value) => value.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+      final next = CameraController(
+        description,
+        ResolutionPreset.max,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      await next.initialize();
+      try {
+        await next.setFocusMode(FocusMode.auto);
+      } catch (_) {
+        // A few fixed-focus phone cameras do not expose focus controls.
+      }
+      if (!mounted) {
+        await next.dispose();
+        return;
+      }
+      setState(() {
+        camera = next;
+        error = null;
+      });
+    } catch (exception) {
+      if (mounted) setState(() => error = 'Camera error: $exception');
+    }
+  }
+
+  Future<void> _capture() async {
+    final active = camera;
+    if (active == null || !active.value.isInitialized || capturing) return;
+    setState(() => capturing = true);
+    try {
+      try {
+        await active.setFocusPoint(const Offset(.5, .5));
+        await active.setFocusMode(FocusMode.auto);
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      } catch (_) {
+        // Capture immediately when the device cannot set a focus point.
+      }
+      final photo = await active.takePicture();
+      await widget.onLabelCapture(await photo.readAsBytes());
+    } catch (exception) {
+      if (mounted) {
+        setState(() => error = 'Could not capture label: $exception');
+      }
+    } finally {
+      if (mounted) setState(() => capturing = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(camera?.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = camera;
+    if (error != null) return Center(child: Text(error!));
+    if (active == null || !active.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return GestureDetector(
+      key: const Key('scanner-camera-surface'),
+      behavior: HitTestBehavior.opaque,
+      onTap: _capture,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: active.value.aspectRatio,
+              child: CameraPreview(active),
+            ),
+          ),
+          const _ScanGuide(wide: true),
+          if (capturing)
+            const ColoredBox(
+              color: Color(0x55000000),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LinuxCameraScanner extends StatefulWidget {
+  const _LinuxCameraScanner({
+    required this.onCode,
+    required this.mode,
+    required this.captureMode,
+    this.onLabelCapture,
+  });
+  final void Function(String code, Uint8List? imageBytes) onCode;
+  final ScanMode mode;
+  final ScanCaptureMode captureMode;
+  final LabelCaptureCallback? onLabelCapture;
+
+  @override
+  State<_LinuxCameraScanner> createState() => _LinuxCameraScannerState();
+}
+
+class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
+  final manual = TextEditingController();
+  List<String> devices = const [];
+  final Map<String, String> deviceLabels = {};
+  String? device;
+  Uint8List? frame;
+  Process? cameraProcess;
+  StreamSubscription<List<int>>? cameraOutput;
+  final List<int> streamBuffer = [];
+  DateTime lastDecode = DateTime.fromMillisecondsSinceEpoch(0);
+  bool decoding = false;
+  bool delivered = false;
+  Future<void>? focusOperation;
+  bool focusing = false;
+  bool focusLocked = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    _findCameras();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinuxCameraScanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mode != widget.mode ||
+        oldWidget.captureMode != widget.captureMode) {
+      delivered = false;
+    }
+  }
+
+  Future<void> _findCameras() async {
+    try {
+      final candidates = await Directory('/dev')
+          .list()
+          .where((entry) => RegExp(r'/video\d+$').hasMatch(entry.path))
+          .map((entry) => entry.path)
+          .toList();
+      final entries = <String>[];
+      for (final path in candidates) {
+        final formats = await Process.run('v4l2-ctl', [
+          '--device=$path',
+          '--list-formats-ext',
+        ]);
+        // UVC cameras expose a second /dev/video node containing metadata.
+        // It looks camera-like but cannot produce frames, so only retain nodes
+        // for which V4L2 can enumerate actual pixel formats.
+        if (formats.exitCode != 0 ||
+            !formats.stdout.toString().contains(RegExp(r"'....'"))) {
+          continue;
+        }
+        final info = await Process.run('v4l2-ctl', [
+          '--device=$path',
+          '--info',
+        ]);
+        final card = RegExp(
+          r'^\s*Card type\s*:\s*(.+)$',
+          multiLine: true,
+        ).firstMatch(info.stdout.toString())?.group(1)?.trim();
+        deviceLabels[path] = card == null ? path : '$card ($path)';
+        entries.add(path);
+      }
+      entries.sort((a, b) {
+        final aVirtual =
+            deviceLabels[a]?.toLowerCase().contains('obs') ?? false;
+        final bVirtual =
+            deviceLabels[b]?.toLowerCase().contains('obs') ?? false;
+        if (aVirtual != bVirtual) return aVirtual ? 1 : -1;
+        return a.compareTo(b);
+      });
+      if (!mounted) return;
+      setState(() {
+        devices = entries;
+        device = entries.firstOrNull;
+        error = entries.isEmpty ? 'No Linux webcam was found.' : null;
+      });
+      if (device != null) {
+        await _startCamera();
+      }
+    } catch (exception) {
+      if (mounted) setState(() => error = 'Could not list webcams: $exception');
+    }
+  }
+
+  Future<void> _startCamera() async {
+    await _stopCamera();
+    if (delivered || device == null) return;
+    streamBuffer.clear();
+    focusLocked = false;
+    try {
+      final process = await Process.start('ffmpeg', [
+        '-loglevel',
+        'error',
+        '-f',
+        'v4l2',
+        '-input_format',
+        'mjpeg',
+        '-video_size',
+        '1280x720',
+        '-framerate',
+        '30',
+        '-i',
+        device!,
+        '-an',
+        '-f',
+        'image2pipe',
+        '-c:v',
+        'copy',
+        '-',
+      ]);
+      cameraProcess = process;
+      cameraOutput = process.stdout.listen(_acceptCameraBytes);
+      unawaited(_refocusCamera());
+      final errors = StringBuffer();
+      process.stderr
+          .transform(const SystemEncoding().decoder)
+          .listen(errors.write);
+      unawaited(
+        process.exitCode.then((exitCode) {
+          if (!mounted || cameraProcess != process || exitCode == 0) return;
+          setState(() {
+            error = 'Camera stopped: ${errors.toString().trim()}';
+          });
+        }),
+      );
+    } catch (exception) {
+      if (mounted) setState(() => error = 'Camera error: $exception');
+    }
+  }
+
+  void _acceptCameraBytes(List<int> chunk) {
+    streamBuffer.addAll(chunk);
+    while (true) {
+      final start = _markerIndex(streamBuffer, 0xff, 0xd8);
+      if (start < 0) {
+        if (streamBuffer.length > 1) {
+          streamBuffer.removeRange(0, streamBuffer.length - 1);
+        }
+        return;
+      }
+      final end = _markerIndex(streamBuffer, 0xff, 0xd9, start + 2);
+      if (end < 0) {
+        if (start > 0) streamBuffer.removeRange(0, start);
+        return;
+      }
+      final bytes = Uint8List.fromList(streamBuffer.sublist(start, end + 2));
+      streamBuffer.removeRange(0, end + 2);
+      if (!mounted) return;
+      setState(() {
+        frame = bytes;
+        error = null;
+      });
+      final now = DateTime.now();
+      if (widget.captureMode == ScanCaptureMode.barcode &&
+          !focusing &&
+          !decoding &&
+          now.difference(lastDecode) >= const Duration(milliseconds: 250)) {
+        lastDecode = now;
+        decoding = true;
+        unawaited(_scanFrame(bytes));
+      }
+    }
+  }
+
+  int _markerIndex(List<int> bytes, int first, int second, [int start = 0]) {
+    for (var index = start; index < bytes.length - 1; index++) {
+      if (bytes[index] == first && bytes[index + 1] == second) return index;
+    }
+    return -1;
+  }
+
+  Future<void> _scanFrame(Uint8List bytes) async {
+    try {
+      String? code;
+      try {
+        code = widget.mode == ScanMode.ingest
+            ? await compute(decodeProductBarcodeFrame, bytes)
+            : await compute(_decodeAnyBarcodeFrame, bytes);
+      } catch (exception) {
+        debugPrint('Native barcode decoder error: $exception');
+      }
+      code ??= await compute(_decodeQrFrame, bytes);
+      if (code != null && !delivered) {
+        delivered = true;
+        widget.onCode(code, bytes);
+      }
+    } finally {
+      decoding = false;
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    final process = cameraProcess;
+    cameraProcess = null;
+    process?.kill();
+    if (process != null) {
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+      }
+    }
+    await cameraOutput?.cancel();
+    cameraOutput = null;
+  }
+
+  @override
+  void dispose() {
+    cameraOutput?.cancel();
+    cameraProcess?.kill();
+    manual.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {const SingleActivator(LogicalKeyboardKey.f1): _refocusCamera},
+    child: Focus(
+      autofocus: true,
+      child: Column(
+        children: [
+          if (devices.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: DropdownButtonFormField<String>(
+                initialValue: device,
+                decoration: const InputDecoration(labelText: 'Webcam'),
+                items: devices
+                    .map(
+                      (path) => DropdownMenuItem(
+                        value: path,
+                        child: Text(deviceLabels[path] ?? path),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  setState(() {
+                    device = value;
+                    frame = null;
+                    focusLocked = false;
+                  });
+                  _startCamera();
+                },
+              ),
+            ),
+          if (devices.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+              child: Row(
+                children: [
+                  Tooltip(
+                    message: focusLocked
+                        ? 'Focus is locked. Press F1 to run another sweep.'
+                        : 'Run an autofocus sweep and lock the sharpest point.',
+                    child: OutlinedButton.icon(
+                      key: const Key('refocus-camera'),
+                      onPressed: focusing ? null : _refocusCamera,
+                      icon: focusing
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.center_focus_strong_rounded),
+                      label: Text(focusing ? 'Focusing…' : 'Refocus · F1'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      widget.mode == ScanMode.ingest
+                          ? widget.captureMode == ScanCaptureMode.barcode
+                                ? 'Fill the wide guide with the bars; leave white space at both ends.'
+                                : 'Fill the view with the label, press F1 to refocus, then click the camera.'
+                          : 'Fill the square guide with the QR code.',
+                      style: const TextStyle(
+                        color: Color(0xff929aac),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: frame == null
+                ? Center(child: Text(error ?? 'Starting webcam…'))
+                : GestureDetector(
+                    key: const Key('scanner-camera-surface'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap:
+                        widget.mode == ScanMode.ingest &&
+                            widget.captureMode == ScanCaptureMode.ocr &&
+                            widget.onLabelCapture != null
+                        ? _captureFocusedLabel
+                        : null,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.memory(
+                          frame!,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                        ),
+                        _ScanGuide(wide: widget.mode == ScanMode.ingest),
+                      ],
+                    ),
+                  ),
+          ),
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                error!,
+                style: const TextStyle(color: Colors.orangeAccent),
+              ),
+            ),
+          _ManualCode(
+            controller: manual,
+            onCode: (code) => widget.onCode(code, null),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Future<void> _captureFocusedLabel() async {
+    final activeFocus = focusOperation;
+    if (activeFocus != null) await activeFocus;
+    final path = device;
+    if (path == null || widget.onLabelCapture == null) return;
+    await Process.run('v4l2-ctl', [
+      '--device=$path',
+      '--set-ctrl=focus_automatic_continuous=0',
+    ]);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    final focusedFrame = frame;
+    if (focusedFrame != null) {
+      await widget.onLabelCapture!(focusedFrame);
+    }
+  }
+
+  Future<void> _refocusCamera() {
+    final active = focusOperation;
+    if (active != null) return active;
+    final operation = _runRefocusCamera();
+    focusOperation = operation;
+    return operation.whenComplete(() => focusOperation = null);
+  }
+
+  Future<void> _runRefocusCamera() async {
+    final path = device;
+    if (path == null) return;
+    if (mounted) {
+      setState(() {
+        focusing = true;
+        focusLocked = false;
+      });
+    }
+    try {
+      final controls = await Process.run('v4l2-ctl', [
+        '--device=$path',
+        '--list-ctrls',
+      ]);
+      final focus = RegExp(
+        r'focus_absolute[^:]*:\s*min=(\d+)\s+max=(\d+)\s+step=(\d+).*value=(\d+)',
+      ).firstMatch(controls.stdout.toString());
+      await Process.run('v4l2-ctl', [
+        '--device=$path',
+        '--set-ctrl=focus_automatic_continuous=0',
+      ]);
+      if (focus != null) {
+        final minimum = int.parse(focus.group(1)!);
+        final maximum = int.parse(focus.group(2)!);
+        final step = int.parse(focus.group(3)!);
+        final coarseSpacing = ((maximum - minimum) / 8).round();
+        final coarse = <int>{
+          for (var index = 0; index <= 8; index++)
+            _snapFocus(minimum + coarseSpacing * index, minimum, maximum, step),
+        };
+        final scores = <int, double>{};
+        for (final position in coarse) {
+          scores[position] = await _measureFocus(path, position);
+        }
+        var best = scores.entries.reduce(
+          (left, right) => left.value >= right.value ? left : right,
+        );
+        final refineRadius = (coarseSpacing / 2).round();
+        final refine = <int>{
+          for (final offset in [
+            -refineRadius,
+            -step * 2,
+            0,
+            step * 2,
+            refineRadius,
+          ])
+            _snapFocus(best.key + offset, minimum, maximum, step),
+        }..removeAll(scores.keys);
+        for (final position in refine) {
+          scores[position] = await _measureFocus(path, position);
+          if (scores[position]! > best.value) {
+            best = MapEntry(position, scores[position]!);
+          }
+        }
+        await _setManualFocus(path, best.key);
+        await Future<void>.delayed(const Duration(milliseconds: 240));
+        focusLocked = true;
+      } else {
+        await Process.run('v4l2-ctl', [
+          '--device=$path',
+          '--set-ctrl=focus_automatic_continuous=1',
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 1000));
+        await Process.run('v4l2-ctl', [
+          '--device=$path',
+          '--set-ctrl=focus_automatic_continuous=0',
+        ]);
+        focusLocked = true;
+      }
+    } catch (exception) {
+      debugPrint('Camera autofocus failed: $exception');
+    } finally {
+      if (mounted) setState(() => focusing = false);
+    }
+  }
+
+  int _snapFocus(int value, int minimum, int maximum, int step) {
+    final clamped = value.clamp(minimum, maximum);
+    return minimum + (((clamped - minimum) / step).round() * step);
+  }
+
+  Future<void> _setManualFocus(String path, int position) async {
+    await Process.run('v4l2-ctl', [
+      '--device=$path',
+      '--set-ctrl=focus_absolute=$position',
+    ]);
+  }
+
+  Future<double> _measureFocus(String path, int position) async {
+    await _setManualFocus(path, position);
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    final sample = frame;
+    return sample == null ? 0 : compute(focusSharpnessScore, sample);
+  }
+}
+
+double focusSharpnessScore(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return 0;
+  final scaled = decoded.width > 360
+      ? img.copyResize(
+          decoded,
+          width: 360,
+          interpolation: img.Interpolation.linear,
+        )
+      : decoded;
+  final x0 = (scaled.width * .1).round();
+  final y0 = (scaled.height * .1).round();
+  final x1 = (scaled.width * .9).round();
+  final y1 = (scaled.height * .9).round();
+  var score = 0.0;
+  var samples = 0;
+  for (var y = y0 + 1; y < y1 - 1; y += 2) {
+    for (var x = x0 + 1; x < x1 - 1; x += 2) {
+      final center = scaled.getPixel(x, y).luminanceNormalized;
+      final laplacian =
+          4 * center -
+          scaled.getPixel(x - 1, y).luminanceNormalized -
+          scaled.getPixel(x + 1, y).luminanceNormalized -
+          scaled.getPixel(x, y - 1).luminanceNormalized -
+          scaled.getPixel(x, y + 1).luminanceNormalized;
+      score += laplacian * laplacian;
+      samples++;
+    }
+  }
+  return samples == 0 ? 0 : score / samples;
+}
+
+String? _decodeBarcodeFrame(Uint8List bytes, int format) {
+  final image = img.decodeImage(bytes);
+  if (image == null) return null;
+  return _decodeBarcodeImage(image, format);
+}
+
+String? _decodeAnyBarcodeFrame(Uint8List bytes) =>
+    _decodeBarcodeFrame(bytes, zxing.Format.any);
+
+String? decodeProductBarcodeFrame(Uint8List bytes) {
+  final image = img.decodeImage(bytes);
+  if (image == null) return null;
+
+  final fullFrame = _decodeBarcodeImage(image, zxing.Format.linearCodes);
+  if (fullFrame != null) return fullFrame;
+
+  final crop = img.copyCrop(
+    image,
+    x: (image.width * .03).round(),
+    y: (image.height * .23).round(),
+    width: (image.width * .94).round(),
+    height: (image.height * .54).round(),
+  );
+  final focusedCode128 = _decodeBarcodeImage(crop, zxing.Format.code128);
+  if (focusedCode128 != null) return focusedCode128;
+
+  final focusedLinear = _decodeBarcodeImage(crop, zxing.Format.linearCodes);
+  if (focusedLinear != null) return focusedLinear;
+
+  final enhanced = img.adjustColor(
+    img.Image.from(crop),
+    contrast: 1.55,
+    saturation: 0,
+  );
+  final enhancedCode128 = _decodeBarcodeImage(enhanced, zxing.Format.code128);
+  if (enhancedCode128 != null) return enhancedCode128;
+
+  for (final angle in const [-8, 8, -14, 14]) {
+    final deskewed = img.copyRotate(enhanced, angle: angle);
+    final result = _decodeBarcodeImage(deskewed, zxing.Format.code128);
+    if (result != null) return result;
+  }
+  return null;
+}
+
+String? _decodeBarcodeImage(img.Image image, int format) {
+  // Some MJPEG cameras produce frames with padded/internal channel layouts.
+  // Normalize before handing a tightly packed RGB buffer to native ZXing.
+  final normalized = image.convert(numChannels: 3);
+  final pixels = normalized.getBytes(order: img.ChannelOrder.rgb);
+  final result = zxing.zx.readBarcode(
+    pixels,
+    zxing.DecodeParams(
+      imageFormat: zxing.ImageFormat.rgb,
+      width: normalized.width,
+      height: normalized.height,
+      format: format,
+      tryHarder: true,
+      tryRotate: true,
+      tryInverted: true,
+      tryDownscale: false,
+      maxSize: 2048,
+    ),
+  );
+  final text = result.text?.trim();
+  return result.isValid && text?.isNotEmpty == true ? text : null;
+}
+
+String? _decodeQrFrame(Uint8List bytes) {
+  try {
+    final image = img.decodeImage(bytes);
+    if (image == null) return null;
+    final rgba = image
+        .convert(numChannels: 4)
+        .getBytes(order: img.ChannelOrder.rgba);
+    final source = RGBLuminanceSource(
+      image.width,
+      image.height,
+      rgba.buffer.asInt32List(rgba.offsetInBytes, rgba.lengthInBytes ~/ 4),
+    );
+    return QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source))).text;
+  } catch (_) {
+    return null;
+  }
+}
+
+class _UnsupportedScanner extends StatelessWidget {
+  const _UnsupportedScanner({required this.onCode});
+  final ValueChanged<String> onCode;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SizedBox(
+      width: 420,
+      child: _ManualCode(controller: TextEditingController(), onCode: onCode),
+    ),
+  );
+}
+
+class _ManualCode extends StatelessWidget {
+  const _ManualCode({required this.controller, required this.onCode});
+  final TextEditingController controller;
+  final ValueChanged<String> onCode;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(16),
+    child: Row(
+      children: [
+        Expanded(
+          child: TextField(
+            key: const Key('manual-qr-code'),
+            controller: controller,
+            onSubmitted: onCode,
+            decoration: const InputDecoration(
+              labelText: 'Or enter the item ID / QR text',
+              prefixIcon: Icon(Icons.keyboard_alt_outlined),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: () => onCode(controller.text),
+          child: const Text('Open'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ScanGuide extends StatelessWidget {
+  const _ScanGuide({this.wide = false});
+  final bool wide;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = wide
+        ? (MediaQuery.sizeOf(context).width * .82).clamp(260.0, 440.0)
+        : 260.0;
+    return IgnorePointer(
+      child: Center(
+        child: Container(
+          width: width,
+          height: wide ? width * .43 : 260,
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xff9c83ff), width: 4),
+            borderRadius: BorderRadius.circular(28),
+          ),
+        ),
+      ),
+    );
+  }
+}

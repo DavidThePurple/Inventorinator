@@ -1,0 +1,6 @@
+# Copy this file to android/key.properties and keep the real file private.
+# The keystore path is relative to android/app unless made absolute.
+storePassword=replace-me
+keyPassword=replace-me
+keyAlias=upload
+storeFile=../inventorinator-upload.jks

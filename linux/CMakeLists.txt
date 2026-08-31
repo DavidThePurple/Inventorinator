@@ -4,7 +4,7 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "inventorinator")
+set(BINARY_NAME "Inventorinator")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "media.everlasting.inventorinator")
@@ -102,7 +102,7 @@ install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
 
 # Native window managers need an icon before Flutter has rendered its first
 # frame. Keep the raygun beside the bundled application data for GTK.
-install(FILES "${CMAKE_SOURCE_DIR}/../assets/images/inventorinator-raygun-v2.png"
+install(FILES "${CMAKE_SOURCE_DIR}/packaging/app_icon_512.png"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" RENAME "app_icon.png"
   COMPONENT Runtime)
 install(FILES "${CMAKE_SOURCE_DIR}/packaging/app_icon_512.png"

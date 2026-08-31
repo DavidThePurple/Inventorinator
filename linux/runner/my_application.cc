@@ -14,9 +14,72 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+static void set_window_icon(GtkWindow* window) {
+  g_autofree gchar* executable_path =
+      g_file_read_link("/proc/self/exe", nullptr);
+  if (executable_path == nullptr) {
+    g_warning("Could not resolve the Inventorinator executable for its icon");
+    return;
+  }
+  g_autofree gchar* executable_dir = g_path_get_dirname(executable_path);
+  g_autofree gchar* icon_path =
+      g_build_filename(executable_dir, "data", "app_icon.png", nullptr);
+  g_autoptr(GError) icon_error = nullptr;
+  g_autoptr(GdkPixbuf) app_icon = gdk_pixbuf_new_from_file_at_scale(
+      icon_path, 256, 256, TRUE, &icon_error);
+  if (app_icon == nullptr) {
+    g_warning("Failed to load application icon: %s", icon_error->message);
+    return;
+  }
+
+  // Some X11 task managers read the realized window property while others
+  // resolve the GTK default. Set both so the raygun survives direct launches
+  // as well as launches through the installed desktop entry.
+  gtk_window_set_default_icon(app_icon);
+  gtk_window_set_icon(window, app_icon);
+
+#ifdef GDK_WINDOWING_X11
+  GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
+  if (gdk_window != nullptr && GDK_IS_X11_WINDOW(gdk_window)) {
+    // A 256px CARDINAL payload can exceed the X11 request-size boundary once
+    // GDK packs it. 128px is ample for process viewers and safely bounded.
+    g_autoptr(GdkPixbuf) x11_icon = gdk_pixbuf_scale_simple(
+        app_icon, 128, 128, GDK_INTERP_BILINEAR);
+    const gint width = gdk_pixbuf_get_width(x11_icon);
+    const gint height = gdk_pixbuf_get_height(x11_icon);
+    const gint rowstride = gdk_pixbuf_get_rowstride(x11_icon);
+    const gint channels = gdk_pixbuf_get_n_channels(x11_icon);
+    const gboolean has_alpha = gdk_pixbuf_get_has_alpha(x11_icon);
+    const guchar* pixels = gdk_pixbuf_get_pixels(x11_icon);
+    const gsize pixel_count = static_cast<gsize>(width) * height;
+    // GDK's 32-bit property API expects native unsigned-long storage on X11,
+    // including on 64-bit hosts; it serializes the low 32 bits per element.
+    g_autofree gulong* icon_data = g_new(gulong, pixel_count + 2);
+    icon_data[0] = static_cast<gulong>(width);
+    icon_data[1] = static_cast<gulong>(height);
+    for (gint y = 0; y < height; ++y) {
+      const guchar* row = pixels + y * rowstride;
+      for (gint x = 0; x < width; ++x) {
+        const guchar* pixel = row + x * channels;
+        const gulong alpha = has_alpha ? pixel[3] : 0xff;
+        icon_data[2 + static_cast<gsize>(y) * width + x] =
+            (alpha << 24) | (static_cast<gulong>(pixel[0]) << 16) |
+            (static_cast<gulong>(pixel[1]) << 8) | pixel[2];
+      }
+    }
+    gdk_property_change(
+        gdk_window, gdk_atom_intern_static_string("_NET_WM_ICON"),
+        gdk_atom_intern_static_string("CARDINAL"), 32, GDK_PROP_MODE_REPLACE,
+        reinterpret_cast<const guchar*>(icon_data), pixel_count + 2);
+  }
+#endif
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
+  gtk_widget_show(toplevel);
+  set_window_icon(GTK_WINDOW(toplevel));
 }
 
 // Implements GApplication::activate.
@@ -54,20 +117,12 @@ static void my_application_activate(GApplication* application) {
 
   gtk_window_set_default_size(window, 1280, 720);
 
-  // Set the native window/task-switcher icon from the relocatable bundle.
-  g_autofree gchar* executable_path =
-      g_file_read_link("/proc/self/exe", nullptr);
-  if (executable_path != nullptr) {
-    g_autofree gchar* executable_dir = g_path_get_dirname(executable_path);
-    g_autofree gchar* icon_path =
-        g_build_filename(executable_dir, "data", "app_icon.png", nullptr);
-    g_autoptr(GError) icon_error = nullptr;
-    if (!gtk_window_set_icon_from_file(window, icon_path, &icon_error)) {
-      g_warning("Failed to load application icon: %s", icon_error->message);
-    }
-  }
+  set_window_icon(window);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
+  // Skia is measurably smoother than Impeller/OpenGL for continuous GTK
+  // window resizing on Linux. Android keeps its platform renderer defaults.
+  fl_dart_project_set_enable_impeller(project, FALSE);
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
 
@@ -149,6 +204,10 @@ static void my_application_class_init(MyApplicationClass* klass) {
 static void my_application_init(MyApplication* self) {}
 
 MyApplication* my_application_new() {
+  // Keep the stable reverse-domain ID for desktop-file matching while giving
+  // process viewers and accessibility tools the human-readable product name.
+  g_set_application_name("Inventorinator");
+
   // Set the program name to the application ID, which helps various systems
   // like GTK and desktop environments map this running application to its
   // corresponding .desktop file. This ensures better integration by allowing

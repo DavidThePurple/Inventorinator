@@ -19593,8 +19593,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
   late bool refill;
   Uint8List? itemImage;
   Uint8List? labelImage;
+  Uint8List? barcodeImage;
   bool importingProductPage = false;
   bool processingLabel = false;
+  bool processingBarcodeImage = false;
   String? saveError;
   ProductSearchProvider searchProvider = ProductSearchProvider.google;
   late final Set<String> compatibleMachineIds;
@@ -20530,6 +20532,31 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           ),
                         ),
                         const SizedBox(height: 10),
+                        _ImagePickerButton(
+                          key: const Key('barcode-image-picker'),
+                          label: 'barcode image',
+                          bytes: barcodeImage,
+                          fallbackIcon: Icons.barcode_reader,
+                          onChanged: (bytes) =>
+                              unawaited(_readBarcodeImage(bytes)),
+                        ),
+                        if (processingBarcodeImage) ...[
+                          const SizedBox(height: 8),
+                          const LinearProgressIndicator(
+                            key: Key('barcode-image-processing'),
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        const Divider(key: Key('barcode-search-divider')),
+                        const SizedBox(height: 8),
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Search for a product',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                         Flex(
                           direction: compact ? Axis.vertical : Axis.horizontal,
                           crossAxisAlignment: compact
@@ -20610,6 +20637,16 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             ),
                           ),
                         ],
+                        const SizedBox(height: 14),
+                        const Divider(key: Key('search-url-divider')),
+                        const SizedBox(height: 8),
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Import from a product URL',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
                         const SizedBox(height: 10),
                         Flex(
                           direction: compact ? Axis.vertical : Axis.horizontal,
@@ -21440,6 +21477,40 @@ class _AddItemDialogState extends State<AddItemDialog> {
         mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open the web browser.')),
+      );
+    }
+  }
+
+  Future<void> _readBarcodeImage(Uint8List? bytes) async {
+    if (bytes == null) {
+      if (mounted) setState(() => barcodeImage = null);
+      return;
+    }
+    setState(() {
+      barcodeImage = bytes;
+      processingBarcodeImage = true;
+    });
+    try {
+      final code = await compute(decodeAnyBarcodeFrame, bytes);
+      if (!mounted) return;
+      setState(() => processingBarcodeImage = false);
+      if (code == null || code.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No readable barcode was found in that image.'),
+          ),
+        );
+        return;
+      }
+      barcodeController.text = code.trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Barcode detected: ${code.trim()}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => processingBarcodeImage = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not read barcode image: $error')),
       );
     }
   }

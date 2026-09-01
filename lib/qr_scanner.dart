@@ -481,7 +481,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       try {
         code = widget.mode == ScanMode.ingest
             ? await compute(decodeProductBarcodeFrame, bytes)
-            : await compute(_decodeAnyBarcodeFrame, bytes);
+            : await compute(decodeAnyBarcodeFrame, bytes);
       } catch (exception) {
         debugPrint('Windows barcode decoder error: $exception');
       }
@@ -802,7 +802,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       try {
         code = widget.mode == ScanMode.ingest
             ? await compute(decodeProductBarcodeFrame, bytes)
-            : await compute(_decodeAnyBarcodeFrame, bytes);
+            : await compute(decodeAnyBarcodeFrame, bytes);
       } catch (exception) {
         debugPrint('Native barcode decoder error: $exception');
       }
@@ -1108,7 +1108,7 @@ String? _decodeBarcodeFrame(Uint8List bytes, int format) {
   return _decodeBarcodeImage(image, format);
 }
 
-String? _decodeAnyBarcodeFrame(Uint8List bytes) =>
+String? decodeAnyBarcodeFrame(Uint8List bytes) =>
     _decodeBarcodeFrame(bytes, zxing.Format.any);
 
 String? decodeProductBarcodeFrame(Uint8List bytes) {

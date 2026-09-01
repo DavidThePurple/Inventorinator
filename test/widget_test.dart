@@ -4394,6 +4394,11 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('product-page-url')), findsOneWidget);
     expect(find.byKey(const Key('import-product-page')), findsOneWidget);
     expect(find.byKey(const Key('item-barcode')), findsOneWidget);
+    expect(find.byKey(const Key('barcode-image-picker')), findsOneWidget);
+    expect(find.byKey(const Key('barcode-search-divider')), findsOneWidget);
+    expect(find.byKey(const Key('search-url-divider')), findsOneWidget);
+    expect(find.text('Search for a product'), findsOneWidget);
+    expect(find.text('Import from a product URL'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('item-name')), 'Ruby ABS');
     await tester.enterText(
       find.byKey(const Key('item-compatibility')),

@@ -2,17 +2,26 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'local_database.dart';
+import 'device_name_dialog.dart';
+import 'filament_colors.dart';
+import 'kit_package.dart';
 import 'label_ocr.dart';
 import 'qr_scanner.dart';
 import 'cloud_sync_dialog.dart';
@@ -20,15 +29,394 @@ import 'supabase_sync.dart';
 import 'sync_onboarding_dialog.dart';
 import 'workshop_merge.dart';
 
+// A single explicit very-dark violet canvas across every platform. Keeping the
+// green channel lowest prevents the background from drifting teal/green.
+const Color _appCanvasColor = Color(0xff120d1c);
+
+class _ShoppingCartIcon extends StatelessWidget {
+  const _ShoppingCartIcon({super.key}) : remove = false;
+  const _ShoppingCartIcon.remove({super.key}) : remove = true;
+
+  final bool remove;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 24,
+    child: CustomPaint(
+      painter: _ShoppingCartPainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.onSurface,
+        remove: remove,
+      ),
+    ),
+  );
+}
+
+class _ShoppingCartPainter extends CustomPainter {
+  const _ShoppingCartPainter({required this.color, required this.remove});
+
+  final Color color;
+  final bool remove;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24, size.height / 24);
+    final stroke = Paint()
+      ..isAntiAlias = true
+      ..color = color.withValues(alpha: .9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.65
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(
+      Path()
+        ..moveTo(2.5, 3.5)
+        ..lineTo(5, 3.5)
+        ..lineTo(7.5, 15.5)
+        ..quadraticBezierTo(7.8, 17, 9.2, 17)
+        ..lineTo(19, 17),
+      stroke,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(6, 6.5)
+        ..lineTo(21, 6.5)
+        ..lineTo(19.2, 13.5)
+        ..lineTo(7.2, 13.5),
+      stroke,
+    );
+    canvas.drawCircle(const Offset(9, 20.5), 1.5, stroke);
+    canvas.drawCircle(const Offset(18, 20.5), 1.5, stroke);
+    if (remove) {
+      canvas.drawLine(const Offset(16.5, 2.75), const Offset(22, 2.75), stroke);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShoppingCartPainter oldDelegate) =>
+      color != oldDelegate.color || remove != oldDelegate.remove;
+}
+
+class _LocationIcon extends StatelessWidget {
+  const _LocationIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) =>
+      const Icon(Icons.warehouse_outlined, size: 24, semanticLabel: 'Location');
+}
+
+Color _themeCanvas(BuildContext context) =>
+    Theme.of(context).extension<InventorinatorColors>()?.canvas ??
+    _appCanvasColor;
+
+enum AppColorTheme {
+  darkPurple,
+  darkRed,
+  darkBlue,
+  darkGreen,
+  darkBlack,
+  darkBrown,
+  custom,
+}
+
+enum AppBrightnessMode { dark, light }
+
+extension AppColorThemeLabel on AppColorTheme {
+  String get label => switch (this) {
+    AppColorTheme.darkPurple => 'Purple',
+    AppColorTheme.darkRed => 'Red',
+    AppColorTheme.darkBlue => 'Blue',
+    AppColorTheme.darkGreen => 'Green',
+    AppColorTheme.darkBlack => 'Grey / Black',
+    AppColorTheme.darkBrown => 'Orange / Brown',
+    AppColorTheme.custom => 'Custom',
+  };
+}
+
+@immutable
+class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
+  const InventorinatorColors({
+    required this.canvas,
+    required this.surface,
+    required this.panel,
+    required this.input,
+    required this.accent,
+    required this.base,
+    required this.container,
+    required this.flash,
+    required this.flashDark,
+    required this.outline,
+    required this.outlineVariant,
+    required this.rim,
+  });
+
+  final Color canvas;
+  final Color surface;
+  final Color panel;
+  final Color input;
+  final Color accent;
+  final Color base;
+  final Color container;
+  final Color flash;
+  final Color flashDark;
+  final Color outline;
+  final Color outlineVariant;
+  final Color rim;
+
+  static const palettes = <AppColorTheme, InventorinatorColors>{
+    AppColorTheme.darkPurple: InventorinatorColors(
+      canvas: Color(0xff120d1c),
+      surface: Color(0xff1b1726),
+      panel: Color(0xff171220),
+      input: Color(0xff15101f),
+      accent: Color(0xff9f8aff),
+      base: Color(0xff755da5),
+      container: Color(0xff493970),
+      flash: Color(0xff8359ab),
+      flashDark: Color(0xff59407b),
+      outline: Color(0xff5d5970),
+      outlineVariant: Color(0xff463955),
+      rim: Color(0xff8264b4),
+    ),
+    AppColorTheme.darkRed: InventorinatorColors(
+      canvas: Color(0xff1b0c10),
+      surface: Color(0xff27171b),
+      panel: Color(0xff211115),
+      input: Color(0xff1c0e12),
+      accent: Color(0xffff879a),
+      base: Color(0xffa54e5f),
+      container: Color(0xff6e3340),
+      flash: Color(0xffc95b73),
+      flashDark: Color(0xff81394a),
+      outline: Color(0xff74545b),
+      outlineVariant: Color(0xff583840),
+      rim: Color(0xffb96376),
+    ),
+    AppColorTheme.darkBlue: InventorinatorColors(
+      canvas: Color(0xff090f1d),
+      surface: Color(0xff141c2b),
+      panel: Color(0xff0f1726),
+      input: Color(0xff0c1321),
+      accent: Color(0xff7faaff),
+      base: Color(0xff4d6fa8),
+      container: Color(0xff304a76),
+      flash: Color(0xff5c8bce),
+      flashDark: Color(0xff3c5d8e),
+      outline: Color(0xff52627b),
+      outlineVariant: Color(0xff38485f),
+      rim: Color(0xff638bc5),
+    ),
+    AppColorTheme.darkGreen: InventorinatorColors(
+      canvas: Color(0xff0b160f),
+      surface: Color(0xff15241a),
+      panel: Color(0xff101f15),
+      input: Color(0xff0d1a12),
+      accent: Color(0xff71d998),
+      base: Color(0xff3f8b5c),
+      container: Color(0xff285c3b),
+      flash: Color(0xff4eaa71),
+      flashDark: Color(0xff326e49),
+      outline: Color(0xff4c6956),
+      outlineVariant: Color(0xff344d3c),
+      rim: Color(0xff58a875),
+    ),
+    AppColorTheme.darkBlack: InventorinatorColors(
+      canvas: Color(0xff0d0e11),
+      surface: Color(0xff191a1f),
+      panel: Color(0xff141519),
+      input: Color(0xff111216),
+      accent: Color(0xffb5bac6),
+      base: Color(0xff696e7a),
+      container: Color(0xff444750),
+      flash: Color(0xff818690),
+      flashDark: Color(0xff555963),
+      outline: Color(0xff565a65),
+      outlineVariant: Color(0xff3c3f47),
+      rim: Color(0xff858a95),
+    ),
+    AppColorTheme.darkBrown: InventorinatorColors(
+      canvas: Color(0xff1a1008),
+      surface: Color(0xff281b12),
+      panel: Color(0xff21150e),
+      input: Color(0xff1c110b),
+      accent: Color(0xffe0a264),
+      base: Color(0xff9a6138),
+      container: Color(0xff683f25),
+      flash: Color(0xffbd7644),
+      flashDark: Color(0xff7d4d2e),
+      outline: Color(0xff755b48),
+      outlineVariant: Color(0xff584130),
+      rim: Color(0xffb4794d),
+    ),
+  };
+
+  static InventorinatorColors forTheme(
+    AppColorTheme theme, {
+    Color customColor = const Color(0xff8e75ff),
+    AppBrightnessMode brightness = AppBrightnessMode.dark,
+  }) {
+    final source = theme == AppColorTheme.custom
+        ? customColor
+        : palettes[theme]!.base;
+    if (brightness == AppBrightnessMode.light) {
+      return fromLightColor(source);
+    }
+    return theme == AppColorTheme.custom
+        ? fromCustomColor(customColor)
+        : palettes[theme]!;
+  }
+
+  static InventorinatorColors fromLightColor(Color color) {
+    final source = HSVColor.fromColor(color);
+    final saturation = source.saturation.clamp(0.0, 1.0);
+    Color tone(double saturationScale, double value) => HSVColor.fromAHSV(
+      1,
+      source.hue,
+      (saturation * saturationScale).clamp(0.0, 1.0),
+      value,
+    ).toColor();
+
+    return InventorinatorColors(
+      canvas: tone(.10, .98),
+      surface: tone(.035, 1),
+      panel: tone(.15, .95),
+      input: tone(.05, .99),
+      accent: tone(.92, .53),
+      base: tone(.74, .62),
+      container: tone(.26, .90),
+      flash: tone(.96, .68),
+      flashDark: tone(.9, .46),
+      outline: tone(.18, .52),
+      outlineVariant: tone(.13, .78),
+      rim: tone(.8, .58),
+    );
+  }
+
+  static InventorinatorColors fromCustomColor(Color color) {
+    final source = HSVColor.fromColor(color);
+    final saturation = source.saturation.clamp(0.0, 1.0);
+    Color tone(double saturationScale, double value) => HSVColor.fromAHSV(
+      1,
+      source.hue,
+      (saturation * saturationScale).clamp(0.0, 1.0),
+      value,
+    ).toColor();
+
+    // Preserve the selected hue while deriving consistently dark surfaces and
+    // readable interactive colors. The picker color itself remains unchanged
+    // and is shown in the Custom tile.
+    return InventorinatorColors(
+      canvas: tone(.72, .095),
+      surface: tone(.52, .155),
+      panel: tone(.68, .125),
+      input: tone(.74, .105),
+      accent: tone(.82, .92),
+      base: tone(.72, .62),
+      container: tone(.78, .42),
+      flash: tone(.9, .72),
+      flashDark: tone(.78, .48),
+      outline: tone(.34, .44),
+      outlineVariant: tone(.48, .32),
+      rim: tone(.68, .68),
+    );
+  }
+
+  @override
+  InventorinatorColors copyWith() => this;
+
+  @override
+  InventorinatorColors lerp(InventorinatorColors? other, double t) =>
+      other ?? this;
+}
+
 String _normalizedStockName(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
+bool isGenericAndroidDeviceName(String value) {
+  final normalized = value.trim().toLowerCase().replaceAll('_', ' ');
+  return normalized.isEmpty ||
+      normalized == 'unnamed device' ||
+      normalized == 'android device' ||
+      normalized == 'this device' ||
+      normalized == 'localhost' ||
+      normalized == 'android' ||
+      normalized == 'emulator' ||
+      normalized.startsWith('sdk gphone') ||
+      normalized.startsWith('generic ') ||
+      normalized.startsWith('android sdk built for');
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final database = await LocalDatabase.open();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: _appCanvasColor,
+      statusBarIconBrightness: Brightness.light,
+      systemStatusBarContrastEnforced: false,
+      systemNavigationBarColor: _appCanvasColor,
+      systemNavigationBarDividerColor: _appCanvasColor,
+      systemNavigationBarIconBrightness: Brightness.light,
+      systemNavigationBarContrastEnforced: false,
+    ),
+  );
+  late final LocalDatabase database;
+  try {
+    database = await LocalDatabase.open();
+  } on LocalDatabaseAlreadyOpenException {
+    await _showAlreadyRunningSystemDialog();
+    exit(0);
+  }
   runApp(
     InventorinatorApp(database: database, persistedState: database.loadState()),
   );
+}
+
+Future<void> _showAlreadyRunningSystemDialog() async {
+  const title = 'Inventorinator';
+  const message = 'Cannot launch multiple instances.';
+  try {
+    if (Platform.isLinux) {
+      if (await File('/usr/bin/zenity').exists()) {
+        await Process.run('/usr/bin/zenity', [
+          '--error',
+          '--title=$title',
+          '--text=$message',
+          '--no-wrap',
+        ]);
+        return;
+      }
+      if (await File('/usr/bin/kdialog').exists()) {
+        await Process.run('/usr/bin/kdialog', [
+          '--error',
+          message,
+          '--title',
+          title,
+        ]);
+      }
+      return;
+    }
+    if (Platform.isWindows) {
+      await Process.run('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Add-Type -AssemblyName PresentationFramework; "
+            "[System.Windows.MessageBox]::Show('$message', '$title', 'OK', 'Error')",
+      ]);
+      return;
+    }
+    if (Platform.isMacOS) {
+      await Process.run('/usr/bin/osascript', [
+        '-e',
+        'display alert "$title" message "$message" as critical',
+      ]);
+    }
+  } catch (error) {
+    debugPrint('$title: $message ($error)');
+  }
 }
 
 enum InventoryType {
@@ -51,7 +439,7 @@ extension InventoryTypeContext on InventoryType {
   bool get supportsFilamentLifecycle => this == InventoryType.filament;
 }
 
-enum InventorySort { type, age, cost, dryingTime, moistureRemaining }
+enum InventorySort { type, quantity, age, cost, dryingTime, moistureRemaining }
 
 enum CatalogViewFilter { kits, builds, machines, printers, tools }
 
@@ -72,7 +460,14 @@ String _searchProviderLabel(ProductSearchProvider provider) =>
       ProductSearchProvider.custom => 'Custom',
     };
 
-enum ItemAction { resetDryTimer, edit, duplicate, archive, delete }
+enum ItemAction {
+  showCompatibleFilaments,
+  resetDryTimer,
+  edit,
+  duplicate,
+  archive,
+  delete,
+}
 
 enum DebugCardEffect { remoteQuantity, lowStock, moistureThreshold }
 
@@ -115,16 +510,382 @@ class SpoolTypeRecord {
   final int weightGrams;
 }
 
+class MaterialRecord {
+  const MaterialRecord({
+    required this.id,
+    required this.name,
+    required this.typeKey,
+  });
+
+  final String id;
+  final String name;
+  final String typeKey;
+}
+
 class CustomItemTypeRecord {
   const CustomItemTypeRecord({
     required this.id,
     required this.name,
     this.contextualFields = const [],
+    this.iconKey = 'tune',
+    this.canMarkDepleted = false,
+    this.showsStatus = false,
   });
   final String id;
   final String name;
   final List<String> contextualFields;
+  final String iconKey;
+  final bool canMarkDepleted;
+  final bool showsStatus;
 }
+
+const _defaultTypeDepletionSettings = <String, bool>{
+  'item:filament': true,
+  'item:resin': true,
+};
+
+bool _typeCanMarkDepleted(String key, Map<String, bool> settings) =>
+    settings[key] ?? _defaultTypeDepletionSettings[key] ?? false;
+
+const _defaultTypeStatusSettings = <String, bool>{'item:filament': true};
+
+bool _typeShowsStatus(String key, Map<String, bool> settings) =>
+    settings[key] ?? _defaultTypeStatusSettings[key] ?? false;
+
+const typeIconChoices = <String, IconData>{
+  'inventory': Icons.inventory_2_outlined,
+  'hardware': Icons.hardware_rounded,
+  'filament': Icons.donut_large_rounded,
+  'printed-part': Icons.view_in_ar_outlined,
+  'droplet': Icons.opacity_rounded,
+  'nozzle': Icons.change_history_rounded,
+  'heat-break': Icons.compress_rounded,
+  'shield': Icons.shield_outlined,
+  'machine': Icons.precision_manufacturing_outlined,
+  'printer': Icons.print_outlined,
+  'tool': Icons.handyman_outlined,
+  'kit': Icons.account_tree_outlined,
+  'build': Icons.construction_rounded,
+  'electronics': Icons.memory_rounded,
+  'science': Icons.science_outlined,
+  'storage': Icons.shelves,
+  'package': Icons.inventory_2_rounded,
+  'tune': Icons.tune_rounded,
+  'lucide:archive': LucideIcons.archive,
+  'lucide:armchair': LucideIcons.armchair,
+  'lucide:aperture': LucideIcons.aperture,
+  'lucide:barcode': LucideIcons.barcode,
+  'lucide:battery': LucideIcons.battery,
+  'lucide:bike': LucideIcons.bike,
+  'lucide:bolt': LucideIcons.bolt,
+  'lucide:bot': LucideIcons.bot,
+  'lucide:box': LucideIcons.box,
+  'lucide:boxes': LucideIcons.boxes,
+  'lucide:cable': LucideIcons.cable,
+  'lucide:car': LucideIcons.car,
+  'lucide:circle-gauge': LucideIcons.circle_gauge,
+  'lucide:circuit-board': LucideIcons.circuit_board,
+  'lucide:component': LucideIcons.component,
+  'lucide:construction': LucideIcons.construction,
+  'lucide:cpu': LucideIcons.cpu,
+  'lucide:cylinder': LucideIcons.cylinder,
+  'lucide:diamond': LucideIcons.diamond,
+  'lucide:drill': LucideIcons.drill,
+  'lucide:droplet': LucideIcons.droplet,
+  'lucide:factory': LucideIcons.factory,
+  'lucide:fan': LucideIcons.fan,
+  'lucide:flame': LucideIcons.flame,
+  'lucide:flask-conical': LucideIcons.flask_conical,
+  'lucide:gauge': LucideIcons.gauge,
+  'lucide:gem': LucideIcons.gem,
+  'lucide:glass-water': LucideIcons.glass_water,
+  'lucide:hammer': LucideIcons.hammer,
+  'lucide:hard-hat': LucideIcons.hard_hat,
+  'lucide:hexagon': LucideIcons.hexagon,
+  'lucide:image': LucideIcons.image,
+  'lucide:layers': LucideIcons.layers,
+  'lucide:leaf': LucideIcons.leaf,
+  'lucide:lightbulb': LucideIcons.lightbulb,
+  'lucide:nut': LucideIcons.nut,
+  'lucide:octagon': LucideIcons.octagon,
+  'lucide:package': LucideIcons.package,
+  'lucide:paint-bucket': LucideIcons.paint_bucket,
+  'lucide:palette': LucideIcons.palette,
+  'lucide:plug': LucideIcons.plug,
+  'lucide:printer': LucideIcons.printer,
+  'lucide:puzzle': LucideIcons.puzzle,
+  'lucide:qr-code': LucideIcons.qr_code,
+  'lucide:recycle': LucideIcons.recycle,
+  'lucide:rocket': LucideIcons.rocket,
+  'lucide:ruler': LucideIcons.ruler,
+  'lucide:scale': LucideIcons.scale,
+  'lucide:scan-line': LucideIcons.scan_line,
+  'lucide:shapes': LucideIcons.shapes,
+  'lucide:shield': LucideIcons.shield,
+  'lucide:shirt': LucideIcons.shirt,
+  'lucide:snowflake': LucideIcons.snowflake,
+  'lucide:spool': LucideIcons.spool,
+  'lucide:star': LucideIcons.star,
+  'lucide:tag': LucideIcons.tag,
+  'lucide:tags': LucideIcons.tags,
+  'lucide:test-tube': LucideIcons.test_tube,
+  'lucide:thermometer': LucideIcons.thermometer,
+  'lucide:tool-case': LucideIcons.tool_case,
+  'lucide:tree-pine': LucideIcons.tree_pine,
+  'lucide:triangle': LucideIcons.triangle,
+  'lucide:upload': LucideIcons.upload,
+  'lucide:warehouse': LucideIcons.warehouse,
+  'lucide:weight': LucideIcons.weight,
+  'lucide:wrench': LucideIcons.wrench,
+  'lucide:zap': LucideIcons.zap,
+};
+
+const _customTypeIconPrefix = 'custom-image:';
+const _maximumCustomTypeIconBytes = 5 * 1024 * 1024;
+final Map<String, Uint8List?> _customTypeIconBytesCache = {};
+final Map<Uint8List, Uint8List> _customTypeIconStillCache = Map.identity();
+
+enum CustomIconAnimationMode { interaction, always, off }
+
+CustomIconAnimationMode _customIconAnimationModeFromName(String? value) =>
+    CustomIconAnimationMode.values
+        .where((mode) => mode.name == value)
+        .firstOrNull ??
+    CustomIconAnimationMode.interaction;
+
+IconData _iconFromKey(String? key, IconData fallback) =>
+    typeIconChoices[key] ?? fallback;
+
+Uint8List? _iconImageBytesFromKey(String? key) {
+  if (key == null || !key.startsWith(_customTypeIconPrefix)) return null;
+  if (_customTypeIconBytesCache.containsKey(key)) {
+    return _customTypeIconBytesCache[key];
+  }
+  try {
+    final bytes = base64Decode(key.substring(_customTypeIconPrefix.length));
+    _customTypeIconBytesCache[key] = bytes;
+    return bytes;
+  } on FormatException {
+    _customTypeIconBytesCache[key] = null;
+    return null;
+  }
+}
+
+Uint8List _stillCustomTypeIcon(Uint8List bytes) {
+  final cached = _customTypeIconStillCache[bytes];
+  if (cached != null) return cached;
+  final animatedFormat =
+      bytes.length >= 6 &&
+          bytes[0] == 0x47 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 ||
+      bytes.length >= 12 &&
+          bytes[0] == 0x52 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 &&
+          bytes[3] == 0x46 &&
+          bytes[8] == 0x57 &&
+          bytes[9] == 0x45 &&
+          bytes[10] == 0x42 &&
+          bytes[11] == 0x50;
+  if (!animatedFormat) return bytes;
+  try {
+    final firstFrame = img.decodeImage(bytes, frame: 0);
+    if (firstFrame == null) return bytes;
+    final still = Uint8List.fromList(img.encodePng(firstFrame));
+    _customTypeIconStillCache[bytes] = still;
+    return still;
+  } catch (_) {
+    return bytes;
+  }
+}
+
+class _CustomIconAnimationScope extends InheritedWidget {
+  const _CustomIconAnimationScope({required this.mode, required super.child});
+
+  final CustomIconAnimationMode mode;
+
+  static CustomIconAnimationMode of(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_CustomIconAnimationScope>()
+          ?.mode ??
+      CustomIconAnimationMode.interaction;
+
+  @override
+  bool updateShouldNotify(_CustomIconAnimationScope oldWidget) =>
+      mode != oldWidget.mode;
+}
+
+class _CustomTypeImage extends StatefulWidget {
+  const _CustomTypeImage({
+    required this.bytes,
+    required this.fit,
+    required this.errorBuilder,
+    this.imageKey,
+    this.width,
+    this.height,
+  });
+
+  final Uint8List bytes;
+  final BoxFit fit;
+  final ImageErrorWidgetBuilder errorBuilder;
+  final Key? imageKey;
+  final double? width;
+  final double? height;
+
+  @override
+  State<_CustomTypeImage> createState() => _CustomTypeImageState();
+}
+
+class _CustomTypeImageState extends State<_CustomTypeImage> {
+  bool interacting = false;
+  Timer? interactionTimer;
+
+  void _setInteracting(bool value) {
+    interactionTimer?.cancel();
+    if (interacting != value) setState(() => interacting = value);
+  }
+
+  void _touchInteraction() {
+    _setInteracting(true);
+    interactionTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) _setInteracting(false);
+    });
+  }
+
+  @override
+  void dispose() {
+    interactionTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = _CustomIconAnimationScope.of(context);
+    final animate =
+        mode == CustomIconAnimationMode.always ||
+        mode == CustomIconAnimationMode.interaction && interacting;
+    final bytes = animate ? widget.bytes : _stillCustomTypeIcon(widget.bytes);
+    return MouseRegion(
+      opaque: false,
+      onEnter: (_) => _setInteracting(true),
+      onExit: (_) => _setInteracting(false),
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _touchInteraction(),
+        child: Image.memory(
+          bytes,
+          key: widget.imageKey,
+          width: widget.width,
+          height: widget.height,
+          fit: widget.fit,
+          gaplessPlayback: true,
+          errorBuilder: widget.errorBuilder,
+        ),
+      ),
+    );
+  }
+}
+
+Widget _typeIconVisual(
+  String? key,
+  IconData fallback, {
+  double size = 20,
+  Color? color,
+}) {
+  final bytes = _iconImageBytesFromKey(key);
+  return bytes == null
+      ? Icon(_iconFromKey(key, fallback), size: size, color: color)
+      : ClipRRect(
+          borderRadius: BorderRadius.circular(size * .22),
+          child: _CustomTypeImage(
+            bytes: bytes,
+            width: size,
+            height: size,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => Icon(fallback, size: size, color: color),
+          ),
+        );
+}
+
+String _typeIconDisplayName(String key) {
+  if (key.startsWith(_customTypeIconPrefix)) return 'Custom image';
+  final clean = key.replaceFirst('lucide:', '');
+  return clean
+      .split('-')
+      .map(
+        (word) => word.isEmpty
+            ? word
+            : '${word[0].toUpperCase()}${word.substring(1)}',
+      )
+      .join(' ');
+}
+
+String _typeIconLibraryName(String key) => key.startsWith('lucide:')
+    ? 'Lucide'
+    : key.startsWith(_customTypeIconPrefix)
+    ? 'Custom'
+    : 'Material';
+
+bool _looksLikeRasterImage(Uint8List bytes) {
+  if (bytes.length >= 8 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4e &&
+      bytes[3] == 0x47) {
+    return true;
+  }
+  if (bytes.length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8) return true;
+  if (bytes.length >= 6 &&
+      ascii.decode(bytes.sublist(0, 3), allowInvalid: true) == 'GIF') {
+    return true;
+  }
+  return bytes.length >= 12 &&
+      ascii.decode(bytes.sublist(0, 4), allowInvalid: true) == 'RIFF' &&
+      ascii.decode(bytes.sublist(8, 12), allowInvalid: true) == 'WEBP';
+}
+
+String _customTypeIconKeyFromBytes(Uint8List bytes) {
+  if (bytes.isEmpty || bytes.length > _maximumCustomTypeIconBytes) {
+    throw const FormatException('Use an image smaller than 5 MB.');
+  }
+  if (!_looksLikeRasterImage(bytes)) {
+    throw const FormatException('Use a PNG, JPEG, WebP, or GIF image.');
+  }
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) {
+    throw const FormatException('That image could not be decoded.');
+  }
+  if (decoded.width > 2048 || decoded.height > 2048) {
+    throw const FormatException('Use an image no larger than 2048 × 2048.');
+  }
+  return '$_customTypeIconPrefix${base64Encode(bytes)}';
+}
+
+String _customTypeIconKeyFromBase64(String source) {
+  var clean = source.trim();
+  if (clean.startsWith('data:')) {
+    final comma = clean.indexOf(',');
+    if (comma < 0 || !clean.substring(0, comma).contains(';base64')) {
+      throw const FormatException('That data URL is not a Base64 image.');
+    }
+    clean = clean.substring(comma + 1);
+  }
+  clean = clean.replaceAll(RegExp(r'\s+'), '');
+  try {
+    return _customTypeIconKeyFromBytes(base64Decode(clean));
+  } on FormatException catch (error) {
+    if (error.message.toString().startsWith('Use')) rethrow;
+    throw const FormatException('Paste valid Base64 image data.');
+  }
+}
+
+String _iconKeyFor(IconData icon) =>
+    typeIconChoices.entries
+        .where((entry) => entry.value.codePoint == icon.codePoint)
+        .map((entry) => entry.key)
+        .firstOrNull ??
+    'inventory';
 
 const defaultSpoolTypeId = 'SPOOL-1000G';
 const starterSpoolTypes = <SpoolTypeRecord>[
@@ -134,6 +895,64 @@ const starterSpoolTypes = <SpoolTypeRecord>[
   SpoolTypeRecord(id: defaultSpoolTypeId, label: '1 kg', weightGrams: 1000),
   SpoolTypeRecord(id: 'SPOOL-3000G', label: '3 kg', weightGrams: 3000),
   SpoolTypeRecord(id: 'SPOOL-5000G', label: '5 kg', weightGrams: 5000),
+];
+
+const starterMaterials = <MaterialRecord>[
+  MaterialRecord(id: 'MAT-FIL-PLA', name: 'PLA', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-HTPLA', name: 'HTPLA', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-PETG', name: 'PETG', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-PCTG', name: 'PCTG', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-NYLON', name: 'Nylon', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-ABS', name: 'ABS', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-ASA', name: 'ASA', typeKey: 'type:filament'),
+  MaterialRecord(id: 'MAT-FIL-TPU', name: 'TPU', typeKey: 'type:filament'),
+  MaterialRecord(
+    id: 'MAT-SPOOL-CARDBOARD',
+    name: 'Cardboard',
+    typeKey: 'component:spool',
+  ),
+  MaterialRecord(id: 'MAT-SPOOL-ABS', name: 'ABS', typeKey: 'component:spool'),
+  MaterialRecord(
+    id: 'MAT-SPOOL-PC',
+    name: 'Polycarbonate',
+    typeKey: 'component:spool',
+  ),
+  MaterialRecord(
+    id: 'MAT-MASTER-PLA',
+    name: 'PLA',
+    typeKey: 'component:master-spool',
+  ),
+  MaterialRecord(
+    id: 'MAT-MASTER-PETG',
+    name: 'PETG',
+    typeKey: 'component:master-spool',
+  ),
+  MaterialRecord(
+    id: 'MAT-MASTER-ABS',
+    name: 'ABS',
+    typeKey: 'component:master-spool',
+  ),
+  MaterialRecord(id: 'MAT-NOZ-BRASS', name: 'Brass', typeKey: 'type:nozzle'),
+  MaterialRecord(
+    id: 'MAT-NOZ-HARDENED',
+    name: 'Hardened steel',
+    typeKey: 'type:nozzle',
+  ),
+  MaterialRecord(
+    id: 'MAT-NOZ-OBXIDIAN',
+    name: 'ObXidian',
+    typeKey: 'type:nozzle',
+  ),
+  MaterialRecord(
+    id: 'MAT-NOZ-TUNGSTEN',
+    name: 'Tungsten',
+    typeKey: 'type:nozzle',
+  ),
+  MaterialRecord(
+    id: 'MAT-NOZ-STAINLESS',
+    name: 'Stainless steel',
+    typeKey: 'type:nozzle',
+  ),
 ];
 
 class MachineTypeRecord {
@@ -155,6 +974,8 @@ class MachineRecord {
     required this.address,
     required this.typeId,
     this.kitIds = const {},
+    this.sourceUrls = const [],
+    this.imageBytes,
   });
   final String id;
   final String name;
@@ -162,6 +983,8 @@ class MachineRecord {
   final String address;
   final String typeId;
   final Set<String> kitIds;
+  final List<String> sourceUrls;
+  final Uint8List? imageBytes;
 }
 
 class CatalogProduct {
@@ -175,6 +998,7 @@ class CatalogProduct {
     this.printingInstructions = '',
     this.dryingInstructions = '',
     this.storageInstructions = '',
+    this.sourceUrls = const [],
     this.imageBytes,
   });
   final String id;
@@ -186,6 +1010,7 @@ class CatalogProduct {
   final String printingInstructions;
   final String dryingInstructions;
   final String storageInstructions;
+  final List<String> sourceUrls;
   final Uint8List? imageBytes;
 }
 
@@ -210,11 +1035,15 @@ class KitRecord {
     required this.name,
     required this.bom,
     this.sections = const [],
+    this.sourceUrls = const [],
+    this.imageBytes,
   });
   final String id;
   final String name;
   final List<KitBomEntry> bom;
   final List<String> sections;
+  final List<String> sourceUrls;
+  final Uint8List? imageBytes;
 }
 
 class BuildLine {
@@ -258,6 +1087,19 @@ class _LineStockStatus {
   bool get isMissing => missing > 0.0001;
 }
 
+class _KitBuildability {
+  const _KitBuildability({
+    required this.buildCount,
+    required this.missingLineCount,
+    required this.reservedQuantity,
+  });
+
+  final int buildCount;
+  final int missingLineCount;
+  final double reservedQuantity;
+  bool get canBuild => buildCount > 0;
+}
+
 class BuildRecord {
   BuildRecord({
     required this.id,
@@ -285,6 +1127,65 @@ class BuildRecord {
   DateTime updatedAt;
 }
 
+class StockLocationRecord {
+  const StockLocationRecord({
+    required this.id,
+    required this.name,
+    this.parentId,
+  });
+
+  final String id;
+  final String name;
+  final String? parentId;
+}
+
+enum ShoppingListStatus { needed, ordered, received }
+
+class ShoppingListEntry {
+  const ShoppingListEntry({
+    required this.id,
+    required this.name,
+    required this.productId,
+    required this.quantityNeeded,
+    this.quantityOrdered = 0,
+    this.quantityReceived = 0,
+    this.kitId,
+    this.bomLineId,
+    this.sourceUrl = '',
+    this.status = ShoppingListStatus.needed,
+  });
+
+  final String id;
+  final String name;
+  final String productId;
+  final double quantityNeeded;
+  final double quantityOrdered;
+  final double quantityReceived;
+  final String? kitId;
+  final String? bomLineId;
+  final String sourceUrl;
+  final ShoppingListStatus status;
+
+  ShoppingListEntry copyWith({
+    double? quantityNeeded,
+    double? quantityOrdered,
+    double? quantityReceived,
+    String? sourceUrl,
+    ShoppingListStatus? status,
+  }) => ShoppingListEntry(
+    id: id,
+    name: name,
+    productId: productId,
+    quantityNeeded: quantityNeeded ?? this.quantityNeeded,
+    quantityOrdered: quantityOrdered ?? this.quantityOrdered,
+    quantityReceived: quantityReceived ?? this.quantityReceived,
+    kitId: kitId,
+    bomLineId: bomLineId,
+    sourceUrl: sourceUrl ?? this.sourceUrl,
+    status: status ?? this.status,
+  );
+}
+
 class AuditEntry {
   const AuditEntry({
     required this.id,
@@ -310,11 +1211,19 @@ class RapidItemDraft {
     required this.type,
     required this.quantity,
     required this.price,
+    this.materialId = '',
+    this.materialName = '',
+    this.itemColorName = '',
+    this.itemColorLabel = '',
   });
   final String name;
   final InventoryType type;
   final double quantity;
   final double price;
+  final String materialId;
+  final String materialName;
+  final String itemColorName;
+  final String itemColorLabel;
 }
 
 class RapidizerParseResult {
@@ -322,6 +1231,514 @@ class RapidizerParseResult {
   final List<RapidItemDraft> items;
   final List<String> errors;
   bool get isValid => items.isNotEmpty && errors.isEmpty;
+}
+
+class InventoryJsonDraft {
+  const InventoryJsonDraft({
+    required this.rowNumber,
+    required this.name,
+    required this.typeName,
+    required this.quantity,
+    required this.cost,
+    this.material = '',
+    this.color = '',
+    this.colorLabel = '',
+    this.brand = '',
+    this.vendor = '',
+    this.storageLocation = '',
+    this.barcode = '',
+    this.productUrl = '',
+    this.imageUrl = '',
+    this.compatibility = const [],
+    this.amsCompatible = false,
+  });
+
+  final int rowNumber;
+  final String name;
+  final String typeName;
+  final double quantity;
+  final double cost;
+  final String material;
+  final String color;
+  final String colorLabel;
+  final String brand;
+  final String vendor;
+  final String storageLocation;
+  final String barcode;
+  final String productUrl;
+  final String imageUrl;
+  final List<String> compatibility;
+  final bool amsCompatible;
+}
+
+class InventoryJsonParseResult {
+  const InventoryJsonParseResult({required this.items, required this.errors});
+
+  final List<InventoryJsonDraft> items;
+  final List<String> errors;
+  bool get isValid => items.isNotEmpty && errors.isEmpty;
+}
+
+class _KitPackageImportPlan {
+  const _KitPackageImportPlan({
+    required this.package,
+    required this.existingInventory,
+    required this.inventory,
+    required this.brands,
+    required this.materials,
+    required this.products,
+    required this.machineTypes,
+    required this.machines,
+    required this.kits,
+    required this.newInventoryItems,
+    required this.newProductCount,
+    required this.reusedProductCount,
+    required this.newMachineCount,
+    required this.updatedMachineCount,
+    required this.kitWillUpdate,
+    required this.matchedInventoryIdsByPartId,
+  });
+
+  final InventorinatorKitPackage package;
+  final List<InventoryItem> existingInventory;
+  final List<InventoryItem> inventory;
+  final List<BrandRecord> brands;
+  final List<MaterialRecord> materials;
+  final List<CatalogProduct> products;
+  final List<MachineTypeRecord> machineTypes;
+  final List<MachineRecord> machines;
+  final List<KitRecord> kits;
+  final List<InventoryItem> newInventoryItems;
+  final int newProductCount;
+  final int reusedProductCount;
+  final int newMachineCount;
+  final int updatedMachineCount;
+  final bool kitWillUpdate;
+  final Map<String, String> matchedInventoryIdsByPartId;
+}
+
+class _KitPackageImportDecision {
+  const _KitPackageImportDecision({required this.inventoryMatchesByPartId});
+
+  final Map<String, String> inventoryMatchesByPartId;
+}
+
+const _createNewKitPartChoice = '__inventorinator_create_new__';
+
+double _kitPartInventoryMatchScore(KitPackagePart part, InventoryItem item) {
+  final partName = _normalizedStockName(part.name);
+  final itemName = _normalizedStockName(item.name);
+  if (partName.isEmpty || itemName.isEmpty) return 0;
+  var score = partName == itemName ? 1.0 : 0.0;
+  if (score == 0 &&
+      (partName.contains(itemName) || itemName.contains(partName))) {
+    final shorter = math.min(partName.length, itemName.length);
+    final longer = math.max(partName.length, itemName.length);
+    score = .45 + ((shorter / longer) * .35);
+  }
+  final partTokens = part.name
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((token) => token.length > 1)
+      .toSet();
+  final itemTokens = item.name
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((token) => token.length > 1)
+      .toSet();
+  if (partTokens.isNotEmpty && itemTokens.isNotEmpty) {
+    final overlap = partTokens.intersection(itemTokens).length;
+    final union = partTokens.union(itemTokens).length;
+    score = math.max(score, overlap / union);
+  }
+  if (item.type.name == part.type) score += .12;
+  if (part.material.isNotEmpty &&
+      _normalizedStockName(item.materialName) ==
+          _normalizedStockName(part.material)) {
+    score += .08;
+  }
+  if (part.brand.isNotEmpty &&
+      _normalizedStockName(item.brand) == _normalizedStockName(part.brand)) {
+    score += .06;
+  }
+  return score.clamp(0, 1);
+}
+
+class _KitPackageImportPreviewDialog extends StatefulWidget {
+  const _KitPackageImportPreviewDialog({required this.plan});
+
+  final _KitPackageImportPlan plan;
+
+  @override
+  State<_KitPackageImportPreviewDialog> createState() =>
+      _KitPackageImportPreviewDialogState();
+}
+
+class _KitPackageImportPreviewDialogState
+    extends State<_KitPackageImportPreviewDialog> {
+  late final Map<String, String> _matchesByPartId = {
+    ...widget.plan.matchedInventoryIdsByPartId,
+  };
+
+  InventoryItem? _matchedItem(KitPackagePart part) {
+    final id = _matchesByPartId[part.id];
+    if (id == null || id.isEmpty) return null;
+    return widget.plan.existingInventory
+        .where((candidate) => candidate.id == id)
+        .firstOrNull;
+  }
+
+  Future<void> _chooseMatch(KitPackagePart part) async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) => _KitPartInventoryMatchDialog(
+        part: part,
+        inventory: widget.plan.existingInventory,
+        selectedInventoryId: _matchesByPartId[part.id] ?? '',
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      _matchesByPartId[part.id] = selected == _createNewKitPartChoice
+          ? ''
+          : selected;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final package = plan.package;
+    final matchedCount = package.parts
+        .where((part) => _matchedItem(part) != null)
+        .length;
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.preview_outlined),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Import ${package.name}?')),
+        ],
+      ),
+      content: SizedBox(
+        width: 760,
+        height: 680,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xffffc15c).withValues(alpha: .12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: const Color(0xffffc15c).withValues(alpha: .45),
+                ),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.inventory_2_outlined, color: Color(0xffffc15c)),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Imported parts start at quantity 0. This package does not claim that you own any of them.',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Chip(label: Text('${package.sections.length} sections')),
+                Chip(label: Text('${package.parts.length} BOM lines')),
+                Chip(label: Text('${plan.newProductCount} new products')),
+                if (plan.reusedProductCount > 0)
+                  Chip(
+                    label: Text('${plan.reusedProductCount} reused products'),
+                  ),
+                Chip(label: Text('$matchedCount matched to inventory')),
+                Chip(
+                  label: Text(
+                    '${package.parts.length - matchedCount} new zero-stock items',
+                  ),
+                ),
+                if (package.machines.isNotEmpty)
+                  Chip(label: Text('${package.machines.length} machines')),
+                if (package.sources.isNotEmpty)
+                  Chip(label: Text('${package.sources.length} kit sources')),
+              ],
+            ),
+            if (package.description.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                package.description,
+                style: const TextStyle(color: Color(0xffaeb5c5)),
+              ),
+            ],
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final section in package.sections)
+                    ExpansionTile(
+                      initiallyExpanded: true,
+                      title: Text(section.name),
+                      subtitle: section.description.isEmpty
+                          ? Text(
+                              '${package.parts.where((part) => part.sectionId == section.id).length} parts',
+                            )
+                          : Text(section.description),
+                      children: [
+                        for (final part in package.parts.where(
+                          (part) => part.sectionId == section.id,
+                        ))
+                          Builder(
+                            builder: (context) {
+                              final matchedItem = _matchedItem(part);
+                              return ListTile(
+                                dense: true,
+                                leading: Icon(
+                                  matchedItem == null
+                                      ? Icons.add_box_outlined
+                                      : Icons.link_rounded,
+                                ),
+                                title: Row(
+                                  children: [
+                                    Expanded(child: Text(part.name)),
+                                    Text(
+                                      '×${_formatBomQuantity(part.quantity)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      [
+                                        part.type,
+                                        if (part.material.isNotEmpty)
+                                          part.material,
+                                        if (part.brand.isNotEmpty) part.brand,
+                                      ].join(' · '),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      matchedItem == null
+                                          ? 'Create new item at quantity 0'
+                                          : 'Use ${matchedItem.name} · ${matchedItem.type.name} · qty ${_formatBomQuantity(matchedItem.quantity)}',
+                                      key: Key('kit-part-match-${part.id}'),
+                                      style: TextStyle(
+                                        color: matchedItem == null
+                                            ? const Color(0xffffc15c)
+                                            : const Color(0xff45d2bd),
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                trailing: OutlinedButton(
+                                  key: Key('choose-kit-part-match-${part.id}'),
+                                  onPressed: () => _chooseMatch(part),
+                                  child: Text(
+                                    matchedItem == null
+                                        ? 'Find match'
+                                        : 'Change',
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  if (package.machines.isNotEmpty) ...[
+                    const Divider(),
+                    const ListTile(
+                      leading: Icon(Icons.precision_manufacturing_outlined),
+                      title: Text(
+                        'Machines',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    for (final machine in package.machines)
+                      ListTile(
+                        dense: true,
+                        title: Text(machine.name),
+                        subtitle: Text(
+                          [
+                            machine.type,
+                            if (machine.model.isNotEmpty) machine.model,
+                            if (machine.sources.isNotEmpty)
+                              machine.sources.first.url,
+                            if (machine.sources.length > 1)
+                              '+${machine.sources.length - 1} more sources',
+                          ].join(' · '),
+                        ),
+                      ),
+                  ],
+                  if (package.sources.isNotEmpty) ...[
+                    const Divider(),
+                    const ListTile(
+                      leading: Icon(Icons.link_rounded),
+                      title: Text(
+                        'Kit sources',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    for (final source in package.sources)
+                      ListTile(
+                        dense: true,
+                        title: Text(
+                          source.title.isEmpty ? source.url : source.title,
+                        ),
+                        subtitle: source.title.isEmpty
+                            ? null
+                            : Text(source.url),
+                        trailing: const Icon(Icons.open_in_new_rounded),
+                        onTap: () => launchUrl(
+                          Uri.parse(source.url),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          key: const Key('confirm-kit-package-import'),
+          onPressed: () => Navigator.pop(
+            context,
+            _KitPackageImportDecision(
+              inventoryMatchesByPartId: {..._matchesByPartId},
+            ),
+          ),
+          icon: const Icon(Icons.file_download_done_outlined),
+          label: Text(plan.kitWillUpdate ? 'Update kit' : 'Import kit'),
+        ),
+      ],
+    );
+  }
+}
+
+class _KitPartInventoryMatchDialog extends StatefulWidget {
+  const _KitPartInventoryMatchDialog({
+    required this.part,
+    required this.inventory,
+    required this.selectedInventoryId,
+  });
+
+  final KitPackagePart part;
+  final List<InventoryItem> inventory;
+  final String selectedInventoryId;
+
+  @override
+  State<_KitPartInventoryMatchDialog> createState() =>
+      _KitPartInventoryMatchDialogState();
+}
+
+class _KitPartInventoryMatchDialogState
+    extends State<_KitPartInventoryMatchDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _normalizedStockName(_query);
+    final candidates =
+        widget.inventory.where((item) => !item.archived).where((item) {
+          if (query.isEmpty) return true;
+          return _normalizedStockName(
+            '${item.name} ${item.type.name} ${item.materialName} ${item.brand}',
+          ).contains(query);
+        }).toList()..sort((a, b) {
+          final scoreOrder = _kitPartInventoryMatchScore(
+            widget.part,
+            b,
+          ).compareTo(_kitPartInventoryMatchScore(widget.part, a));
+          if (scoreOrder != 0) return scoreOrder;
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        });
+    return AlertDialog(
+      title: Text('Match ${widget.part.name}'),
+      content: SizedBox(
+        width: 620,
+        height: 560,
+        child: Column(
+          children: [
+            TextField(
+              key: const Key('kit-part-match-search'),
+              autofocus: true,
+              onChanged: (value) => setState(() => _query = value),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search_rounded),
+                labelText: 'Search existing inventory',
+              ),
+            ),
+            const SizedBox(height: 10),
+            ListTile(
+              key: const Key('kit-part-create-new-choice'),
+              leading: const Icon(Icons.add_box_outlined),
+              title: const Text('Create a new item'),
+              subtitle: const Text('Starts at quantity 0'),
+              selected: widget.selectedInventoryId.isEmpty,
+              onTap: () => Navigator.pop(context, _createNewKitPartChoice),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: candidates.isEmpty
+                  ? const Center(child: Text('No inventory items match'))
+                  : ListView.builder(
+                      itemCount: candidates.length,
+                      itemBuilder: (context, index) {
+                        final item = candidates[index];
+                        return ListTile(
+                          key: Key('kit-part-inventory-choice-${item.id}'),
+                          leading: const Icon(Icons.inventory_2_outlined),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            [
+                              item.type.name,
+                              if (item.materialName.isNotEmpty)
+                                item.materialName,
+                              'qty ${_formatBomQuantity(item.quantity)}',
+                            ].join(' · '),
+                          ),
+                          selected: widget.selectedInventoryId == item.id,
+                          trailing:
+                              _kitPartInventoryMatchScore(widget.part, item) >=
+                                  .72
+                              ? const Chip(label: Text('Likely match'))
+                              : null,
+                          onTap: () => Navigator.pop(context, item.id),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
 }
 
 class AdditionHistoryEntry {
@@ -362,6 +1779,8 @@ class InventoryItem {
     required this.added,
     required this.cost,
     required this.color,
+    this.itemColorName = '',
+    this.itemColorLabel = '',
     this.quantity = 1,
     this.quantityAlertThreshold,
     this.dryingMinutes,
@@ -381,6 +1800,7 @@ class InventoryItem {
     this.filamentStatus = FilamentStatus.ready,
     this.brand = '',
     this.storageLocation = '',
+    this.storageLocationId = '',
     this.deploymentLocation = '',
     this.lastDriedAt,
     this.imageBytes,
@@ -390,10 +1810,22 @@ class InventoryItem {
     this.compatibleMachineIds = const [],
     this.spoolTypeId = defaultSpoolTypeId,
     this.amsCompatible = false,
+    this.spoolTareWeightGrams,
+    this.spoolOuterDiameterMm,
+    this.spoolWidthMm,
+    this.spoolHoleDiameterMm,
+    this.refill = false,
+    this.masterSpool = '',
     this.catalogProductId,
     this.customTypeId = '',
     this.customTypeName = '',
     this.customFieldValues = const {},
+    this.materialId = '',
+    this.materialName = '',
+    this.spoolMaterialId = '',
+    this.spoolMaterialName = '',
+    this.masterSpoolMaterialId = '',
+    this.masterSpoolMaterialName = '',
   });
   final String id;
   final String name;
@@ -402,6 +1834,8 @@ class InventoryItem {
   final DateTime added;
   final double cost;
   final Color color;
+  final String itemColorName;
+  final String itemColorLabel;
   final double quantity;
   final double? quantityAlertThreshold;
   final int? dryingMinutes;
@@ -421,6 +1855,7 @@ class InventoryItem {
   final FilamentStatus filamentStatus;
   final String brand;
   final String storageLocation;
+  final String storageLocationId;
   final String deploymentLocation;
   final DateTime? lastDriedAt;
   final Uint8List? imageBytes;
@@ -430,10 +1865,22 @@ class InventoryItem {
   final List<String> compatibleMachineIds;
   final String spoolTypeId;
   final bool amsCompatible;
+  final double? spoolTareWeightGrams;
+  final double? spoolOuterDiameterMm;
+  final double? spoolWidthMm;
+  final double? spoolHoleDiameterMm;
+  final bool refill;
+  final String masterSpool;
   final String? catalogProductId;
   final String customTypeId;
   final String customTypeName;
   final Map<String, String> customFieldValues;
+  final String materialId;
+  final String materialName;
+  final String spoolMaterialId;
+  final String spoolMaterialName;
+  final String masterSpoolMaterialId;
+  final String masterSpoolMaterialName;
 
   InventoryItem copyWith({
     String? id,
@@ -443,6 +1890,8 @@ class InventoryItem {
     DateTime? added,
     double? cost,
     Color? color,
+    String? itemColorName,
+    String? itemColorLabel,
     double? quantity,
     double? quantityAlertThreshold,
     int? dryingMinutes,
@@ -462,6 +1911,7 @@ class InventoryItem {
     FilamentStatus? filamentStatus,
     String? brand,
     String? storageLocation,
+    String? storageLocationId,
     String? deploymentLocation,
     DateTime? lastDriedAt,
     Uint8List? imageBytes,
@@ -471,10 +1921,25 @@ class InventoryItem {
     List<String>? compatibleMachineIds,
     String? spoolTypeId,
     bool? amsCompatible,
+    double? spoolTareWeightGrams,
+    double? spoolOuterDiameterMm,
+    double? spoolWidthMm,
+    double? spoolHoleDiameterMm,
+    bool? refill,
+    String? masterSpool,
     String? catalogProductId,
     String? customTypeId,
     String? customTypeName,
     Map<String, String>? customFieldValues,
+    String? materialId,
+    String? materialName,
+    String? spoolMaterialId,
+    String? spoolMaterialName,
+    String? masterSpoolMaterialId,
+    String? masterSpoolMaterialName,
+    bool clearFilamentData = false,
+    bool clearPrintingData = false,
+    bool clearCatalogProductId = false,
   }) => InventoryItem(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -483,41 +1948,85 @@ class InventoryItem {
     added: added ?? this.added,
     cost: cost ?? this.cost,
     color: color ?? this.color,
+    itemColorName: itemColorName ?? this.itemColorName,
+    itemColorLabel: itemColorLabel ?? this.itemColorLabel,
     quantity: quantity ?? this.quantity,
     quantityAlertThreshold:
         quantityAlertThreshold ?? this.quantityAlertThreshold,
-    dryingMinutes: dryingMinutes ?? this.dryingMinutes,
-    dryingRemaining: dryingRemaining ?? this.dryingRemaining,
-    dryingStartedAt: dryingStartedAt ?? this.dryingStartedAt,
-    moistureLifespanMinutes:
-        moistureLifespanMinutes ?? this.moistureLifespanMinutes,
+    dryingMinutes: clearFilamentData
+        ? null
+        : dryingMinutes ?? this.dryingMinutes,
+    dryingRemaining: clearFilamentData
+        ? null
+        : dryingRemaining ?? this.dryingRemaining,
+    dryingStartedAt: clearFilamentData
+        ? null
+        : dryingStartedAt ?? this.dryingStartedAt,
+    moistureLifespanMinutes: clearFilamentData
+        ? null
+        : moistureLifespanMinutes ?? this.moistureLifespanMinutes,
     moistureTimeUnit: moistureTimeUnit ?? this.moistureTimeUnit,
-    moistureAlertEnabled: moistureAlertEnabled ?? this.moistureAlertEnabled,
-    moistureAlertThresholdMinutes:
-        moistureAlertThresholdMinutes ?? this.moistureAlertThresholdMinutes,
-    deployed: deployed ?? this.deployed,
+    moistureAlertEnabled: clearFilamentData
+        ? false
+        : moistureAlertEnabled ?? this.moistureAlertEnabled,
+    moistureAlertThresholdMinutes: clearFilamentData
+        ? null
+        : moistureAlertThresholdMinutes ?? this.moistureAlertThresholdMinutes,
+    deployed: clearFilamentData ? false : deployed ?? this.deployed,
     vendor: vendor ?? this.vendor,
-    printingInstructions: printingInstructions ?? this.printingInstructions,
-    dryingInstructions: dryingInstructions ?? this.dryingInstructions,
+    printingInstructions: clearPrintingData
+        ? ''
+        : printingInstructions ?? this.printingInstructions,
+    dryingInstructions: clearFilamentData
+        ? ''
+        : dryingInstructions ?? this.dryingInstructions,
     storageInstructions: storageInstructions ?? this.storageInstructions,
     archived: archived ?? this.archived,
     archiveDisposition: archiveDisposition ?? this.archiveDisposition,
-    filamentStatus: filamentStatus ?? this.filamentStatus,
+    filamentStatus: clearFilamentData
+        ? FilamentStatus.ready
+        : filamentStatus ?? this.filamentStatus,
     brand: brand ?? this.brand,
     storageLocation: storageLocation ?? this.storageLocation,
+    storageLocationId: storageLocationId ?? this.storageLocationId,
     deploymentLocation: deploymentLocation ?? this.deploymentLocation,
-    lastDriedAt: lastDriedAt ?? this.lastDriedAt,
+    lastDriedAt: clearFilamentData ? null : lastDriedAt ?? this.lastDriedAt,
     imageBytes: imageBytes ?? this.imageBytes,
     labelImageBytes: labelImageBytes ?? this.labelImageBytes,
     barcode: barcode ?? this.barcode,
     productUrl: productUrl ?? this.productUrl,
     compatibleMachineIds: compatibleMachineIds ?? this.compatibleMachineIds,
-    spoolTypeId: spoolTypeId ?? this.spoolTypeId,
-    amsCompatible: amsCompatible ?? this.amsCompatible,
-    catalogProductId: catalogProductId ?? this.catalogProductId,
+    spoolTypeId: clearFilamentData
+        ? defaultSpoolTypeId
+        : spoolTypeId ?? this.spoolTypeId,
+    amsCompatible: clearFilamentData
+        ? false
+        : amsCompatible ?? this.amsCompatible,
+    spoolTareWeightGrams: clearFilamentData
+        ? null
+        : spoolTareWeightGrams ?? this.spoolTareWeightGrams,
+    spoolOuterDiameterMm: clearFilamentData
+        ? null
+        : spoolOuterDiameterMm ?? this.spoolOuterDiameterMm,
+    spoolWidthMm: clearFilamentData ? null : spoolWidthMm ?? this.spoolWidthMm,
+    spoolHoleDiameterMm: clearFilamentData
+        ? null
+        : spoolHoleDiameterMm ?? this.spoolHoleDiameterMm,
+    refill: clearFilamentData ? false : refill ?? this.refill,
+    masterSpool: clearFilamentData ? '' : masterSpool ?? this.masterSpool,
+    catalogProductId: clearCatalogProductId
+        ? null
+        : catalogProductId ?? this.catalogProductId,
     customTypeId: customTypeId ?? this.customTypeId,
     customTypeName: customTypeName ?? this.customTypeName,
     customFieldValues: customFieldValues ?? this.customFieldValues,
+    materialId: materialId ?? this.materialId,
+    materialName: materialName ?? this.materialName,
+    spoolMaterialId: spoolMaterialId ?? this.spoolMaterialId,
+    spoolMaterialName: spoolMaterialName ?? this.spoolMaterialName,
+    masterSpoolMaterialId: masterSpoolMaterialId ?? this.masterSpoolMaterialId,
+    masterSpoolMaterialName:
+        masterSpoolMaterialName ?? this.masterSpoolMaterialName,
   );
   String get typeLabel =>
       type == InventoryType.custom && customTypeName.isNotEmpty
@@ -546,6 +2055,845 @@ class InventoryItem {
     InventoryType.sock => Icons.shield_outlined,
     InventoryType.custom => Icons.tune_rounded,
   };
+}
+
+const itemColorPalette = <String, Color>{
+  'Black': Color(0xff252832),
+  'White': Color(0xfff0f1f5),
+  'Gray': Color(0xff8c929f),
+  'Red': Color(0xffe64f5f),
+  'Orange': Color(0xffff8a3d),
+  'Yellow': Color(0xffffcf4d),
+  'Green': Color(0xff49c878),
+  'Blue': Color(0xff4c93ff),
+  'Purple': Color(0xff9a6cff),
+  'Pink': Color(0xffff74ad),
+  'Brown': Color(0xff9a6847),
+  'Clear': Color(0xffbdebf2),
+  'Multicolor': Color(0xffc779ff),
+};
+
+const _itemCardChromeColor = Color(0xff9da5b7);
+
+String _decodedItemColorName(Map<String, dynamic> item, int schemaVersion) {
+  final explicit = _normalizeItemColorValue(
+    item['itemColorName'] as String? ?? '',
+  );
+  if (explicit.isNotEmpty || schemaVersion >= 4) return explicit;
+  final name = (item['name'] as String? ?? '').toLowerCase();
+  for (final colorName in itemColorPalette.keys) {
+    if (RegExp('\\b${RegExp.escape(colorName.toLowerCase())}\\b')
+        .hasMatch(name)) {
+      return colorName;
+    }
+  }
+  return '';
+}
+
+String _decodedItemColorLabel(Map<String, dynamic> item) {
+  final explicit = (item['itemColorLabel'] as String? ?? '').trim();
+  if (explicit.isNotEmpty) return explicit;
+  final legacyValue = (item['itemColorName'] as String? ?? '').trim();
+  return legacyValue.isNotEmpty && !legacyValue.startsWith('#')
+      ? legacyValue
+      : '';
+}
+
+Color? _hexColor(String source) {
+  var hex = source.trim();
+  if (!hex.startsWith('#')) return null;
+  hex = hex.substring(1);
+  if (hex.length == 3) {
+    hex = hex.split('').map((value) => '$value$value').join();
+  }
+  if (hex.length == 6) hex = 'FF$hex';
+  if (hex.length != 8 || !RegExp(r'^[0-9a-fA-F]{8}$').hasMatch(hex)) {
+    return null;
+  }
+  return Color(int.parse(hex, radix: 16));
+}
+
+String _colorHex(Color color) {
+  final value = color
+      .toARGB32()
+      .toRadixString(16)
+      .padLeft(8, '0')
+      .toUpperCase();
+  return value.startsWith('FF') ? '#${value.substring(2)}' : '#$value';
+}
+
+String _normalizeItemColorValue(String source) {
+  final trimmed = source.trim();
+  final parsed = _hexColor(trimmed);
+  return parsed == null ? trimmed : _colorHex(parsed);
+}
+
+String _itemColorHex(String source) {
+  if (source.trim().isEmpty) return '';
+  final color = _itemColorSwatch(source);
+  return _colorHex(color ?? const Color(0xff8c929f));
+}
+
+Color? _itemColorSwatch(String name) {
+  final normalized = name.trim().toLowerCase();
+  if (normalized.isEmpty) return null;
+  final hex = _hexColor(normalized);
+  if (hex != null) return hex;
+  for (final entry in itemColorPalette.entries) {
+    if (normalized.contains(entry.key.toLowerCase())) return entry.value;
+  }
+  return null;
+}
+
+class ItemColorPickerDialog extends StatefulWidget {
+  const ItemColorPickerDialog({
+    super.key,
+    required this.initialValue,
+    this.title = 'Choose color',
+    this.allowClear = true,
+  });
+
+  final String initialValue;
+  final String title;
+  final bool allowClear;
+
+  @override
+  State<ItemColorPickerDialog> createState() => _ItemColorPickerDialogState();
+}
+
+class _ItemColorPickerDialogState extends State<ItemColorPickerDialog> {
+  final formKey = GlobalKey<FormState>();
+  late final TextEditingController hexController;
+  late HSVColor hsv;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial =
+        _itemColorSwatch(widget.initialValue) ?? const Color(0xff8e75ff);
+    hsv = HSVColor.fromColor(initial);
+    hexController = TextEditingController(text: _colorHex(initial));
+  }
+
+  @override
+  void dispose() {
+    hexController.dispose();
+    super.dispose();
+  }
+
+  void _setColor(Color color) {
+    setState(() {
+      hsv = HSVColor.fromColor(color);
+      hexController.text = _colorHex(color);
+    });
+  }
+
+  void _readHex(String value) {
+    final color = _hexColor(value);
+    if (color != null) setState(() => hsv = HSVColor.fromColor(color));
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Row(
+      children: [
+        const Icon(Icons.palette_outlined),
+        const SizedBox(width: 10),
+        Text(widget.title),
+      ],
+    ),
+    content: SizedBox(
+      width: 460,
+      child: SingleChildScrollView(
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final dimension = math.min(320.0, constraints.maxWidth);
+                  return Center(
+                    child: SizedBox.square(
+                      dimension: dimension,
+                      child: _HsvColorWheel(
+                        key: const Key('item-color-picker-wheel'),
+                        color: hsv,
+                        onChanged: (value) => _setColor(value.toColor()),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Container(
+                    key: const Key('item-color-picker-preview'),
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: hsv.toColor(),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xff687185)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: hsv.toColor().withValues(alpha: .25),
+                          blurRadius: 18,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _HsvValue(label: 'H', value: '${hsv.hue.round()}°'),
+                        _HsvValue(
+                          label: 'S',
+                          value: '${(hsv.saturation * 100).round()}%',
+                        ),
+                        _HsvValue(
+                          label: 'V',
+                          value: '${(hsv.value * 100).round()}%',
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                key: const Key('item-color-picker-hex'),
+                controller: hexController,
+                autocorrect: false,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Hex color',
+                  hintText: '#8E75FF',
+                  helperText: '#RGB, #RRGGBB, or #AARRGGBB',
+                ),
+                validator: (value) => _hexColor(value ?? '') == null
+                    ? 'Enter a valid hex color'
+                    : null,
+                onChanged: _readHex,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final entry in itemColorPalette.entries)
+                    Tooltip(
+                      message: entry.key,
+                      child: InkWell(
+                        key: Key('item-color-preset-${entry.key}'),
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => _setColor(entry.value),
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: entry.value,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xff687185)),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    actions: [
+      if (widget.allowClear)
+        TextButton(
+          key: const Key('clear-item-color'),
+          onPressed: () => Navigator.pop(context, ''),
+          child: const Text('Clear'),
+        ),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        key: const Key('use-item-color'),
+        onPressed: () {
+          if (!formKey.currentState!.validate()) return;
+          Navigator.pop(context, _normalizeItemColorValue(hexController.text));
+        },
+        icon: const Icon(Icons.check_rounded),
+        label: const Text('Use color'),
+      ),
+    ],
+  );
+}
+
+class _HsvValue extends StatelessWidget {
+  const _HsvValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      color: const Color(0xff202633),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: const Color(0xff454e63)),
+    ),
+    child: Text(
+      '$label  $value',
+      style: const TextStyle(fontWeight: FontWeight.w700),
+    ),
+  );
+}
+
+enum _ColorDragTarget { hue, saturationValue }
+
+class _HsvColorWheel extends StatefulWidget {
+  const _HsvColorWheel({
+    super.key,
+    required this.color,
+    required this.onChanged,
+  });
+
+  final HSVColor color;
+  final ValueChanged<HSVColor> onChanged;
+
+  @override
+  State<_HsvColorWheel> createState() => _HsvColorWheelState();
+}
+
+class _HsvColorWheelState extends State<_HsvColorWheel> {
+  _ColorDragTarget? dragTarget;
+
+  _ColorDragTarget? _targetFor(Offset position, double side) {
+    final squareSize = side * .54;
+    final square = Rect.fromCenter(
+      center: Offset(side / 2, side / 2),
+      width: squareSize,
+      height: squareSize,
+    );
+    if (square.contains(position)) return _ColorDragTarget.saturationValue;
+    final distance = (position - Offset(side / 2, side / 2)).distance;
+    if (distance >= side * .39 && distance <= side * .5) {
+      return _ColorDragTarget.hue;
+    }
+    return null;
+  }
+
+  void _update(Offset position, double side, _ColorDragTarget target) {
+    if (target == _ColorDragTarget.hue) {
+      final delta = position - Offset(side / 2, side / 2);
+      final hue =
+          (math.atan2(delta.dy, delta.dx) * 180 / math.pi + 90 + 360) % 360;
+      widget.onChanged(widget.color.withHue(hue));
+      return;
+    }
+    final squareSize = side * .54;
+    final left = (side - squareSize) / 2;
+    final top = (side - squareSize) / 2;
+    final saturation = ((position.dx - left) / squareSize).clamp(0.0, 1.0);
+    final value = (1 - (position.dy - top) / squareSize).clamp(0.0, 1.0);
+    widget.onChanged(widget.color.withSaturation(saturation).withValue(value));
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final side = math.min(constraints.maxWidth, constraints.maxHeight);
+      return Semantics(
+        label: 'Hue, saturation, and brightness color picker',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (details) {
+            final target = _targetFor(details.localPosition, side);
+            if (target != null) _update(details.localPosition, side, target);
+          },
+          onPanStart: (details) {
+            dragTarget = _targetFor(details.localPosition, side);
+            if (dragTarget != null) {
+              _update(details.localPosition, side, dragTarget!);
+            }
+          },
+          onPanUpdate: (details) {
+            if (dragTarget != null) {
+              _update(details.localPosition, side, dragTarget!);
+            }
+          },
+          onPanEnd: (_) => dragTarget = null,
+          onPanCancel: () => dragTarget = null,
+          child: CustomPaint(painter: _HsvColorWheelPainter(widget.color)),
+        ),
+      );
+    },
+  );
+}
+
+class _HsvColorWheelPainter extends CustomPainter {
+  const _HsvColorWheelPainter(this.color);
+
+  final HSVColor color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final side = math.min(size.width, size.height);
+    final center = Offset(size.width / 2, size.height / 2);
+    final ringWidth = side * .085;
+    final radius = side / 2 - ringWidth / 2 - 2;
+    final ringRect = Rect.fromCircle(center: center, radius: radius);
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = ringWidth
+      ..shader = const SweepGradient(
+        transform: GradientRotation(-math.pi / 2),
+        colors: [
+          Color(0xffff0000),
+          Color(0xffffff00),
+          Color(0xff00ff00),
+          Color(0xff00ffff),
+          Color(0xff0000ff),
+          Color(0xffff00ff),
+          Color(0xffff0000),
+        ],
+        stops: [0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6, 1],
+      ).createShader(ringRect);
+    canvas.drawCircle(center, radius, ringPaint);
+
+    final squareSize = side * .54;
+    final square = Rect.fromCenter(
+      center: center,
+      width: squareSize,
+      height: squareSize,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(square, const Radius.circular(8)),
+      Paint()..color = HSVColor.fromAHSV(1, color.hue, 1, 1).toColor(),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(square, const Radius.circular(8)),
+      Paint()
+        ..shader = const LinearGradient(
+          colors: [Color(0xffffffff), Color(0x00ffffff)],
+        ).createShader(square),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(square, const Radius.circular(8)),
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0x00000000), Color(0xff000000)],
+        ).createShader(square),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(square, const Radius.circular(8)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = const Color(0xffd7dbea),
+    );
+
+    final hueAngle = (color.hue - 90) * math.pi / 180;
+    final huePoint =
+        center + Offset(math.cos(hueAngle), math.sin(hueAngle)) * radius;
+    _drawHandle(canvas, huePoint, 10);
+
+    final svPoint = Offset(
+      square.left + color.saturation * square.width,
+      square.bottom - color.value * square.height,
+    );
+    _drawHandle(canvas, svPoint, 9);
+  }
+
+  void _drawHandle(Canvas canvas, Offset point, double radius) {
+    canvas.drawCircle(
+      point,
+      radius,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..color = const Color(0x66000000),
+    );
+    canvas.drawCircle(
+      point,
+      radius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = Colors.white,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _HsvColorWheelPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class FilamentColorsSearchDialog extends StatefulWidget {
+  const FilamentColorsSearchDialog({
+    super.key,
+    required this.client,
+    this.initialBrand = '',
+    this.initialMaterial = '',
+    this.initialQuery = '',
+    this.autoSearch = true,
+  });
+
+  final FilamentColorsClient client;
+  final String initialBrand;
+  final String initialMaterial;
+  final String initialQuery;
+  final bool autoSearch;
+
+  @override
+  State<FilamentColorsSearchDialog> createState() =>
+      _FilamentColorsSearchDialogState();
+}
+
+class _FilamentColorsSearchDialogState
+    extends State<FilamentColorsSearchDialog> {
+  late final TextEditingController brandController;
+  late final TextEditingController materialController;
+  late final TextEditingController queryController;
+  List<FilamentColorSwatch> results = const [];
+  bool loading = false;
+  bool hasSearched = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    brandController = TextEditingController(text: widget.initialBrand);
+    materialController = TextEditingController(text: widget.initialMaterial);
+    queryController = TextEditingController(text: widget.initialQuery);
+    if (widget.autoSearch &&
+        [
+          widget.initialBrand,
+          widget.initialMaterial,
+          widget.initialQuery,
+        ].any((value) => value.trim().isNotEmpty)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _search());
+    }
+  }
+
+  @override
+  void dispose() {
+    brandController.dispose();
+    materialController.dispose();
+    queryController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    if (loading) return;
+    if ([
+      brandController.text,
+      materialController.text,
+      queryController.text,
+    ].every((value) => value.trim().isEmpty)) {
+      setState(() {
+        hasSearched = false;
+        results = const [];
+        error = 'Enter a brand, material, or color before searching.';
+      });
+      return;
+    }
+    setState(() {
+      loading = true;
+      hasSearched = true;
+      error = null;
+    });
+    try {
+      final next = await widget.client.search(
+        brand: brandController.text,
+        material: materialController.text,
+        query: queryController.text,
+      );
+      if (!mounted) return;
+      setState(() => results = next);
+    } on FilamentColorsException catch (exception) {
+      if (!mounted) return;
+      setState(() {
+        results = const [];
+        error = exception.message;
+      });
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> _openAttribution() async {
+    await launchUrl(
+      Uri.parse(filamentColorsAttributionUrl),
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 640;
+    final filters = compact
+        ? Column(
+            children: [
+              TextField(
+                key: const Key('filament-colors-brand'),
+                controller: brandController,
+                decoration: const InputDecoration(labelText: 'Brand'),
+                onSubmitted: (_) => _search(),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('filament-colors-material'),
+                controller: materialController,
+                decoration: const InputDecoration(labelText: 'Material'),
+                onSubmitted: (_) => _search(),
+              ),
+            ],
+          )
+        : Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('filament-colors-brand'),
+                  controller: brandController,
+                  decoration: const InputDecoration(labelText: 'Brand'),
+                  onSubmitted: (_) => _search(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  key: const Key('filament-colors-material'),
+                  controller: materialController,
+                  decoration: const InputDecoration(labelText: 'Material'),
+                  onSubmitted: (_) => _search(),
+                ),
+              ),
+            ],
+          );
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.palette_outlined),
+          SizedBox(width: 10),
+          Expanded(child: Text('FilamentColors.xyz')),
+        ],
+      ),
+      content: SizedBox(
+        width: 680,
+        height: compact ? 610 : 560,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            filters,
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('filament-colors-query'),
+                    controller: queryController,
+                    decoration: const InputDecoration(
+                      labelText: 'Color or product name',
+                      hintText: 'Galaxy Black',
+                    ),
+                    onSubmitted: (_) => _search(),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton.icon(
+                  key: const Key('run-filament-colors-search'),
+                  onPressed: loading ? null : _search,
+                  icon: const Icon(Icons.search_rounded),
+                  label: const Text('Search'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: loading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        key: Key('filament-colors-loading'),
+                      ),
+                    )
+                  : error != null
+                  ? _FilamentColorsError(
+                      message: error!,
+                      onRetry: _search,
+                      onOpenWebsite: _openAttribution,
+                    )
+                  : !hasSearched
+                  ? const Center(
+                      child: Text(
+                        'Enter a brand, material, or color to search.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xff9da5b7)),
+                      ),
+                    )
+                  : results.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No matching swatches. Try changing a filter.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xff9da5b7)),
+                      ),
+                    )
+                  : ListView.separated(
+                      key: const Key('filament-colors-results'),
+                      itemCount: results.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final swatch = results[index];
+                        return InkWell(
+                          key: Key('filament-color-result-${swatch.id}'),
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () => Navigator.pop(context, swatch),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xff1b202b),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xff41344f),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: _hexColor(swatch.hex),
+                                    borderRadius: BorderRadius.circular(13),
+                                    border: Border.all(
+                                      color: const Color(0xff687185),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        swatch.name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        [
+                                              swatch.manufacturer,
+                                              swatch.filamentType.isNotEmpty
+                                                  ? swatch.filamentType
+                                                  : swatch.material,
+                                            ]
+                                            .where((value) => value.isNotEmpty)
+                                            .join(' · '),
+                                        style: const TextStyle(
+                                          color: Color(0xff9da5b7),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  swatch.hex,
+                                  style: const TextStyle(
+                                    color: Color(0xffc9bcff),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              key: const Key('filament-colors-attribution'),
+              onPressed: _openAttribution,
+              icon: const Icon(Icons.open_in_new_rounded, size: 16),
+              label: const Text(
+                'Color data from FilamentColors.xyz · CC BY 4.0',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _FilamentColorsError extends StatelessWidget {
+  const _FilamentColorsError({
+    required this.message,
+    required this.onRetry,
+    required this.onOpenWebsite,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+  final VoidCallback onOpenWebsite;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(
+          Icons.cloud_off_outlined,
+          size: 42,
+          color: Color(0xffffa552),
+        ),
+        const SizedBox(height: 12),
+        Text(message, textAlign: TextAlign.center),
+        const SizedBox(height: 6),
+        const Text(
+          'Manual hex and color-wheel entry are still available.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Color(0xff9da5b7)),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: const Key('retry-filament-colors'),
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+            TextButton.icon(
+              onPressed: onOpenWebsite,
+              icon: const Icon(Icons.open_in_new_rounded),
+              label: const Text('Open website'),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 bool replaceInventoryItemById(
@@ -747,12 +3095,20 @@ typedef WorkshopState = ({
   List<VendorRecord> vendors,
   List<BrandRecord> brands,
   List<SpoolTypeRecord> spoolTypes,
+  List<MaterialRecord> materials,
   List<CustomItemTypeRecord> customItemTypes,
+  Map<String, String> typeLabelOverrides,
+  Map<String, String> typeIconOverrides,
+  Map<String, bool> typeDepletionSettings,
+  Map<String, bool> typeStatusSettings,
+  Set<String> deletedTypeKeys,
   List<CatalogProduct> products,
   List<MachineTypeRecord> machineTypes,
   List<MachineRecord> machines,
   List<KitRecord> kits,
   List<BuildRecord> builds,
+  List<StockLocationRecord> locations,
+  List<ShoppingListEntry> shoppingList,
   List<AuditEntry> auditLog,
   List<AdditionHistoryEntry> additionHistory,
   int historyLimit,
@@ -781,22 +3137,46 @@ InventoryType _migratedInventoryType(String storedType, String name) {
       : type;
 }
 
+MaterialRecord? _inferStarterMaterial(
+  InventoryType type,
+  String name,
+  List<String> compatibility,
+) {
+  final typeKey = 'type:${type.name}';
+  final source = '$name ${compatibility.join(' ')}'.toLowerCase();
+  final candidates =
+      starterMaterials.where((material) => material.typeKey == typeKey).toList()
+        ..sort((a, b) => b.name.length.compareTo(a.name.length));
+  return candidates.where((material) {
+    final escaped = RegExp.escape(material.name.toLowerCase());
+    return RegExp('(?:^|[^a-z0-9])$escaped(?:[^a-z0-9]|\$)').hasMatch(source);
+  }).firstOrNull;
+}
+
 String encodeWorkshopState({
   required List<InventoryItem> inventory,
   required List<VendorRecord> vendors,
   required List<BrandRecord> brands,
   List<SpoolTypeRecord> spoolTypes = starterSpoolTypes,
+  List<MaterialRecord> materials = starterMaterials,
   List<CustomItemTypeRecord> customItemTypes = const [],
+  Map<String, String> typeLabelOverrides = const {},
+  Map<String, String> typeIconOverrides = const {},
+  Map<String, bool> typeDepletionSettings = const {},
+  Map<String, bool> typeStatusSettings = const {},
+  Set<String> deletedTypeKeys = const {},
   required List<CatalogProduct> products,
   List<MachineTypeRecord> machineTypes = const [],
   List<MachineRecord> machines = const [],
   List<KitRecord> kits = const [],
   List<BuildRecord> builds = const [],
+  List<StockLocationRecord> locations = const [],
+  List<ShoppingListEntry> shoppingList = const [],
   List<AuditEntry> auditLog = const [],
   List<AdditionHistoryEntry> additionHistory = const [],
   int historyLimit = 100,
 }) => jsonEncode({
-  'schemaVersion': 3,
+  'schemaVersion': 8,
   'inventory': inventory
       .map(
         (item) => {
@@ -807,6 +3187,8 @@ String encodeWorkshopState({
           'added': item.added.toIso8601String(),
           'cost': item.cost,
           'color': item.color.toARGB32(),
+          'itemColorName': item.itemColorName,
+          'itemColorLabel': item.itemColorLabel,
           'quantity': item.quantity,
           'quantityAlertThreshold': item.quantityAlertThreshold,
           'dryingMinutes': item.dryingMinutes,
@@ -826,6 +3208,7 @@ String encodeWorkshopState({
           'filamentStatus': item.filamentStatus.name,
           'brand': item.brand,
           'storageLocation': item.storageLocation,
+          'storageLocationId': item.storageLocationId,
           'deploymentLocation': item.deploymentLocation,
           'lastDriedAt': item.lastDriedAt?.toIso8601String(),
           'image': _bytesToJson(item.imageBytes),
@@ -835,10 +3218,22 @@ String encodeWorkshopState({
           'compatibleMachineIds': item.compatibleMachineIds,
           'spoolTypeId': item.spoolTypeId,
           'amsCompatible': item.amsCompatible,
+          'spoolTareWeightGrams': item.spoolTareWeightGrams,
+          'spoolOuterDiameterMm': item.spoolOuterDiameterMm,
+          'spoolWidthMm': item.spoolWidthMm,
+          'spoolHoleDiameterMm': item.spoolHoleDiameterMm,
+          'refill': item.refill,
+          'masterSpool': item.masterSpool,
           'catalogProductId': item.catalogProductId,
           'customTypeId': item.customTypeId,
           'customTypeName': item.customTypeName,
           'customFieldValues': item.customFieldValues,
+          'materialId': item.materialId,
+          'materialName': item.materialName,
+          'spoolMaterialId': item.spoolMaterialId,
+          'spoolMaterialName': item.spoolMaterialName,
+          'masterSpoolMaterialId': item.masterSpoolMaterialId,
+          'masterSpoolMaterialName': item.masterSpoolMaterialName,
         },
       )
       .toList(),
@@ -848,9 +3243,17 @@ String encodeWorkshopState({
           'id': type.id,
           'name': type.name,
           'contextualFields': type.contextualFields,
+          'iconKey': type.iconKey,
+          'canMarkDepleted': type.canMarkDepleted,
+          'showsStatus': type.showsStatus,
         },
       )
       .toList(),
+  'typeLabelOverrides': typeLabelOverrides,
+  'typeIconOverrides': typeIconOverrides,
+  'typeDepletionSettings': typeDepletionSettings,
+  'typeStatusSettings': typeStatusSettings,
+  'deletedTypeKeys': deletedTypeKeys.toList(),
   'machineTypes': machineTypes
       .map(
         (type) => {'id': type.id, 'name': type.name, 'parentId': type.parentId},
@@ -865,6 +3268,8 @@ String encodeWorkshopState({
           'address': machine.address,
           'typeId': machine.typeId,
           'kitIds': machine.kitIds.toList(),
+          'sourceUrls': machine.sourceUrls,
+          'image': _bytesToJson(machine.imageBytes),
         },
       )
       .toList(),
@@ -874,6 +3279,8 @@ String encodeWorkshopState({
           'id': kit.id,
           'name': kit.name,
           'sections': kit.sections,
+          'sourceUrls': kit.sourceUrls,
+          'image': _bytesToJson(kit.imageBytes),
           'bom': kit.bom
               .map(
                 (entry) => {
@@ -915,6 +3322,31 @@ String encodeWorkshopState({
                 },
               )
               .toList(),
+        },
+      )
+      .toList(),
+  'locations': locations
+      .map(
+        (location) => {
+          'id': location.id,
+          'name': location.name,
+          if (location.parentId != null) 'parentId': location.parentId,
+        },
+      )
+      .toList(),
+  'shoppingList': shoppingList
+      .map(
+        (entry) => {
+          'id': entry.id,
+          'name': entry.name,
+          'productId': entry.productId,
+          'quantityNeeded': entry.quantityNeeded,
+          'quantityOrdered': entry.quantityOrdered,
+          'quantityReceived': entry.quantityReceived,
+          if (entry.kitId != null) 'kitId': entry.kitId,
+          if (entry.bomLineId != null) 'bomLineId': entry.bomLineId,
+          'sourceUrl': entry.sourceUrl,
+          'status': entry.status.name,
         },
       )
       .toList(),
@@ -961,6 +3393,15 @@ String encodeWorkshopState({
         },
       )
       .toList(),
+  'materials': materials
+      .map(
+        (material) => {
+          'id': material.id,
+          'name': material.name,
+          'typeKey': material.typeKey,
+        },
+      )
+      .toList(),
   'products': products
       .map(
         (product) => {
@@ -973,6 +3414,7 @@ String encodeWorkshopState({
           'printingInstructions': product.printingInstructions,
           'dryingInstructions': product.dryingInstructions,
           'storageInstructions': product.storageInstructions,
+          'sourceUrls': product.sourceUrls,
           'image': _bytesToJson(product.imageBytes),
         },
       )
@@ -996,6 +3438,7 @@ WorkshopState? decodeWorkshopState(String? source) {
   if (source == null || source.isEmpty) return null;
   try {
     final root = jsonDecode(source) as Map<String, dynamic>;
+    final schemaVersion = root['schemaVersion'] as int? ?? 1;
     final inventory = (root['inventory'] as List)
         .cast<Map<String, dynamic>>()
         .map(
@@ -1010,6 +3453,8 @@ WorkshopState? decodeWorkshopState(String? source) {
             added: DateTime.parse(item['added'] as String),
             cost: (item['cost'] as num).toDouble(),
             color: Color(item['color'] as int),
+            itemColorName: _decodedItemColorName(item, schemaVersion),
+            itemColorLabel: _decodedItemColorLabel(item),
             quantity: (item['quantity'] as num?)?.toDouble() ?? 1,
             quantityAlertThreshold: (item['quantityAlertThreshold'] as num?)
                 ?.toDouble(),
@@ -1047,6 +3492,7 @@ WorkshopState? decodeWorkshopState(String? source) {
             ),
             brand: item['brand'] as String? ?? '',
             storageLocation: item['storageLocation'] as String? ?? '',
+            storageLocationId: item['storageLocationId'] as String? ?? '',
             deploymentLocation: item['deploymentLocation'] as String? ?? '',
             lastDriedAt: item['lastDriedAt'] == null
                 ? null
@@ -1060,12 +3506,49 @@ WorkshopState? decodeWorkshopState(String? source) {
                     .cast<String>(),
             spoolTypeId: item['spoolTypeId'] as String? ?? defaultSpoolTypeId,
             amsCompatible: item['amsCompatible'] as bool? ?? false,
+            spoolTareWeightGrams: (item['spoolTareWeightGrams'] as num?)
+                ?.toDouble(),
+            spoolOuterDiameterMm: (item['spoolOuterDiameterMm'] as num?)
+                ?.toDouble(),
+            spoolWidthMm: (item['spoolWidthMm'] as num?)?.toDouble(),
+            spoolHoleDiameterMm: (item['spoolHoleDiameterMm'] as num?)
+                ?.toDouble(),
+            refill: item['refill'] as bool? ?? false,
+            masterSpool: item['masterSpool'] as String? ?? '',
             catalogProductId: item['catalogProductId'] as String?,
             customTypeId: item['customTypeId'] as String? ?? '',
             customTypeName: item['customTypeName'] as String? ?? '',
             customFieldValues:
                 (item['customFieldValues'] as Map<String, dynamic>? ?? const {})
                     .map((key, value) => MapEntry(key, value.toString())),
+            materialId:
+                item['materialId'] as String? ??
+                _inferStarterMaterial(
+                  _migratedInventoryType(
+                    item['type'] as String,
+                    item['name'] as String,
+                  ),
+                  item['name'] as String,
+                  (item['compatibility'] as List).cast<String>(),
+                )?.id ??
+                '',
+            materialName:
+                item['materialName'] as String? ??
+                _inferStarterMaterial(
+                  _migratedInventoryType(
+                    item['type'] as String,
+                    item['name'] as String,
+                  ),
+                  item['name'] as String,
+                  (item['compatibility'] as List).cast<String>(),
+                )?.name ??
+                '',
+            spoolMaterialId: item['spoolMaterialId'] as String? ?? '',
+            spoolMaterialName: item['spoolMaterialName'] as String? ?? '',
+            masterSpoolMaterialId:
+                item['masterSpoolMaterialId'] as String? ?? '',
+            masterSpoolMaterialName:
+                item['masterSpoolMaterialName'] as String? ?? '',
           ),
         )
         .toList();
@@ -1079,9 +3562,31 @@ WorkshopState? decodeWorkshopState(String? source) {
                 contextualFields:
                     (type['contextualFields'] as List<dynamic>? ?? const [])
                         .cast<String>(),
+                iconKey: type['iconKey'] as String? ?? 'tune',
+                canMarkDepleted: type['canMarkDepleted'] as bool? ?? false,
+                showsStatus: type['showsStatus'] as bool? ?? false,
               ),
             )
             .toList();
+    final typeLabelOverrides =
+        (root['typeLabelOverrides'] as Map<String, dynamic>? ?? const {}).map(
+          (key, value) => MapEntry(key, value.toString()),
+        );
+    final typeIconOverrides =
+        (root['typeIconOverrides'] as Map<String, dynamic>? ?? const {}).map(
+          (key, value) => MapEntry(key, value.toString()),
+        );
+    final typeDepletionSettings =
+        (root['typeDepletionSettings'] as Map<String, dynamic>? ?? const {})
+            .map((key, value) => MapEntry(key, value == true));
+    final typeStatusSettings =
+        (root['typeStatusSettings'] as Map<String, dynamic>? ?? const {}).map(
+          (key, value) => MapEntry(key, value == true),
+        );
+    final deletedTypeKeys =
+        (root['deletedTypeKeys'] as List<dynamic>? ?? const [])
+            .cast<String>()
+            .toSet();
     final vendors = (root['vendors'] as List)
         .cast<Map<String, dynamic>>()
         .map(
@@ -1126,6 +3631,8 @@ WorkshopState? decodeWorkshopState(String? source) {
             dryingInstructions: product['dryingInstructions'] as String? ?? '',
             storageInstructions:
                 product['storageInstructions'] as String? ?? '',
+            sourceUrls: (product['sourceUrls'] as List<dynamic>? ?? const [])
+                .cast<String>(),
             imageBytes: _bytesFromJson(product['image']),
           ),
         )
@@ -1147,6 +3654,26 @@ WorkshopState? decodeWorkshopState(String? source) {
                 id: spool['id'] as String,
                 label: spool['label'] as String,
                 weightGrams: spool['weightGrams'] as int,
+              ),
+            )
+            .toList();
+    final materials =
+        (root['materials'] as List<dynamic>? ??
+                starterMaterials
+                    .map(
+                      (material) => {
+                        'id': material.id,
+                        'name': material.name,
+                        'typeKey': material.typeKey,
+                      },
+                    )
+                    .toList())
+            .cast<Map<String, dynamic>>()
+            .map(
+              (material) => MaterialRecord(
+                id: material['id'] as String,
+                name: material['name'] as String,
+                typeKey: material['typeKey'] as String,
               ),
             )
             .toList();
@@ -1190,6 +3717,9 @@ WorkshopState? decodeWorkshopState(String? source) {
             kitIds: (machine['kitIds'] as List<dynamic>? ?? const [])
                 .cast<String>()
                 .toSet(),
+            sourceUrls: (machine['sourceUrls'] as List<dynamic>? ?? const [])
+                .cast<String>(),
+            imageBytes: _bytesFromJson(machine['image']),
           ),
         )
         .toList();
@@ -1201,6 +3731,9 @@ WorkshopState? decodeWorkshopState(String? source) {
             name: kit['name'] as String,
             sections: (kit['sections'] as List<dynamic>? ?? const [])
                 .cast<String>(),
+            sourceUrls: (kit['sourceUrls'] as List<dynamic>? ?? const [])
+                .cast<String>(),
+            imageBytes: _bytesFromJson(kit['image']),
             bom: [
               for (final (index, entry)
                   in (kit['bom'] as List<dynamic>? ?? const [])
@@ -1257,6 +3790,37 @@ WorkshopState? decodeWorkshopState(String? source) {
           ),
         )
         .toList();
+    final locations = (root['locations'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(
+          (location) => StockLocationRecord(
+            id: location['id'] as String,
+            name: location['name'] as String,
+            parentId: location['parentId'] as String?,
+          ),
+        )
+        .toList();
+    final shoppingList = (root['shoppingList'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(
+          (entry) => ShoppingListEntry(
+            id: entry['id'] as String,
+            name: entry['name'] as String,
+            productId: entry['productId'] as String? ?? '',
+            quantityNeeded: (entry['quantityNeeded'] as num?)?.toDouble() ?? 0,
+            quantityOrdered:
+                (entry['quantityOrdered'] as num?)?.toDouble() ?? 0,
+            quantityReceived:
+                (entry['quantityReceived'] as num?)?.toDouble() ?? 0,
+            kitId: entry['kitId'] as String?,
+            bomLineId: entry['bomLineId'] as String?,
+            sourceUrl: entry['sourceUrl'] as String? ?? '',
+            status: ShoppingListStatus.values.byName(
+              entry['status'] as String? ?? 'needed',
+            ),
+          ),
+        )
+        .toList();
     final auditLog = (root['auditLog'] as List<dynamic>? ?? const [])
         .cast<Map<String, dynamic>>()
         .map(
@@ -1296,12 +3860,20 @@ WorkshopState? decodeWorkshopState(String? source) {
       vendors: vendors,
       brands: brands,
       spoolTypes: spoolTypes,
+      materials: materials,
       customItemTypes: customItemTypes,
+      typeLabelOverrides: typeLabelOverrides,
+      typeIconOverrides: typeIconOverrides,
+      typeDepletionSettings: typeDepletionSettings,
+      typeStatusSettings: typeStatusSettings,
+      deletedTypeKeys: deletedTypeKeys,
       products: products,
       machineTypes: machineTypes,
       machines: machines,
       kits: kits,
       builds: builds,
+      locations: locations,
+      shoppingList: shoppingList,
       auditLog: auditLog,
       additionHistory: additionHistory,
       historyLimit: root['historyLimit'] as int? ?? 100,
@@ -1312,48 +3884,666 @@ WorkshopState? decodeWorkshopState(String? source) {
   }
 }
 
-class InventorinatorApp extends StatelessWidget {
-  const InventorinatorApp({super.key, this.database, this.persistedState});
-  final LocalDatabase? database;
-  final String? persistedState;
+class _GlassButtonSurface extends StatefulWidget {
+  const _GlassButtonSurface({
+    required this.states,
+    required this.child,
+    this.joined = false,
+  });
+
+  final Set<WidgetState> states;
+  final Widget? child;
+  final bool joined;
+
+  @override
+  State<_GlassButtonSurface> createState() => _GlassButtonSurfaceState();
+}
+
+class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
+  Timer? _hoverRiseTimer;
+  Timer? _hoverSettleTimer;
+  _GlassHoverPhase _hoverPhase = _GlassHoverPhase.rest;
+  late bool _wasHovered;
+
+  bool get _hovered => widget.states.contains(WidgetState.hovered);
+
+  @override
+  void initState() {
+    super.initState();
+    _wasHovered = _hovered;
+  }
+
+  @override
+  void didUpdateWidget(covariant _GlassButtonSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_wasHovered && _hovered) {
+      _cancelHoverTimers();
+      _hoverPhase = _GlassHoverPhase.rest;
+      _hoverRiseTimer = Timer(const Duration(milliseconds: 100), () {
+        if (mounted && _hovered) {
+          setState(() => _hoverPhase = _GlassHoverPhase.magenta);
+        }
+      });
+      _hoverSettleTimer = Timer(const Duration(milliseconds: 220), () {
+        if (mounted && _hovered) {
+          setState(() => _hoverPhase = _GlassHoverPhase.purple);
+        }
+      });
+    } else if (_wasHovered && !_hovered) {
+      _cancelHoverTimers();
+      _hoverPhase = _GlassHoverPhase.rest;
+    }
+    _wasHovered = _hovered;
+  }
+
+  void _cancelHoverTimers() {
+    _hoverRiseTimer?.cancel();
+    _hoverSettleTimer?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _cancelHoverTimers();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xff8e75ff),
-      brightness: Brightness.dark,
-      surface: const Color(0xff171b25),
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final light = Theme.of(context).brightness == Brightness.light;
+    final disabled = widget.states.contains(WidgetState.disabled);
+    final pressed = widget.states.contains(WidgetState.pressed);
+    final selected = widget.states.contains(WidgetState.selected);
+    final activeHover = _hovered && _hoverPhase != _GlassHoverPhase.rest;
+    // This is the Flutter counterpart of #inventorinator-window-button in the
+    // Linux runner. Keep its stops, rim, inset, shadow, and radius identical.
+    final mobileTouchSurface =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final colors = disabled
+        ? light
+              ? [
+                  Colors.white.withValues(alpha: .5),
+                  palette.container.withValues(alpha: .18),
+                ]
+              : [
+                  const Color(0x121d1f29),
+                  palette.container.withValues(alpha: .07),
+                ]
+        : pressed
+        ? [
+            palette.container.withValues(alpha: .78),
+            palette.base.withValues(alpha: .48),
+          ]
+        : _hovered && _hoverPhase == _GlassHoverPhase.magenta
+        ? [palette.flash, palette.flashDark]
+        : _hovered && _hoverPhase == _GlassHoverPhase.purple || selected
+        ? [palette.base, palette.container]
+        : light
+        ? [
+            Colors.white.withValues(alpha: .86),
+            palette.container.withValues(alpha: .3),
+          ]
+        : [const Color(0x29ffffff), palette.base.withValues(alpha: .12)];
+    final rim = disabled
+        ? light
+              ? palette.outlineVariant.withValues(alpha: .58)
+              : const Color(0x1febe6ff)
+        : activeHover || selected
+        ? palette.rim
+        : light
+        ? palette.outlineVariant
+        : const Color(0x38ebe6ff);
+    final inset = disabled
+        ? light
+              ? Colors.white.withValues(alpha: .28)
+              : const Color(0x0fffffff)
+        : pressed
+        ? const Color(0x57000000)
+        : activeHover || selected
+        ? palette.rim.withValues(alpha: .42)
+        : light
+        ? Colors.white.withValues(alpha: .92)
+        : const Color(0x29ffffff);
+    final radius = widget.joined
+        ? BorderRadius.zero
+        : BorderRadius.circular(10);
+    return AnimatedContainer(
+      duration: Duration(
+        milliseconds: switch (_hoverPhase) {
+          _GlassHoverPhase.rest => 180,
+          _GlassHoverPhase.magenta => 120,
+          _GlassHoverPhase.purple => 130,
+        },
+      ),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors,
+        ),
+        borderRadius: radius,
+        border: widget.joined ? null : Border.all(color: rim),
+        boxShadow: disabled || widget.joined || mobileTouchSurface
+            ? const []
+            : [
+                BoxShadow(
+                  color: activeHover || selected
+                      ? palette.container.withValues(alpha: .48)
+                      : light
+                      ? palette.outlineVariant.withValues(alpha: .42)
+                      : const Color(0x52000000),
+                  blurRadius: activeHover || selected ? 12 : 9,
+                  offset: Offset(0, activeHover || selected ? 4 : 3),
+                ),
+              ],
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            widget.child ?? const SizedBox.shrink(),
+            Positioned(
+              top: 0,
+              left: widget.joined ? 0 : 1,
+              right: widget.joined ? 0 : 1,
+              height: 1,
+              child: IgnorePointer(child: ColoredBox(color: inset)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassFilterChip extends StatefulWidget {
+  const _GlassFilterChip({
+    super.key,
+    required this.selected,
+    required this.child,
+  });
+
+  final bool selected;
+  final Widget child;
+
+  @override
+  State<_GlassFilterChip> createState() => _GlassFilterChipState();
+}
+
+class _GlassFilterChipState extends State<_GlassFilterChip> {
+  bool hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => hovered = true),
+    onExit: (_) => setState(() => hovered = false),
+    child: _GlassButtonSurface(
+      states: {
+        if (hovered) WidgetState.hovered,
+        if (widget.selected) WidgetState.selected,
+      },
+      child: widget.child,
+    ),
+  );
+}
+
+class _GlassSliderThumbShape extends SliderComponentShape {
+  _GlassSliderThumbShape();
+
+  static const bodySize = 30.0;
+  static const preferredWidth = 92.0;
+  double? _lastValue;
+  double _motionBias = 0;
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
+      const Size(preferredWidth, 32);
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    required bool isDiscrete,
+    required TextPainter labelPainter,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required TextDirection textDirection,
+    required double value,
+    required double textScaleFactor,
+    required Size sizeWithOverflow,
+  }) {
+    final canvas = context.canvas;
+    final pressed = activationAnimation.value;
+    final enabled = enableAnimation.value;
+    final accent = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
+    final base = sliderTheme.thumbColor ?? const Color(0xff755da5);
+    final container = Color.lerp(base, Colors.black, .35)!;
+    if (pressed > .01 && _lastValue != null) {
+      final delta = value - _lastValue!;
+      if (delta.abs() > .00001) {
+        final target = delta > 0 ? 1.0 : -1.0;
+        _motionBias = ui.lerpDouble(_motionBias, target, .55)!;
+      }
+    } else if (pressed <= .01) {
+      _motionBias = 0;
+    }
+    _lastValue = value;
+
+    final stretching = math.max(0.0, _motionBias);
+    final tapering = math.max(0.0, -_motionBias);
+    final currentBodySize = ui.lerpDouble(bodySize, 32, pressed)!;
+    final rect = Rect.fromCenter(
+      center: center,
+      width: currentBodySize,
+      height: currentBodySize,
+    );
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
+    final bodyPath = Path()..addRRect(rrect);
+    final direction = textDirection == TextDirection.ltr ? -1.0 : 1.0;
+    final tailLength = 26 + stretching * 18 - tapering * 14;
+    final tailHalfHeight = 8 + stretching * 4 - tapering * 4;
+    final tip = Offset(center.dx + direction * tailLength, center.dy);
+    final joinX = center.dx + direction * (currentBodySize / 2 - 6);
+    final tailPath = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..cubicTo(
+        tip.dx - direction * 12,
+        tip.dy - 1,
+        joinX + direction * 10,
+        center.dy - tailHalfHeight,
+        joinX,
+        center.dy - tailHalfHeight,
+      )
+      ..lineTo(joinX, center.dy + tailHalfHeight)
+      ..cubicTo(
+        joinX + direction * 10,
+        center.dy + tailHalfHeight,
+        tip.dx - direction * 12,
+        tip.dy + 1,
+        tip.dx,
+        tip.dy,
+      )
+      ..close();
+
+    canvas.drawPath(
+      tailPath,
+      Paint()
+        ..color = base.withValues(
+          alpha: ui.lerpDouble(.1, .3 + stretching * .12, pressed)!,
+        )
+        ..maskFilter = MaskFilter.blur(
+          BlurStyle.normal,
+          ui.lerpDouble(3, 8 + stretching * 3, pressed)!,
+        ),
+    );
+    canvas.drawPath(
+      tailPath,
+      Paint()..shader = ui.Gradient.linear(tip, center, [accent, base]),
+    );
+
+    canvas.drawShadow(
+      bodyPath,
+      Colors.black.withValues(alpha: .32 * enabled),
+      3 + pressed,
+      false,
+    );
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..color = base.withValues(alpha: ui.lerpDouble(.08, .24, pressed)!)
+        ..maskFilter = MaskFilter.blur(
+          BlurStyle.normal,
+          ui.lerpDouble(3, 7, pressed)!,
+        ),
+    );
+    // A button has an opaque surface beneath its translucent glass. Without
+    // this layer, the slider track shows through and the thumb looks hollow.
+    canvas.drawPath(bodyPath, Paint()..color = container);
+    final top = Color.lerp(
+      const Color(0x29ffffff),
+      container.withValues(alpha: .78),
+      pressed,
+    )!;
+    final bottom = Color.lerp(
+      base.withValues(alpha: .12),
+      base.withValues(alpha: .48),
+      pressed,
+    )!;
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          bodyPath.getBounds().topLeft,
+          bodyPath.getBounds().bottomRight,
+          [top, bottom],
+        ),
+    );
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Color.lerp(
+          const Color(0x38ebe6ff),
+          Color.lerp(base, Colors.white, .16)!,
+          pressed,
+        )!,
+    );
+    canvas.drawLine(
+      Offset(rect.left + 7, rect.top + 1.5),
+      Offset(rect.right - 7, rect.top + 1.5),
+      Paint()
+        ..strokeWidth = 1
+        ..strokeCap = StrokeCap.round
+        ..color = Color.lerp(
+          const Color(0x29ffffff),
+          const Color(0x57000000),
+          pressed,
+        )!,
+    );
+  }
+}
+
+enum _GlassHoverPhase { rest, magenta, purple }
+
+class InventorinatorApp extends StatefulWidget {
+  const InventorinatorApp({
+    super.key,
+    this.database,
+    this.persistedState,
+    this.filamentColorsClient,
+  });
+  final LocalDatabase? database;
+  final String? persistedState;
+  final FilamentColorsClient? filamentColorsClient;
+
+  @override
+  State<InventorinatorApp> createState() => _InventorinatorAppState();
+}
+
+class _InventorinatorAppState extends State<InventorinatorApp> {
+  static const _nativeThemeChannel = MethodChannel(
+    'media.everlasting.inventorinator/theme',
+  );
+  late AppColorTheme colorTheme;
+  late AppBrightnessMode brightnessMode;
+  late Color customThemeColor;
+
+  @override
+  void initState() {
+    super.initState();
+    final saved = widget.database?.loadStringPreference(
+      'app_color_theme',
+      fallback: AppColorTheme.darkPurple.name,
+    );
+    final savedBrightness = widget.database?.loadStringPreference(
+      'app_brightness_mode',
+      fallback: saved == 'light'
+          ? AppBrightnessMode.light.name
+          : AppBrightnessMode.dark.name,
+    );
+    colorTheme =
+        AppColorTheme.values
+            .where((value) => value.name == saved)
+            .firstOrNull ??
+        AppColorTheme.darkPurple;
+    brightnessMode =
+        AppBrightnessMode.values
+            .where((value) => value.name == savedBrightness)
+            .firstOrNull ??
+        AppBrightnessMode.dark;
+    customThemeColor =
+        _hexColor(
+          widget.database?.loadStringPreference(
+                'app_custom_theme_color',
+                fallback: '#8E75FF',
+              ) ??
+              '#8E75FF',
+        ) ??
+        const Color(0xff8e75ff);
+    _applySystemColors();
+  }
+
+  void _applySystemColors() {
+    final palette = InventorinatorColors.forTheme(
+      colorTheme,
+      customColor: customThemeColor,
+      brightness: brightnessMode,
+    );
+    final canvas = palette.canvas;
+    final iconBrightness = brightnessMode == AppBrightnessMode.light
+        ? Brightness.dark
+        : Brightness.light;
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: canvas,
+        statusBarIconBrightness: iconBrightness,
+        systemStatusBarContrastEnforced: false,
+        systemNavigationBarColor: canvas,
+        systemNavigationBarDividerColor: canvas,
+        systemNavigationBarIconBrightness: iconBrightness,
+        systemNavigationBarContrastEnforced: false,
+      ),
+    );
+    if (!kIsWeb && Platform.isLinux) {
+      unawaited(
+        _nativeThemeChannel
+            .invokeMethod<void>('setTheme', {
+              'theme': colorTheme.name,
+              'canvas': _colorHex(palette.canvas),
+              'surface': _colorHex(palette.surface),
+              'base': _colorHex(palette.base),
+              'container': _colorHex(palette.container),
+              'flash': _colorHex(palette.flash),
+              'flashDark': _colorHex(palette.flashDark),
+              'outlineVariant': _colorHex(palette.outlineVariant),
+              'rim': _colorHex(palette.rim),
+              'accent': _colorHex(palette.accent),
+              'foreground': brightnessMode == AppBrightnessMode.light
+                  ? '#211A2D'
+                  : '#EEEAFF',
+            })
+            .catchError((_) {}),
+      );
+    }
+  }
+
+  void _setColorTheme(AppColorTheme value) {
+    if (value == colorTheme) return;
+    setState(() => colorTheme = value);
+    widget.database?.saveStringPreference('app_color_theme', value.name);
+    _applySystemColors();
+  }
+
+  void _setBrightnessMode(AppBrightnessMode value) {
+    if (value == brightnessMode) return;
+    setState(() => brightnessMode = value);
+    widget.database?.saveStringPreference('app_brightness_mode', value.name);
+    _applySystemColors();
+  }
+
+  void _setCustomThemeColor(Color value) {
+    setState(() {
+      customThemeColor = value;
+      colorTheme = AppColorTheme.custom;
+    });
+    widget.database?.saveStringPreference(
+      'app_custom_theme_color',
+      _colorHex(value),
+    );
+    widget.database?.saveStringPreference(
+      'app_color_theme',
+      AppColorTheme.custom.name,
+    );
+    _applySystemColors();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = InventorinatorColors.forTheme(
+      colorTheme,
+      customColor: customThemeColor,
+      brightness: brightnessMode,
+    );
+    final light = brightnessMode == AppBrightnessMode.light;
+    final brightness = light ? Brightness.light : Brightness.dark;
+    final foreground = light
+        ? const Color(0xff211a2d)
+        : const Color(0xffeeeaff);
+    final mutedForeground = light
+        ? const Color(0xff625b6d)
+        : const Color(0xff929aac);
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: palette.base,
+          brightness: brightness,
+          surface: palette.surface,
+        ).copyWith(
+          primary: palette.accent,
+          onPrimary: light ? Colors.white : palette.canvas,
+          primaryContainer: palette.container,
+          onPrimaryContainer: foreground,
+          secondary: light ? const Color(0xff08766c) : const Color(0xff45d2bd),
+          onSecondary: light ? Colors.white : palette.canvas,
+          secondaryContainer: light
+              ? const Color(0xffc3eee8)
+              : const Color(0xff173d3b),
+          onSecondaryContainer: light
+              ? const Color(0xff073e39)
+              : const Color(0xffd8fff8),
+          error: light ? const Color(0xffb42336) : const Color(0xffff6b7a),
+          onError: light ? Colors.white : const Color(0xff240006),
+          surface: palette.surface,
+          surfaceContainerLowest: palette.canvas,
+          surfaceContainerLow: palette.panel,
+          surfaceContainer: palette.surface,
+          surfaceContainerHigh: Color.lerp(
+            palette.surface,
+            light ? palette.container : Colors.white,
+            light ? .28 : .035,
+          ),
+          onSurface: foreground,
+          onSurfaceVariant: mutedForeground,
+          outline: palette.outline,
+          outlineVariant: palette.outlineVariant,
+        );
+    final glassForeground = WidgetStateProperty.resolveWith<Color?>((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return light ? const Color(0xff938b9e) : const Color(0xff6f7180);
+      }
+      if (light &&
+          !states.contains(WidgetState.hovered) &&
+          !states.contains(WidgetState.pressed) &&
+          !states.contains(WidgetState.selected)) {
+        return foreground;
+      }
+      return const Color(0xffeeeaff);
+    });
+    Widget glassButtonLayer(
+      BuildContext context,
+      Set<WidgetState> states,
+      Widget? child,
+    ) => _GlassButtonSurface(states: states, child: child);
+
+    final glassButtonStyle = ButtonStyle(
+      animationDuration: const Duration(milliseconds: 180),
+      foregroundColor: glassForeground,
+      backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      side: const WidgetStatePropertyAll(BorderSide.none),
+      elevation: const WidgetStatePropertyAll(0),
+      shadowColor: const WidgetStatePropertyAll(Colors.transparent),
+      backgroundBuilder: glassButtonLayer,
+      shape: const WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(10)),
+        ),
+      ),
     );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Inventorinator',
       theme: ThemeData(
+        brightness: brightness,
         colorScheme: scheme,
-        scaffoldBackgroundColor: const Color(0xff0d1017),
+        extensions: [palette],
+        scaffoldBackgroundColor: palette.canvas,
         useMaterial3: true,
+        outlinedButtonTheme: OutlinedButtonThemeData(style: glassButtonStyle),
+        filledButtonTheme: FilledButtonThemeData(style: glassButtonStyle),
+        elevatedButtonTheme: ElevatedButtonThemeData(style: glassButtonStyle),
+        textButtonTheme: TextButtonThemeData(style: glassButtonStyle),
+        iconButtonTheme: IconButtonThemeData(
+          style: glassButtonStyle.copyWith(
+            minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+            padding: const WidgetStatePropertyAll(EdgeInsets.all(8)),
+          ),
+        ),
+        segmentedButtonTheme: SegmentedButtonThemeData(
+          style: glassButtonStyle.copyWith(
+            padding: const WidgetStatePropertyAll(
+              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+          ),
+        ),
+        floatingActionButtonTheme: FloatingActionButtonThemeData(
+          backgroundColor: palette.surface,
+          foregroundColor: foreground,
+          hoverColor: palette.base,
+          focusColor: palette.container,
+          elevation: 4,
+          hoverElevation: 8,
+          shape: RoundedRectangleBorder(
+            borderRadius: const BorderRadius.all(Radius.circular(14)),
+            side: BorderSide(color: palette.outline),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: palette.surface,
+          selectedColor: palette.container,
+          disabledColor: light
+              ? const Color(0xffe3dee9)
+              : const Color(0xff1a1c25),
+          side: BorderSide(color: palette.outline),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(10)),
+          ),
+          labelStyle: TextStyle(color: foreground),
+          secondaryLabelStyle: TextStyle(color: foreground),
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: const Color(0xff0f131c),
-          labelStyle: const TextStyle(
-            color: Color(0xffb9c0d0),
+          fillColor: palette.input,
+          labelStyle: TextStyle(
+            color: mutedForeground,
             fontWeight: FontWeight.w600,
           ),
-          floatingLabelStyle: const TextStyle(
-            color: Color(0xffc9bcff),
+          floatingLabelStyle: TextStyle(
+            color: palette.accent,
             fontWeight: FontWeight.w700,
           ),
-          hintStyle: const TextStyle(color: Color(0xff687185)),
-          helperStyle: const TextStyle(color: Color(0xff929aac)),
+          hintStyle: TextStyle(
+            color: light ? const Color(0xff777080) : const Color(0xff687185),
+          ),
+          helperStyle: TextStyle(color: mutedForeground),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: Color(0xff394155)),
+            borderSide: BorderSide(color: palette.outlineVariant),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: Color(0xff394155)),
+            borderSide: BorderSide(color: palette.outlineVariant),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: Color(0xff9f8aff), width: 2),
+            borderSide: BorderSide(color: palette.accent, width: 2),
           ),
           errorBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
@@ -1369,49 +4559,320 @@ class InventorinatorApp extends StatelessWidget {
           ),
         ),
         cardTheme: CardThemeData(
-          color: const Color(0xff171b25),
+          color: palette.surface,
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: Color(0xff272d3b)),
+            side: BorderSide(color: palette.outlineVariant),
           ),
         ),
         dialogTheme: DialogThemeData(
-          backgroundColor: const Color(0xff171b25),
+          backgroundColor: palette.surface,
           elevation: 20,
-          shadowColor: const Color(0xff8e75ff).withValues(alpha: .28),
+          shadowColor: palette.accent.withValues(alpha: .28),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
-            side: BorderSide(
-              color: const Color(0xff8e75ff).withValues(alpha: .28),
-            ),
+            side: BorderSide(color: palette.accent.withValues(alpha: .28)),
           ),
         ),
+        popupMenuTheme: PopupMenuThemeData(
+          color: palette.panel,
+          surfaceTintColor: Colors.transparent,
+          elevation: 18,
+          shadowColor: palette.accent.withValues(alpha: .32),
+          menuPadding: const EdgeInsets.symmetric(vertical: 8),
+          textStyle: TextStyle(
+            color: foreground,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: palette.outlineVariant),
+          ),
+        ),
+        menuTheme: MenuThemeData(
+          style: MenuStyle(
+            backgroundColor: WidgetStatePropertyAll(palette.panel),
+            surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          ),
+        ),
+        dropdownMenuTheme: DropdownMenuThemeData(
+          textStyle: TextStyle(color: foreground),
+          menuStyle: MenuStyle(
+            backgroundColor: WidgetStatePropertyAll(palette.panel),
+            surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          ),
+        ),
+        hoverColor: palette.base.withValues(alpha: .35),
+        splashColor: palette.container.withValues(alpha: .55),
       ),
-      home: InventoryHome(database: database, persistedState: persistedState),
+      home: InventoryHome(
+        database: widget.database,
+        persistedState: widget.persistedState,
+        filamentColorsClient: widget.filamentColorsClient,
+        colorTheme: colorTheme,
+        brightnessMode: brightnessMode,
+        customThemeColor: customThemeColor,
+        onColorThemeChanged: _setColorTheme,
+        onBrightnessModeChanged: _setBrightnessMode,
+        onCustomThemeColorChanged: _setCustomThemeColor,
+      ),
     );
   }
 }
 
+class _CenteredSquareGridDelegate extends SliverGridDelegate {
+  const _CenteredSquareGridDelegate({
+    required this.cardExtent,
+    required this.spacing,
+  });
+
+  final double cardExtent;
+  final double spacing;
+
+  @override
+  SliverGridLayout getLayout(SliverConstraints constraints) {
+    final extent = math.min(cardExtent, constraints.crossAxisExtent);
+    final count = math.max(
+      1,
+      ((constraints.crossAxisExtent + spacing) / (extent + spacing)).floor(),
+    );
+    final occupied = (count * extent) + ((count - 1) * spacing);
+    return _CenteredSquareGridLayout(
+      crossAxisCount: count,
+      cardExtent: extent,
+      spacing: spacing,
+      leadingSpace: math.max(0, (constraints.crossAxisExtent - occupied) / 2),
+      reverseCrossAxis: axisDirectionIsReversed(constraints.crossAxisDirection),
+      crossAxisExtent: constraints.crossAxisExtent,
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant _CenteredSquareGridDelegate oldDelegate) =>
+      cardExtent != oldDelegate.cardExtent || spacing != oldDelegate.spacing;
+}
+
+class _CenteredSquareGridLayout extends SliverGridLayout {
+  const _CenteredSquareGridLayout({
+    required this.crossAxisCount,
+    required this.cardExtent,
+    required this.spacing,
+    required this.leadingSpace,
+    required this.reverseCrossAxis,
+    required this.crossAxisExtent,
+  });
+
+  final int crossAxisCount;
+  final double cardExtent;
+  final double spacing;
+  final double leadingSpace;
+  final bool reverseCrossAxis;
+  final double crossAxisExtent;
+
+  double get stride => cardExtent + spacing;
+
+  @override
+  int getMinChildIndexForScrollOffset(double scrollOffset) =>
+      crossAxisCount * (scrollOffset ~/ stride);
+
+  @override
+  int getMaxChildIndexForScrollOffset(double scrollOffset) =>
+      math.max(0, crossAxisCount * (scrollOffset / stride).ceil() - 1);
+
+  @override
+  SliverGridGeometry getGeometryForChildIndex(int index) {
+    final row = index ~/ crossAxisCount;
+    final column = index % crossAxisCount;
+    final naturalOffset = leadingSpace + (column * stride);
+    return SliverGridGeometry(
+      scrollOffset: row * stride,
+      crossAxisOffset: reverseCrossAxis
+          ? crossAxisExtent - naturalOffset - cardExtent
+          : naturalOffset,
+      mainAxisExtent: cardExtent,
+      crossAxisExtent: cardExtent,
+    );
+  }
+
+  @override
+  double computeMaxScrollOffset(int childCount) {
+    if (childCount == 0) return 0;
+    final rowCount = ((childCount - 1) ~/ crossAxisCount) + 1;
+    return (rowCount * cardExtent) + ((rowCount - 1) * spacing);
+  }
+}
+
+class _SmoothWheelScrollController extends ScrollController {
+  _SmoothWheelScrollController({required this.enabled});
+
+  final bool enabled;
+
+  @override
+  ScrollPosition createScrollPosition(
+    ScrollPhysics physics,
+    ScrollContext context,
+    ScrollPosition? oldPosition,
+  ) => _SmoothWheelScrollPosition(
+    smoothWheelEnabled: enabled,
+    physics: physics,
+    context: context,
+    initialPixels: initialScrollOffset,
+    keepScrollOffset: keepScrollOffset,
+    oldPosition: oldPosition,
+    debugLabel: debugLabel,
+  );
+}
+
+class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
+  _SmoothWheelScrollPosition({
+    required this.smoothWheelEnabled,
+    required super.physics,
+    required super.context,
+    super.initialPixels,
+    super.keepScrollOffset,
+    super.oldPosition,
+    super.debugLabel,
+  });
+
+  final bool smoothWheelEnabled;
+  late final Ticker _wheelTicker = context.vsync.createTicker(_tickWheel);
+  static const double _wheelDecaySeconds = .075;
+  static const double _maximumWheelVelocity = 7200;
+  double _wheelVelocity = 0;
+  Duration? _lastWheelTick;
+  bool _wheelScrollActive = false;
+
+  @override
+  void pointerScroll(double delta) {
+    if (!smoothWheelEnabled) {
+      super.pointerScroll(delta);
+      return;
+    }
+    if (delta == 0) {
+      if (_wheelTicker.isActive) {
+        _finishWheelScroll();
+      } else {
+        goBallistic(0);
+      }
+      return;
+    }
+    final target = (pixels + delta)
+        .clamp(minScrollExtent, maxScrollExtent)
+        .toDouble();
+    if (target == pixels && _wheelVelocity.sign == delta.sign) {
+      if (_wheelTicker.isActive) {
+        _finishWheelScroll();
+      } else {
+        goBallistic(0);
+      }
+      return;
+    }
+    _wheelVelocity = (_wheelVelocity + (delta / _wheelDecaySeconds)).clamp(
+      -_maximumWheelVelocity,
+      _maximumWheelVelocity,
+    );
+    updateUserScrollDirection(
+      delta < 0 ? ScrollDirection.forward : ScrollDirection.reverse,
+    );
+    if (_wheelTicker.isActive) return;
+    goIdle();
+    isScrollingNotifier.value = true;
+    didStartScroll();
+    _wheelScrollActive = true;
+    _lastWheelTick = null;
+    _wheelTicker.start();
+  }
+
+  void _tickWheel(Duration elapsed) {
+    final previousTick = _lastWheelTick;
+    _lastWheelTick = elapsed;
+    if (previousTick == null) return;
+    final elapsedSeconds = (elapsed - previousTick).inMicroseconds / 1000000;
+    if (elapsedSeconds <= 0) return;
+    // A delayed desktop frame should extend the glide, not turn all of the
+    // missed time into one large, visible jump when scheduling resumes.
+    final seconds = math.min(elapsedSeconds, 1 / 30);
+    final decay = math.exp(-seconds / _wheelDecaySeconds);
+    final oldPixels = pixels;
+    final distance = _wheelVelocity * _wheelDecaySeconds * (1 - decay);
+    final next = (oldPixels + distance)
+        .clamp(minScrollExtent, maxScrollExtent)
+        .toDouble();
+    forcePixels(next);
+    didUpdateScrollPositionBy(pixels - oldPixels);
+    _wheelVelocity *= decay;
+    if (next == oldPixels || _wheelVelocity.abs() < 4) {
+      _finishWheelScroll();
+    }
+  }
+
+  void _finishWheelScroll() {
+    _wheelTicker.stop();
+    _lastWheelTick = null;
+    _wheelVelocity = 0;
+    if (_wheelScrollActive) {
+      _wheelScrollActive = false;
+      didEndScroll();
+    }
+    goBallistic(0);
+  }
+
+  @override
+  void dispose() {
+    _wheelTicker.dispose();
+    super.dispose();
+  }
+}
+
 class InventoryHome extends StatefulWidget {
-  const InventoryHome({super.key, this.database, this.persistedState});
+  const InventoryHome({
+    super.key,
+    this.database,
+    this.persistedState,
+    this.filamentColorsClient,
+    this.colorTheme = AppColorTheme.darkPurple,
+    this.brightnessMode = AppBrightnessMode.dark,
+    this.customThemeColor = const Color(0xff8e75ff),
+    this.onColorThemeChanged,
+    this.onBrightnessModeChanged,
+    this.onCustomThemeColorChanged,
+  });
   final LocalDatabase? database;
   final String? persistedState;
+  final FilamentColorsClient? filamentColorsClient;
+  final AppColorTheme colorTheme;
+  final AppBrightnessMode brightnessMode;
+  final Color customThemeColor;
+  final ValueChanged<AppColorTheme>? onColorThemeChanged;
+  final ValueChanged<AppBrightnessMode>? onBrightnessModeChanged;
+  final ValueChanged<Color>? onCustomThemeColorChanged;
   @override
   State<InventoryHome> createState() => _InventoryHomeState();
 }
 
 class _InventoryHomeState extends State<InventoryHome> {
+  late final FilamentColorsClient _filamentColorsClient;
+  late final bool _ownsFilamentColorsClient;
   late final List<InventoryItem> inventory;
   late final List<VendorRecord> vendors;
   late final List<BrandRecord> brands;
   late final List<SpoolTypeRecord> spoolTypes;
+  late final List<MaterialRecord> materials;
   late final List<CustomItemTypeRecord> customItemTypes;
+  late final Map<String, String> typeLabelOverrides;
+  late final Map<String, String> typeIconOverrides;
+  late final Map<String, bool> typeDepletionSettings;
+  late final Map<String, bool> typeStatusSettings;
+  late final Set<String> deletedTypeKeys;
   late final List<CatalogProduct> products;
   late final List<MachineTypeRecord> machineTypes;
   late final List<MachineRecord> machines;
   late final List<KitRecord> kits;
   late final List<BuildRecord> builds;
+  late final List<StockLocationRecord> locations;
+  late final List<ShoppingListEntry> shoppingList;
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
   late int historyLimit;
@@ -1420,26 +4881,65 @@ class _InventoryHomeState extends State<InventoryHome> {
   late bool moistureAlertChimeEnabled;
   late int animationDurationPercent;
   late int animationRecurrenceSeconds;
+  late bool photoCardsEnabled;
+  late CustomIconAnimationMode customIconAnimationMode;
   late final Set<String> _moistureAlertChimedCycles;
+  late final Set<String> _readInventoryAlertKeys;
   late String deviceName;
   late String deviceId;
   String? currentUserId;
   bool gridView = true;
+  bool hideZeroQuantityItems = false;
   bool archivedOnly = false;
   CatalogViewFilter? catalogFilter;
   String query = '';
   InventoryType? type;
+  String? customTypeFilterId;
+  String? itemColorFilter;
+  final TextEditingController inventorySearchController =
+      TextEditingController();
+  final FocusNode inventorySearchFocusNode = FocusNode(
+    debugLabel: 'Inventory search',
+  );
+  final Set<String> selectedInventoryIds = {};
+  final Set<String> selectedBuildIds = {};
+  final Set<String> selectedKitIds = {};
+  final Set<String> selectedMachineIds = {};
   InventorySort sort = InventorySort.type;
   static const _pageSizes = [12, 25, 100, 250, 1000];
+  static const _minimumCardSizePercent = 75.0;
+  static const _maximumCardSizePercent = 150.0;
+  final _pageSizeThumbShape = _GlassSliderThumbShape();
+  final _cardSizeThumbShape = _GlassSliderThumbShape();
+  final ValueNotifier<double> _pageSizeSliderValue = ValueNotifier(0);
+  final ValueNotifier<double> _cardSizeSliderValue = ValueNotifier(100);
+  Timer? _pageSizeCommitTimer;
+  Timer? _cardSizeCommitTimer;
   int pageSizeIndex = 0;
+  double cardSizePercent = 100;
   int currentPage = 0;
-  int pageMotionDirection = 1;
-  int pageAnimationKey = 0;
-  final ScrollController inventoryScrollController = ScrollController();
+  final ScrollController inventoryScrollController =
+      _SmoothWheelScrollController(
+        enabled: Platform.isLinux || Platform.isWindows,
+      );
+  final ValueNotifier<bool> _inventoryIsScrolling = ValueNotifier(false);
+  Timer? _inventoryOverlayRestore;
+  final ExpansibleController typeFilterExpansionController =
+      ExpansibleController();
+  final ExpansibleController colorFilterExpansionController =
+      ExpansibleController();
+  bool typePanelExpanded = false;
+  bool colorPanelExpanded = false;
   Timer? _syncDebounce;
+  Timer? _deferredAutoSync;
   Timer? _syncPoll;
+  final Map<String, Timer> _quantityCommitTimers = {};
+  final Map<String, InventoryItem> _quantityCommitOriginals = {};
+  int _localStateRevision = 0;
+  int _lastSyncedLocalRevision = 0;
   Timer? _clockTick;
   bool _syncing = false;
+  bool _autoSyncPausedForAuthentication = false;
   String? _lastSyncConflict;
   bool _applyingCloudState = false;
   final List<Map<String, Object?>> _pendingAuditEvents = [];
@@ -1449,12 +4949,34 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Map<String, int> _lowStockAnimationVersions = {};
   final Map<String, int> _moistureAnimationVersions = {};
   final Set<String> _moistureAnimationCycles = {};
+  static final RegExp _searchNormalizationPattern = RegExp(r'[^a-z0-9]');
+  int _searchDataRevision = 0;
+  final Map<String, (InventoryItem, String)> _inventorySearchTextCache = {};
+  final Map<Object, String> _catalogSearchTextCache = Map.identity();
+  Object? _visibleItemsCacheKey;
+  List<InventoryItem>? _visibleItemsCache;
+  Object? _visibleCatalogRecordsCacheKey;
+  List<Object>? _visibleCatalogRecordsCache;
+  Object? _visibleEverythingCatalogRecordsCacheKey;
+  List<Object>? _visibleEverythingCatalogRecordsCache;
+  Object? _availableItemColorFiltersCacheKey;
+  List<({String value, String label, String hex})>?
+  _availableItemColorFiltersCache;
+  double itemDetailsPanelWidth = 520;
   static const _audioChannel = MethodChannel('inventorinator/audio');
   static const _deviceChannel = MethodChannel('inventorinator/device');
 
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
+    _ownsFilamentColorsClient = widget.filamentColorsClient == null;
+    _filamentColorsClient =
+        widget.filamentColorsClient ??
+        FilamentColorsClient(
+          cacheRead: widget.database?.loadApiCache,
+          cacheWrite: widget.database?.saveApiCache,
+        );
     final syncConfigSource = widget.database?.loadSyncConfig();
     if (syncConfigSource != null) {
       try {
@@ -1463,7 +4985,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
         if (config.syncMode == 'supabase') {
           currentRole = WorkspaceRole.fromServer(config.workspaceRole);
-          workspaceOwner = config.workspaceRole == 'owner';
+          final hasOwnerRecovery =
+              config.workspaceId != null &&
+              widget.database?.loadWorkspaceRecoveryKey(config.workspaceId!) !=
+                  null;
+          workspaceOwner = config.workspaceRole == 'owner' || hasOwnerRecovery;
+          if (hasOwnerRecovery) currentRole = WorkspaceRole.admin;
           currentUserId = config.userId;
         }
       } catch (_) {
@@ -1471,21 +4998,53 @@ class _InventoryHomeState extends State<InventoryHome> {
       }
     }
     final restored = decodeWorkshopState(widget.persistedState);
-    inventory = restored?.inventory ?? [...sampleInventory];
+    final firstLaunch =
+        widget.database != null && widget.persistedState == null;
+    inventory =
+        restored?.inventory ??
+        (firstLaunch ? <InventoryItem>[] : [...sampleInventory]);
     final initializedDryingTimers = _initializeDryingTimers();
     vendors = restored?.vendors ?? [...starterVendors];
     brands = restored?.brands ?? [...starterBrands];
     spoolTypes = restored?.spoolTypes ?? [...starterSpoolTypes];
+    materials = restored?.materials ?? [...starterMaterials];
+    var initializedMaterials = false;
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      if (item.materialName.isNotEmpty) continue;
+      final inferred = _inferStarterMaterial(
+        item.type,
+        item.name,
+        item.compatibility,
+      );
+      if (inferred != null) {
+        inventory[index] = item.copyWith(
+          materialId: inferred.id,
+          materialName: inferred.name,
+        );
+        initializedMaterials = true;
+      }
+    }
     customItemTypes = restored?.customItemTypes ?? [];
+    typeLabelOverrides = {...?restored?.typeLabelOverrides};
+    typeIconOverrides = {...?restored?.typeIconOverrides};
+    typeDepletionSettings = {...?restored?.typeDepletionSettings};
+    typeStatusSettings = {...?restored?.typeStatusSettings};
+    deletedTypeKeys = {...?restored?.deletedTypeKeys};
     products = restored?.products ?? [...starterProducts];
     machineTypes = restored?.machineTypes ?? [];
     machines = restored?.machines ?? [];
     kits = restored?.kits ?? [];
     builds = restored?.builds ?? [];
+    locations = restored?.locations ?? [];
+    shoppingList = restored?.shoppingList ?? [];
+    final initializedLocations = _initializeLegacyLocations();
     auditLog = restored?.auditLog ?? [];
     additionHistory =
         restored?.additionHistory ??
-        inventory.map(AdditionHistoryEntry.fromItem).toList();
+        (firstLaunch
+            ? <AdditionHistoryEntry>[]
+            : inventory.map(AdditionHistoryEntry.fromItem).toList());
     historyLimit = restored?.historyLimit ?? 100;
     final initializedKitSections = _initializeKitSections();
     syncChimeEnabled =
@@ -1506,6 +5065,18 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: true,
         ) ??
         true;
+    cardSizePercent =
+        (double.tryParse(
+                  widget.database?.loadStringPreference(
+                        'inventory_card_size_percent',
+                        fallback: '100',
+                      ) ??
+                      '100',
+                ) ??
+                100)
+            .clamp(_minimumCardSizePercent, _maximumCardSizePercent);
+    _pageSizeSliderValue.value = pageSizeIndex.toDouble();
+    _cardSizeSliderValue.value = cardSizePercent;
     animationDurationPercent =
         (int.tryParse(
                   widget.database?.loadStringPreference(
@@ -1529,6 +5100,24 @@ class _InventoryHomeState extends State<InventoryHome> {
         const {0, 3, 5, 10, 30}.contains(savedRecurrenceSeconds)
         ? savedRecurrenceSeconds
         : 5;
+    photoCardsEnabled =
+        widget.database?.loadBoolPreference(
+          'photo_cards_enabled',
+          fallback: false,
+        ) ??
+        false;
+    hideZeroQuantityItems =
+        widget.database?.loadBoolPreference(
+          'hide_zero_quantity_items',
+          fallback: false,
+        ) ??
+        false;
+    customIconAnimationMode = _customIconAnimationModeFromName(
+      widget.database?.loadStringPreference(
+        'custom_icon_animation_mode',
+        fallback: CustomIconAnimationMode.interaction.name,
+      ),
+    );
     try {
       _moistureAlertChimedCycles = {
         ...((jsonDecode(
@@ -1542,11 +5131,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     } catch (_) {
       _moistureAlertChimedCycles = <String>{};
     }
+    try {
+      _readInventoryAlertKeys = {
+        ...((jsonDecode(
+          widget.database?.loadStringPreference(
+                'read_inventory_alert_keys',
+                fallback: '[]',
+              ) ??
+              '[]',
+        ) as List).cast<String>()),
+      };
+    } catch (_) {
+      _readInventoryAlertKeys = <String>{};
+    }
+    _reconcileReadInventoryAlerts();
     final hostName = Platform.localHostname.trim();
-    final defaultDeviceName = hostName.isNotEmpty && hostName != 'localhost'
-        ? hostName
-        : Platform.isAndroid
+    final defaultDeviceName = Platform.isAndroid
         ? 'Android device'
+        : hostName.isNotEmpty && hostName != 'localhost'
+        ? hostName
         : 'This device';
     deviceName =
         widget.database?.loadStringPreference(
@@ -1560,11 +5163,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       deviceId = 'DEVICE-${DateTime.now().microsecondsSinceEpoch}';
       widget.database?.saveStringPreference('device_id', deviceId);
     }
-    if (const {
-      'Unnamed device',
-      'Android device',
-      'This device',
-    }.contains(deviceName)) {
+    if (Platform.isAndroid
+        ? isGenericAndroidDeviceName(deviceName)
+        : const {'Unnamed device', 'This device'}.contains(deviceName)) {
       deviceName = defaultDeviceName;
     }
     widget.database?.saveStringPreference('device_name', deviceName);
@@ -1578,9 +5179,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       const Duration(seconds: 10),
       (_) => _advanceDryingTimers(),
     );
-    if (initializedDryingTimers || initializedKitSections) _persist();
-    if (widget.database != null && widget.persistedState == null) _persist();
-    if (_needsSyncOnboarding) {
+    if (initializedDryingTimers ||
+        initializedKitSections ||
+        initializedMaterials ||
+        initializedLocations) {
+      _persist();
+    }
+    if (firstLaunch) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _completeFirstLaunch(),
+      );
+    } else if (_needsSyncOnboarding) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _openSyncOnboarding(),
       );
@@ -1589,34 +5198,136 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
+  Future<void> _completeFirstLaunch() async {
+    final loadDemoItems = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Start your inventory'),
+        content: const SizedBox(
+          width: 500,
+          child: Text(
+            'Begin with an empty inventory, or load a few demo items to explore Inventorinator. Demo items can be deleted later.',
+          ),
+        ),
+        actions: [
+          OutlinedButton(
+            key: const Key('load-demo-inventory'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Load demo items'),
+          ),
+          FilledButton(
+            key: const Key('start-empty-inventory'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Start empty'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (loadDemoItems == true) {
+      setState(() {
+        inventory.addAll(sampleInventory);
+        _initializeDryingTimers();
+        additionHistory.addAll(
+          inventory.map(
+            (item) => AdditionHistoryEntry.fromItem(
+              item,
+              deviceName: 'Demo inventory',
+            ),
+          ),
+        );
+      });
+    }
+    _persist();
+    if (_needsSyncOnboarding) {
+      await _openSyncOnboarding();
+    } else {
+      _startAutoSync();
+    }
+  }
+
   Future<void> _loadAndroidDeviceName() async {
-    if (!const {
-      'Unnamed device',
-      'Android device',
-      'This device',
-    }.contains(deviceName)) {
+    if (isGenericAndroidDeviceName(deviceName)) {
+      try {
+        final resolved = (await _deviceChannel.invokeMethod<String>(
+          'getDeviceName',
+        ))?.trim();
+        if (resolved != null && resolved.isNotEmpty && mounted) {
+          setState(() => deviceName = resolved);
+          widget.database?.saveStringPreference('device_name', resolved);
+        }
+      } catch (error) {
+        debugPrint('Could not read Android device name: $error');
+      }
+    }
+    if (!mounted || widget.database == null) return;
+    final confirmed = widget.database!.loadBoolPreference(
+      'device_name_confirmed',
+      fallback: false,
+    );
+    if (confirmed) return;
+    final savedSync = widget.database!.loadSyncConfig();
+    if (savedSync == null) return;
+    try {
+      final config = SupabaseConfig.fromJson(
+        jsonDecode(savedSync) as Map<String, dynamic>,
+      );
+      if (!config.hasSession || config.workspaceId == null) return;
+    } catch (_) {
       return;
     }
-    try {
-      final resolved = (await _deviceChannel.invokeMethod<String>(
-        'getDeviceName',
-      ))?.trim();
-      if (resolved == null || resolved.isEmpty || !mounted) return;
-      setState(() => deviceName = resolved);
-      widget.database?.saveStringPreference('device_name', resolved);
-      unawaited(_syncAutomatically());
-    } catch (error) {
-      debugPrint('Could not read Android device name: $error');
-    }
+    if (await _renameThisDevice()) unawaited(_syncAutomatically());
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleInventoryShortcut);
     _syncDebounce?.cancel();
+    _deferredAutoSync?.cancel();
     _syncPoll?.cancel();
     _clockTick?.cancel();
+    _pageSizeCommitTimer?.cancel();
+    _cardSizeCommitTimer?.cancel();
+    pageSizeIndex = _pageSizeSliderValue.value.round();
+    cardSizePercent = _cardSizeSliderValue.value;
+    widget.database?.saveStringPreference(
+      'inventory_card_size_percent',
+      cardSizePercent.toStringAsFixed(1),
+    );
+    _pageSizeSliderValue.dispose();
+    _cardSizeSliderValue.dispose();
+    for (final timer in _quantityCommitTimers.values) {
+      timer.cancel();
+    }
+    if (_quantityCommitOriginals.isNotEmpty) {
+      for (final entry in _quantityCommitOriginals.entries) {
+        _recordPendingQuantityAudit(entry.key, entry.value);
+      }
+      widget.database?.saveState(_currentStateJson());
+    }
+    _inventoryOverlayRestore?.cancel();
+    _inventoryIsScrolling.dispose();
+    if (_ownsFilamentColorsClient) _filamentColorsClient.close();
+    inventorySearchController.dispose();
+    inventorySearchFocusNode.dispose();
     inventoryScrollController.dispose();
     super.dispose();
+  }
+
+  bool _handleInventoryShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyF ||
+        !HardwareKeyboard.instance.isControlPressed ||
+        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return false;
+    }
+    inventorySearchFocusNode.requestFocus();
+    inventorySearchController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: inventorySearchController.text.length,
+    );
+    return true;
   }
 
   bool _initializeDryingTimers() {
@@ -1740,6 +5451,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       id: kit.id,
       name: kit.name,
       bom: segmented,
+      imageBytes: kit.imageBytes,
+      sourceUrls: kit.sourceUrls,
       sections: sectionOrder
           .where((section) => segmented.any((line) => line.section == section))
           .toList(),
@@ -1814,25 +5527,27 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   void _advanceDryingTimers() {
     if (!mounted) return;
-    var completed = false;
     final now = DateTime.now();
-    setState(() {
-      for (var index = 0; index < inventory.length; index++) {
-        final item = inventory[index];
-        if (item.filamentStatus != FilamentStatus.drying ||
-            _dryingTimeRemaining(item, now: now) > Duration.zero) {
-          continue;
-        }
-        inventory[index] = item.copyWith(
-          filamentStatus: FilamentStatus.ready,
-          dryingRemaining: 0,
-          lastDriedAt: now,
-          deployed: false,
-        );
-        completed = true;
+    final completedItems = <int, InventoryItem>{};
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      if (item.filamentStatus != FilamentStatus.drying ||
+          _dryingTimeRemaining(item, now: now) > Duration.zero) {
+        continue;
       }
-    });
-    if (completed) {
+      completedItems[index] = item.copyWith(
+        filamentStatus: FilamentStatus.ready,
+        dryingRemaining: 0,
+        lastDriedAt: now,
+        deployed: false,
+      );
+    }
+    if (completedItems.isNotEmpty) {
+      setState(() {
+        for (final entry in completedItems.entries) {
+          inventory[entry.key] = entry.value;
+        }
+      });
       _persist();
       unawaited(_playDryingCompleteChime());
     }
@@ -1894,6 +5609,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   void _startAutoSync() {
     _syncPoll?.cancel();
+    _autoSyncPausedForAuthentication = false;
     _syncAutomatically();
     _syncPoll = Timer.periodic(
       const Duration(seconds: 5),
@@ -1913,7 +5629,22 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   String _normalized(String value) =>
-      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+      value.toLowerCase().replaceAll(_searchNormalizationPattern, '');
+
+  void _invalidateSearchCaches() {
+    _searchDataRevision++;
+    _inventorySearchTextCache.clear();
+    _catalogSearchTextCache.clear();
+    _visibleItemsCacheKey = null;
+    _visibleItemsCache = null;
+    _visibleCatalogRecordsCacheKey = null;
+    _visibleCatalogRecordsCache = null;
+    _visibleEverythingCatalogRecordsCacheKey = null;
+    _visibleEverythingCatalogRecordsCache = null;
+    _availableItemColorFiltersCacheKey = null;
+    _availableItemColorFiltersCache = null;
+  }
+
   String _machineTypePath(String typeId, [Set<String>? visited]) {
     final seen = visited ?? <String>{};
     if (!seen.add(typeId)) return '';
@@ -1933,38 +5664,51 @@ class _InventoryHomeState extends State<InventoryHome> {
   List<Object> get visibleCatalogRecords {
     final selected = catalogFilter;
     if (selected == null) return const [];
+    final cacheKey = (
+      _searchDataRevision,
+      selected,
+      query,
+      currentRole,
+      currentUserId,
+    );
+    if (_visibleCatalogRecordsCacheKey == cacheKey) {
+      return _visibleCatalogRecordsCache!;
+    }
     final needle = _normalized(query);
+    late final List<Object> records;
     if (selected == CatalogViewFilter.kits) {
       final result = kits
           .where((kit) {
-            final productNames = kit.bom
-                .map(
-                  (entry) => products
-                      .where((product) => product.id == entry.productId)
-                      .firstOrNull
-                      ?.name,
-                )
-                .whereType<String>()
-                .join(' ');
             return needle.isEmpty ||
-                _normalized('${kit.name} $productNames').contains(needle);
+                _catalogSearchTextCache
+                    .putIfAbsent(
+                      kit,
+                      () => _normalized(
+                        '${kit.name} ${kit.bom.map(_kitLineName).join(' ')}',
+                      ),
+                    )
+                    .contains(needle);
           })
           .cast<Object>()
           .toList();
       result.sort(
         (a, b) => (a as KitRecord).name.compareTo((b as KitRecord).name),
       );
-      return result;
-    }
-    if (selected == CatalogViewFilter.builds) {
+      records = result;
+    } else if (selected == CatalogViewFilter.builds) {
       final result = builds
           .where(
             (build) =>
                 _canViewBuild(build) &&
                 (needle.isEmpty ||
-                    _normalized(
-                      '${build.name} ${build.lines.map((line) => '${line.name} ${line.section}').join(' ')}',
-                    ).contains(needle)),
+                    _catalogSearchTextCache
+                        .putIfAbsent(
+                          build,
+                          () => _normalized(
+                            '${build.name} ${build.lines.map((line) => '${line.name} ${line.section}').join(' ')}',
+                          ),
+                        )
+                        .contains(needle)),
           )
           .cast<Object>()
           .toList();
@@ -1973,29 +5717,91 @@ class _InventoryHomeState extends State<InventoryHome> {
           (a as BuildRecord).createdAt,
         ),
       );
-      return result;
+      records = result;
+    } else {
+      final result = machines
+          .where((machine) {
+            final printer = _isPrinter(machine);
+            if (selected == CatalogViewFilter.printers && !printer) {
+              return false;
+            }
+            if (selected == CatalogViewFilter.tools && printer) return false;
+            if (needle.isEmpty) return true;
+            return _catalogSearchTextCache
+                .putIfAbsent(machine, () {
+                  final kitNames = kits
+                      .where((kit) => machine.kitIds.contains(kit.id))
+                      .map((kit) => kit.name)
+                      .join(' ');
+                  return _normalized(
+                    '${machine.name} ${machine.model} ${machine.address} '
+                    '${_machineTypePath(machine.typeId)} $kitNames',
+                  );
+                })
+                .contains(needle);
+          })
+          .cast<Object>()
+          .toList();
+      result.sort(
+        (a, b) =>
+            (a as MachineRecord).name.compareTo((b as MachineRecord).name),
+      );
+      records = result;
     }
-    final result = machines
-        .where((machine) {
-          final printer = _isPrinter(machine);
-          if (selected == CatalogViewFilter.printers && !printer) return false;
-          if (selected == CatalogViewFilter.tools && printer) return false;
-          final kitNames = kits
-              .where((kit) => machine.kitIds.contains(kit.id))
-              .map((kit) => kit.name)
-              .join(' ');
-          final searchable = _normalized(
-            '${machine.name} ${machine.model} ${machine.address} '
-            '${_machineTypePath(machine.typeId)} $kitNames',
-          );
-          return needle.isEmpty || searchable.contains(needle);
-        })
-        .cast<Object>()
-        .toList();
-    result.sort(
-      (a, b) => (a as MachineRecord).name.compareTo((b as MachineRecord).name),
+    _visibleCatalogRecordsCacheKey = cacheKey;
+    return _visibleCatalogRecordsCache = records;
+  }
+
+  List<Object> get visibleEverythingCatalogRecords {
+    final cacheKey = (_searchDataRevision, query, currentRole, currentUserId);
+    if (_visibleEverythingCatalogRecordsCacheKey == cacheKey) {
+      return _visibleEverythingCatalogRecordsCache!;
+    }
+    final needle = _normalized(query);
+    final result = <Object>[];
+    result.addAll(
+      kits.where((kit) {
+        return needle.isEmpty ||
+            _catalogSearchTextCache
+                .putIfAbsent(
+                  kit,
+                  () => _normalized(
+                    '${kit.name} ${kit.bom.map(_kitLineName).join(' ')}',
+                  ),
+                )
+                .contains(needle);
+      }),
     );
-    return result;
+    result.addAll(
+      builds.where(
+        (build) =>
+            _canViewBuild(build) &&
+            (needle.isEmpty ||
+                _catalogSearchTextCache
+                    .putIfAbsent(
+                      build,
+                      () => _normalized(
+                        '${build.name} ${build.lines.map((line) => '${line.name} ${line.section}').join(' ')}',
+                      ),
+                    )
+                    .contains(needle)),
+      ),
+    );
+    result.addAll(
+      machines.where((machine) {
+        return needle.isEmpty ||
+            _catalogSearchTextCache
+                .putIfAbsent(
+                  machine,
+                  () => _normalized(
+                    '${machine.name} ${machine.model} ${machine.address} ${_machineTypePath(machine.typeId)}',
+                  ),
+                )
+                .contains(needle);
+      }),
+    );
+    _visibleEverythingCatalogRecordsCacheKey = cacheKey;
+    return _visibleEverythingCatalogRecordsCache = result;
   }
 
   String _spoolSizeLabel(InventoryItem item) =>
@@ -2007,23 +5813,172 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ?.label ??
             '1 kg';
 
+  String _inventoryTypeDisplayLabel(InventoryType value) =>
+      typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
+      _typeLabel(value);
+
+  String _catalogViewDisplayLabel(CatalogViewFilter value) =>
+      typeLabelOverrides[_catalogViewDefinitionKey(value)] ??
+      _defaultCatalogViewLabel(value);
+
+  IconData _inventoryTypeIcon(InventoryType value) => _iconFromKey(
+    typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+    _typeIcon(value),
+  );
+
+  IconData _catalogViewIcon(CatalogViewFilter value) => _iconFromKey(
+    typeIconOverrides[_catalogViewDefinitionKey(value)],
+    switch (value) {
+      CatalogViewFilter.kits => Icons.inventory_2_outlined,
+      CatalogViewFilter.builds => Icons.construction_rounded,
+      CatalogViewFilter.machines => Icons.precision_manufacturing_outlined,
+      CatalogViewFilter.printers => Icons.print_outlined,
+      CatalogViewFilter.tools => Icons.handyman_outlined,
+    },
+  );
+
+  IconData _itemTypeIcon(InventoryItem item) {
+    if (item.type != InventoryType.custom) return _inventoryTypeIcon(item.type);
+    final customType = customItemTypes
+        .where((candidate) => candidate.id == item.customTypeId)
+        .firstOrNull;
+    return _iconFromKey(customType?.iconKey, Icons.tune_rounded);
+  }
+
+  String? _itemTypeIconKey(InventoryItem item) {
+    if (item.type != InventoryType.custom) {
+      return typeIconOverrides[_inventoryTypeDefinitionKey(item.type)];
+    }
+    return customItemTypes
+        .where((candidate) => candidate.id == item.customTypeId)
+        .firstOrNull
+        ?.iconKey;
+  }
+
+  bool _itemCanMarkDepleted(InventoryItem item) {
+    if (item.type == InventoryType.custom) {
+      return customItemTypes
+              .where((candidate) => candidate.id == item.customTypeId)
+              .firstOrNull
+              ?.canMarkDepleted ??
+          false;
+    }
+    return _typeCanMarkDepleted(
+      _inventoryTypeDefinitionKey(item.type),
+      typeDepletionSettings,
+    );
+  }
+
+  bool _itemShowsStatus(InventoryItem item) {
+    if (item.type == InventoryType.custom) {
+      return customItemTypes
+              .where((candidate) => candidate.id == item.customTypeId)
+              .firstOrNull
+              ?.showsStatus ??
+          false;
+    }
+    return _typeShowsStatus(
+      _inventoryTypeDefinitionKey(item.type),
+      typeStatusSettings,
+    );
+  }
+
+  String _itemTypeDisplayLabel(InventoryItem item) =>
+      item.type == InventoryType.custom && item.customTypeName.isNotEmpty
+      ? item.customTypeName
+      : _inventoryTypeDisplayLabel(item.type);
+
+  List<({String value, String label, String hex})>
+  get availableItemColorFilters {
+    if (catalogFilter != null) return const [];
+    final cacheKey = (
+      _searchDataRevision,
+      archivedOnly,
+      type,
+      customTypeFilterId,
+    );
+    if (_availableItemColorFiltersCacheKey == cacheKey) {
+      return _availableItemColorFiltersCache!;
+    }
+    final colors = <String, ({String value, String label, String hex})>{};
+    for (final item in inventory.where(
+      (item) =>
+          item.archived == archivedOnly &&
+          (type == null || item.type == type) &&
+          (customTypeFilterId == null ||
+              item.customTypeId == customTypeFilterId) &&
+          item.itemColorName.isNotEmpty,
+    )) {
+      final value = item.itemColorName;
+      colors.putIfAbsent(
+        value,
+        () => (
+          value: value,
+          label: item.itemColorLabel.trim().isNotEmpty
+              ? item.itemColorLabel.trim()
+              : value.startsWith('#')
+              ? 'Unnamed color'
+              : value,
+          hex: _itemColorHex(value),
+        ),
+      );
+    }
+    final result = colors.values.toList()
+      ..sort((a, b) {
+        final byLabel = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+        return byLabel != 0 ? byLabel : a.hex.compareTo(b.hex);
+      });
+    _availableItemColorFiltersCacheKey = cacheKey;
+    return _availableItemColorFiltersCache = result;
+  }
+
   List<InventoryItem> get visibleItems {
+    final cacheKey = (
+      _searchDataRevision,
+      query,
+      archivedOnly,
+      hideZeroQuantityItems,
+      type,
+      customTypeFilterId,
+      itemColorFilter,
+      sort,
+    );
+    if (_visibleItemsCacheKey == cacheKey) return _visibleItemsCache!;
     final needle = _normalized(query);
     final now = DateTime.now();
     final result = inventory.where((item) {
-      final searchable = _normalized(
-        '${item.name} ${item.typeLabel} ${item.compatibility.join(' ')} ${item.barcode} '
-        '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
-        '${_spoolSizeLabel(item)} ${item.amsCompatible ? 'AMS compatible' : ''} '
-        '${machines.where((machine) => item.compatibleMachineIds.contains(machine.id)).map((machine) => '${machine.name} ${machine.model} ${_machineTypePath(machine.typeId)}').join(' ')}',
-      );
-      return item.archived == archivedOnly &&
-          (type == null || item.type == type) &&
-          (needle.isEmpty || searchable.contains(needle));
+      if (item.archived != archivedOnly ||
+          hideZeroQuantityItems && item.quantity <= 0 ||
+          type != null && item.type != type ||
+          customTypeFilterId != null &&
+              item.customTypeId != customTypeFilterId ||
+          itemColorFilter != null && item.itemColorName != itemColorFilter) {
+        return false;
+      }
+      if (needle.isEmpty) return true;
+      final cached = _inventorySearchTextCache[item.id];
+      final searchable = cached != null && identical(cached.$1, item)
+          ? cached.$2
+          : _normalized(
+              '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
+              '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
+              '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
+              '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
+              '${item.itemColorLabel} ${item.itemColorName} '
+              '${_spoolSizeLabel(item)} ${item.amsCompatible ? 'AMS compatible' : ''} '
+              '${item.refill ? 'refill reload master spool ${item.masterSpool}' : 'factory spool'} '
+              '${item.spoolOuterDiameterMm ?? ''} ${item.spoolWidthMm ?? ''} ${item.spoolHoleDiameterMm ?? ''} '
+              '${machines.where((machine) => item.compatibleMachineIds.contains(machine.id)).map((machine) => '${machine.name} ${machine.model} ${_machineTypePath(machine.typeId)}').join(' ')}',
+            );
+      if (cached == null || !identical(cached.$1, item)) {
+        _inventorySearchTextCache[item.id] = (item, searchable);
+      }
+      return searchable.contains(needle);
     }).toList();
     result.sort(
       (a, b) => switch (sort) {
         InventorySort.type => a.typeLabel.compareTo(b.typeLabel),
+        InventorySort.quantity => b.quantity.compareTo(a.quantity),
         InventorySort.age => a.added.compareTo(b.added),
         InventorySort.cost => b.cost.compareTo(a.cost),
         InventorySort.dryingTime => (b.dryingMinutes ?? -1).compareTo(
@@ -2036,192 +5991,881 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       },
     );
-    return result;
+    _visibleItemsCacheKey = cacheKey;
+    return _visibleItemsCache = result;
   }
 
   @override
   Widget build(BuildContext context) {
-    final allItems = visibleItems;
-    final allCatalogRecords = visibleCatalogRecords;
     final showingCatalog = catalogFilter != null;
-    final resultCount = showingCatalog
-        ? allCatalogRecords.length
-        : allItems.length;
+    final allItems = showingCatalog ? const <InventoryItem>[] : visibleItems;
+    final allCatalogRecords = showingCatalog
+        ? visibleCatalogRecords
+        : const <Object>[];
+    final showingEverything =
+        !showingCatalog &&
+        !archivedOnly &&
+        type == null &&
+        customTypeFilterId == null &&
+        itemColorFilter == null;
+    final allRecords = showingCatalog
+        ? allCatalogRecords
+        : showingEverything
+        ? <Object>[...visibleEverythingCatalogRecords, ...allItems]
+        : allItems.cast<Object>();
+    final resultCount = allRecords.length;
     final pageSize = _pageSizes[pageSizeIndex];
     final pageCount = resultCount == 0 ? 1 : (resultCount / pageSize).ceil();
     final page = currentPage.clamp(0, pageCount - 1);
     final start = page * pageSize;
-    final items = allItems.skip(start).take(pageSize).toList();
-    final catalogRecords = allCatalogRecords
-        .skip(start)
-        .take(pageSize)
-        .toList();
-    return Scaffold(
-      body: SafeArea(
-        child: CustomScrollView(
-          controller: inventoryScrollController,
-          slivers: [
-            SliverToBoxAdapter(child: _header()),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
-              sliver: resultCount == 0
-                  ? const SliverFillRemaining(
-                      hasScrollBody: false,
-                      child: Center(
-                        child: Text('Nothing matches those filters.'),
-                      ),
-                    )
-                  : showingCatalog
-                  ? gridView
-                        ? SliverLayoutBuilder(
-                            builder: (context, constraints) {
-                              final count = constraints.crossAxisExtent >= 1050
-                                  ? 4
-                                  : constraints.crossAxisExtent >= 720
-                                  ? 3
-                                  : constraints.crossAxisExtent >= 470
-                                  ? 2
-                                  : 1;
-                              return SliverGrid.builder(
-                                itemCount: catalogRecords.length,
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: count,
-                                      mainAxisSpacing: 14,
-                                      crossAxisSpacing: 14,
-                                      mainAxisExtent: 220,
+    final records = allRecords.skip(start).take(pageSize).toList();
+    return _CustomIconAnimationScope(
+      mode: customIconAnimationMode,
+      child: TickerMode(
+        enabled: true,
+        child: Scaffold(
+          extendBody: true,
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: SafeArea(
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _handleInventoryScrollNotification,
+                    child: CustomScrollView(
+                      key: const Key('inventory-scroll-view'),
+                      controller: inventoryScrollController,
+                      scrollCacheExtent:
+                          Platform.isAndroid ||
+                              Platform.isLinux ||
+                              Platform.isWindows
+                          ? const ScrollCacheExtent.viewport(.75)
+                          : null,
+                      slivers: [
+                        SliverToBoxAdapter(child: _titleHeader()),
+                        SliverPersistentHeader(
+                          pinned: true,
+                          delegate: _PinnedActionBarDelegate(
+                            height: 80,
+                            child: _floatingHeaderActionBar(),
+                          ),
+                        ),
+                        SliverToBoxAdapter(child: _header()),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
+                          sliver: resultCount == 0
+                              ? const SliverFillRemaining(
+                                  hasScrollBody: false,
+                                  child: Center(
+                                    child: Text(
+                                      'Nothing matches those filters.',
                                     ),
-                                itemBuilder: (_, index) => PageItemEntrance(
-                                  pageKey: pageAnimationKey,
-                                  index: index,
-                                  direction: pageMotionDirection,
-                                  child: _catalogRecordCard(
-                                    catalogRecords[index],
                                   ),
+                                )
+                              : gridView
+                              ? ValueListenableBuilder<double>(
+                                  valueListenable: _cardSizeSliderValue,
+                                  builder: (context, liveCardSizePercent, _) =>
+                                      SliverLayoutBuilder(
+                                        builder: (context, constraints) {
+                                          const spacing = 14.0;
+                                          return SliverGrid.builder(
+                                            itemCount: records.length,
+                                            gridDelegate:
+                                                _CenteredSquareGridDelegate(
+                                                  cardExtent:
+                                                      274.0 *
+                                                      (liveCardSizePercent /
+                                                          100),
+                                                  spacing: spacing,
+                                                ),
+                                            itemBuilder: (_, index) =>
+                                                _recordWidget(records[index]),
+                                          );
+                                        },
+                                      ),
+                                )
+                              : SliverList.separated(
+                                  itemCount: records.length,
+                                  separatorBuilder: (_, _) =>
+                                      const SizedBox(height: 10),
+                                  itemBuilder: (_, index) =>
+                                      _recordWidget(records[index], list: true),
                                 ),
-                              );
-                            },
-                          )
-                        : SliverList.separated(
-                            itemCount: catalogRecords.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (_, index) => PageItemEntrance(
-                              pageKey: pageAnimationKey,
-                              index: index,
-                              direction: pageMotionDirection,
-                              child: _catalogRecordCard(
-                                catalogRecords[index],
-                                list: true,
+                        ),
+                        if (resultCount > 0)
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                8,
+                                20,
+                                110,
                               ),
-                            ),
-                          )
-                  : gridView
-                  ? SliverLayoutBuilder(
-                      builder: (context, constraints) {
-                        final count = constraints.crossAxisExtent >= 1050
-                            ? 4
-                            : constraints.crossAxisExtent >= 720
-                            ? 3
-                            : constraints.crossAxisExtent >= 470
-                            ? 2
-                            : 1;
-                        return SliverGrid.builder(
-                          itemCount: items.length,
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: count,
-                                mainAxisSpacing: 14,
-                                crossAxisSpacing: 14,
-                                mainAxisExtent: 252,
+                              child: _pageNavigation(
+                                page,
+                                pageCount,
+                                resultCount,
                               ),
-                          itemBuilder: (_, index) => PageItemEntrance(
-                            pageKey: pageAnimationKey,
-                            index: index,
-                            direction: pageMotionDirection,
-                            child: InventoryCard(
-                              item: items[index],
-                              spoolSizeLabel: _spoolSizeLabel(items[index]),
-                              quantitySyncVersion:
-                                  _remoteQuantityAnimationVersions[items[index]
-                                      .id] ??
-                                  0,
-                              lowStockAnimationVersion:
-                                  _lowStockAnimationVersions[items[index].id] ??
-                                  0,
-                              moistureAnimationVersion:
-                                  _moistureAnimationVersions[items[index].id] ??
-                                  0,
-                              animationDurationPercent:
-                                  animationDurationPercent,
-                              animationRecurrenceSeconds:
-                                  animationRecurrenceSeconds,
-                              canEdit: currentRole.canEditInventory,
-                              canCreate: currentRole.canCreateInventory,
-                              canArchive: currentRole.canArchiveInventory,
-                              canDelete: currentRole.canHardDeleteItems,
-                              onOpen: () => _openDetails(items[index]),
-                              onAction: (action) =>
-                                  _handleAction(items[index], action),
                             ),
                           ),
-                        );
-                      },
-                    )
-                  : SliverList.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (_, index) => PageItemEntrance(
-                        pageKey: pageAnimationKey,
-                        index: index,
-                        direction: pageMotionDirection,
-                        child: InventoryRow(
-                          item: items[index],
-                          spoolSizeLabel: _spoolSizeLabel(items[index]),
-                          quantitySyncVersion:
-                              _remoteQuantityAnimationVersions[items[index]
-                                  .id] ??
-                              0,
-                          lowStockAnimationVersion:
-                              _lowStockAnimationVersions[items[index].id] ?? 0,
-                          moistureAnimationVersion:
-                              _moistureAnimationVersions[items[index].id] ?? 0,
-                          animationDurationPercent: animationDurationPercent,
-                          animationRecurrenceSeconds:
-                              animationRecurrenceSeconds,
-                          canEdit: currentRole.canEditInventory,
-                          canCreate: currentRole.canCreateInventory,
-                          canArchive: currentRole.canArchiveInventory,
-                          canDelete: currentRole.canHardDeleteItems,
-                          onOpen: () => _openDetails(items[index]),
-                          onAction: (action) =>
-                              _handleAction(items[index], action),
-                        ),
-                      ),
+                      ],
                     ),
-            ),
-            if (resultCount > 0)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 110),
-                  child: _pageNavigation(page, pageCount, resultCount),
+                  ),
                 ),
               ),
+              if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
+                Positioned(
+                  key: const Key('bottom-action-overlay'),
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _bottomActionBar(),
+                ),
+            ],
+          ),
+          bottomNavigationBar: selectedInventoryIds.isNotEmpty
+              ? _bulkEditToolbar()
+              : selectedBuildIds.isNotEmpty &&
+                    selectedKitIds.isEmpty &&
+                    selectedMachineIds.isEmpty
+              ? _bulkBuildToolbar()
+              : _hasCatalogSelection
+              ? _bulkCatalogToolbar()
+              : null,
+        ),
+      ),
+    );
+  }
+
+  bool _handleInventoryScrollNotification(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    if (notification is ScrollEndNotification ||
+        (notification is UserScrollNotification &&
+            notification.direction == ScrollDirection.idle)) {
+      _inventoryOverlayRestore?.cancel();
+      _inventoryOverlayRestore = Timer(const Duration(milliseconds: 500), () {
+        if (!mounted || !_inventoryIsScrolling.value) return;
+        _inventoryIsScrolling.value = false;
+      });
+    } else if (notification is ScrollStartNotification ||
+        notification is ScrollUpdateNotification ||
+        notification is OverscrollNotification) {
+      _inventoryOverlayRestore?.cancel();
+      if (!_inventoryIsScrolling.value) {
+        _inventoryIsScrolling.value = true;
+      }
+    } else {
+      return false;
+    }
+    return false;
+  }
+
+  Widget _recordWidget(Object record, {bool list = false}) {
+    if (record is! InventoryItem) {
+      return _catalogRecordCard(record, list: list);
+    }
+    final common = (
+      selected: selectedInventoryIds.contains(record.id),
+      typeLabel: _itemTypeDisplayLabel(record),
+      spoolSizeLabel: _spoolSizeLabel(record),
+      quantitySyncVersion: _remoteQuantityAnimationVersions[record.id] ?? 0,
+      lowStockAnimationVersion: _lowStockAnimationVersions[record.id] ?? 0,
+      moistureAnimationVersion: _moistureAnimationVersions[record.id] ?? 0,
+      showStatus: _itemShowsStatus(record),
+    );
+    final Widget card;
+    if (list) {
+      card = InventoryRow(
+        item: record,
+        typeIcon: _itemTypeIcon(record),
+        typeIconImageBytes: _iconImageBytesFromKey(_itemTypeIconKey(record)),
+        selected: common.selected,
+        typeLabel: common.typeLabel,
+        spoolSizeLabel: common.spoolSizeLabel,
+        quantitySyncVersion: common.quantitySyncVersion,
+        lowStockAnimationVersion: common.lowStockAnimationVersion,
+        moistureAnimationVersion: common.moistureAnimationVersion,
+        showStatus: common.showStatus,
+        animationDurationPercent: animationDurationPercent,
+        animationRecurrenceSeconds: animationRecurrenceSeconds,
+        canEdit: currentRole.canEditInventory,
+        canCreate: currentRole.canCreateInventory,
+        canArchive: currentRole.canArchiveInventory,
+        canDelete: currentRole.canHardDeleteItems,
+        onOpen: () => _handleInventoryTap(record),
+        onSelect: () => _selectInventoryItem(record),
+        onAction: (action) => _handleAction(record, action),
+        onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+      );
+    } else {
+      card = InventoryCard(
+        item: record,
+        photoCard: photoCardsEnabled,
+        typeIcon: _itemTypeIcon(record),
+        typeIconImageBytes: _iconImageBytesFromKey(_itemTypeIconKey(record)),
+        selected: common.selected,
+        typeLabel: common.typeLabel,
+        spoolSizeLabel: common.spoolSizeLabel,
+        quantitySyncVersion: common.quantitySyncVersion,
+        lowStockAnimationVersion: common.lowStockAnimationVersion,
+        moistureAnimationVersion: common.moistureAnimationVersion,
+        showStatus: common.showStatus,
+        animationDurationPercent: animationDurationPercent,
+        animationRecurrenceSeconds: animationRecurrenceSeconds,
+        canEdit: currentRole.canEditInventory,
+        canCreate: currentRole.canCreateInventory,
+        canArchive: currentRole.canArchiveInventory,
+        canDelete: currentRole.canHardDeleteItems,
+        onOpen: () => _handleInventoryTap(record),
+        onSelect: () => _selectInventoryItem(record),
+        onAction: (action) => _handleAction(record, action),
+        onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+      );
+    }
+    return card;
+  }
+
+  List<InventoryItem> get _selectedInventoryItems => inventory
+      .where((item) => selectedInventoryIds.contains(item.id))
+      .toList();
+
+  bool get _hasCatalogSelection =>
+      selectedBuildIds.isNotEmpty ||
+      selectedKitIds.isNotEmpty ||
+      selectedMachineIds.isNotEmpty;
+
+  int get _catalogSelectionCount =>
+      selectedBuildIds.length +
+      selectedKitIds.length +
+      selectedMachineIds.length;
+
+  void _clearCatalogSelection() {
+    selectedBuildIds.clear();
+    selectedKitIds.clear();
+    selectedMachineIds.clear();
+  }
+
+  void _handleInventoryTap(InventoryItem item) {
+    if (HardwareKeyboard.instance.isShiftPressed ||
+        selectedInventoryIds.isNotEmpty ||
+        _hasCatalogSelection) {
+      setState(() {
+        _clearCatalogSelection();
+        selectedInventoryIds.contains(item.id)
+            ? selectedInventoryIds.remove(item.id)
+            : selectedInventoryIds.add(item.id);
+      });
+      return;
+    }
+    _openDetails(item);
+  }
+
+  void _selectInventoryItem(InventoryItem item) {
+    setState(() {
+      _clearCatalogSelection();
+      selectedInventoryIds.contains(item.id)
+          ? selectedInventoryIds.remove(item.id)
+          : selectedInventoryIds.add(item.id);
+    });
+  }
+
+  void _handleCatalogRecordTap(Object record) {
+    if (HardwareKeyboard.instance.isShiftPressed || _hasCatalogSelection) {
+      _selectCatalogRecord(record);
+      return;
+    }
+    switch (record) {
+      case KitRecord value:
+        unawaited(_openKitDetails(value));
+      case BuildRecord value:
+        unawaited(_openBuildQueue(value, _kitForBuild(value)));
+      case MachineRecord value:
+        unawaited(_openMachineDetails(value));
+    }
+  }
+
+  void _selectCatalogRecord(Object record) {
+    setState(() {
+      selectedInventoryIds.clear();
+      switch (record) {
+        case KitRecord value:
+          selectedKitIds.contains(value.id)
+              ? selectedKitIds.remove(value.id)
+              : selectedKitIds.add(value.id);
+        case BuildRecord value:
+          selectedBuildIds.contains(value.id)
+              ? selectedBuildIds.remove(value.id)
+              : selectedBuildIds.add(value.id);
+        case MachineRecord value:
+          selectedMachineIds.contains(value.id)
+              ? selectedMachineIds.remove(value.id)
+              : selectedMachineIds.add(value.id);
+      }
+    });
+  }
+
+  Widget _bulkBuildToolbar() {
+    final selected = builds
+        .where((build) => selectedBuildIds.contains(build.id))
+        .toList();
+    return Material(
+      key: const Key('bulk-build-toolbar'),
+      color: Theme.of(context).colorScheme.surface,
+      elevation: 20,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              IconButton(
+                key: const Key('clear-build-selection'),
+                tooltip: 'Clear selection',
+                onPressed: () => setState(selectedBuildIds.clear),
+                icon: const Icon(Icons.close_rounded),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '${selected.length} selected',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const Spacer(),
+              OutlinedButton.icon(
+                key: const Key('bulk-delete-builds'),
+                onPressed: currentRole.canHardDeleteItems
+                    ? _bulkDeleteBuilds
+                    : null,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xffff7777),
+                ),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: const Text('Delete'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _bulkDeleteBuilds() async {
+    final count = selectedBuildIds.length;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete $count ${count == 1 ? 'build' : 'builds'}?'),
+        content: const Text(
+          'This permanently deletes the selected build records. Inventory already used by them is not returned.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-bulk-delete-builds'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete permanently'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      for (final build in builds.where(
+        (candidate) => selectedBuildIds.contains(candidate.id),
+      )) {
+        _recordAudit('delete', 'build', build.id, {'name': build.name});
+      }
+      builds.removeWhere((build) => selectedBuildIds.contains(build.id));
+      selectedBuildIds.clear();
+    });
+    _persist();
+  }
+
+  Widget _bulkCatalogToolbar() => Material(
+    key: const Key('bulk-catalog-toolbar'),
+    color: Theme.of(context).colorScheme.surface,
+    elevation: 20,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            IconButton(
+              key: const Key('clear-catalog-selection'),
+              tooltip: 'Clear selection',
+              onPressed: () => setState(_clearCatalogSelection),
+              icon: const Icon(Icons.close_rounded),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '$_catalogSelectionCount selected',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const Spacer(),
+            OutlinedButton.icon(
+              key: const Key('bulk-delete-catalog-records'),
+              onPressed: currentRole.canHardDeleteItems
+                  ? _bulkDeleteCatalogRecords
+                  : null,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xffff7777),
+              ),
+              icon: const Icon(Icons.delete_outline_rounded),
+              label: const Text('Delete'),
+            ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: currentRole.canCreateInventory ? _addItem : null,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add item'),
+    ),
+  );
+
+  Future<void> _bulkDeleteCatalogRecords() async {
+    final count = _catalogSelectionCount;
+    if (count == 0) return;
+    final unfinishedBuilds = builds
+        .where(
+          (build) =>
+              selectedKitIds.contains(build.kitId) &&
+              build.completedAt == null &&
+              !selectedBuildIds.contains(build.id),
+        )
+        .length;
+    final summary = <String>[
+      if (selectedKitIds.isNotEmpty)
+        '${selectedKitIds.length} ${selectedKitIds.length == 1 ? 'kit' : 'kits'}',
+      if (selectedMachineIds.isNotEmpty)
+        '${selectedMachineIds.length} ${selectedMachineIds.length == 1 ? 'machine' : 'machines'}',
+      if (selectedBuildIds.isNotEmpty)
+        '${selectedBuildIds.length} ${selectedBuildIds.length == 1 ? 'build' : 'builds'}',
+    ].join(', ');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete $count selected records?'),
+        content: Text(
+          unfinishedBuilds == 0
+              ? 'This permanently deletes $summary.'
+              : 'This permanently deletes $summary. $unfinishedBuilds unfinished ${unfinishedBuilds == 1 ? 'build references' : 'builds reference'} the selected kits and will be preserved.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-bulk-delete-catalog-records'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete permanently'),
+          ),
+        ],
       ),
     );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      for (final kit in kits.where(
+        (candidate) => selectedKitIds.contains(candidate.id),
+      )) {
+        _recordAudit('delete', 'kit', kit.id, {
+          'name': kit.name,
+          'bulk': 'true',
+        });
+      }
+      for (final machine in machines.where(
+        (candidate) => selectedMachineIds.contains(candidate.id),
+      )) {
+        _recordAudit('delete', 'machine', machine.id, {
+          'name': machine.name,
+          'bulk': 'true',
+        });
+      }
+      for (final build in builds.where(
+        (candidate) => selectedBuildIds.contains(candidate.id),
+      )) {
+        _recordAudit('delete', 'build', build.id, {
+          'name': build.name,
+          'bulk': 'true',
+        });
+      }
+
+      builds.removeWhere((build) => selectedBuildIds.contains(build.id));
+      kits.removeWhere((kit) => selectedKitIds.contains(kit.id));
+      machines.removeWhere(
+        (machine) => selectedMachineIds.contains(machine.id),
+      );
+      for (final machine in machines) {
+        machine.kitIds.removeWhere(selectedKitIds.contains);
+      }
+      for (var index = 0; index < inventory.length; index++) {
+        final item = inventory[index];
+        if (!item.compatibleMachineIds.any(selectedMachineIds.contains)) {
+          continue;
+        }
+        inventory[index] = item.copyWith(
+          compatibleMachineIds: item.compatibleMachineIds
+              .where((id) => !selectedMachineIds.contains(id))
+              .toList(),
+        );
+      }
+      _clearCatalogSelection();
+    });
+    _persist();
+  }
+
+  Widget _bulkEditToolbar() {
+    final selected = _selectedInventoryItems;
+    final restore =
+        selected.isNotEmpty && selected.every((item) => item.archived);
+    final actions =
+        <
+          ({
+            Key key,
+            IconData icon,
+            String label,
+            VoidCallback? onPressed,
+            bool destructive,
+          })
+        >[
+          (
+            key: const Key('bulk-create-kit'),
+            icon: Icons.inventory_2_outlined,
+            label: 'Create Kit',
+            onPressed: currentRole.canManageCatalog ? _bulkCreateKit : null,
+            destructive: false,
+          ),
+          (
+            key: const Key('bulk-archive'),
+            icon: restore ? Icons.unarchive_outlined : Icons.archive_outlined,
+            label: restore ? 'Restore' : 'Archive',
+            onPressed: currentRole.canArchiveInventory
+                ? _bulkArchiveOrRestore
+                : null,
+            destructive: false,
+          ),
+          (
+            key: const Key('bulk-delete'),
+            icon: Icons.delete_outline_rounded,
+            label: 'Delete',
+            onPressed: currentRole.canHardDeleteItems ? _bulkDelete : null,
+            destructive: true,
+          ),
+          (
+            key: const Key('bulk-change-type'),
+            icon: Icons.swap_horiz_rounded,
+            label: 'Change Type',
+            onPressed: currentRole.canEditInventory ? _bulkChangeType : null,
+            destructive: false,
+          ),
+        ];
+    final noActionsAvailable = actions.every(
+      (action) => action.onPressed == null,
+    );
+    return Material(
+      key: const Key('bulk-edit-toolbar'),
+      color: Theme.of(context).colorScheme.surface,
+      elevation: 20,
+      child: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final selectionHeader = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  key: const Key('clear-bulk-selection'),
+                  tooltip: 'Clear selection',
+                  onPressed: () => setState(selectedInventoryIds.clear),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '${selected.length} selected',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            );
+            if (constraints.maxWidth < 650) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: selectionHeader,
+                    ),
+                    if (noActionsAvailable)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(8, 0, 8, 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.lock_outline_rounded, size: 16),
+                            SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Builder role: ask the inventory owner to promote this device for bulk editing.',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Row(
+                      children: [
+                        for (final action in actions)
+                          Expanded(
+                            child: _bulkMobileToolbarButton(
+                              key: action.key,
+                              icon: action.icon,
+                              label: action.label,
+                              onPressed: action.onPressed,
+                              destructive: action.destructive,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  selectionHeader,
+                  const SizedBox(width: 18),
+                  for (final action in actions)
+                    _bulkToolbarButton(
+                      key: action.key,
+                      icon: action.icon,
+                      label: action.label,
+                      onPressed: action.onPressed,
+                      destructive: action.destructive,
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _bulkMobileToolbarButton({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool destructive = false,
+  }) => TextButton(
+    key: key,
+    onPressed: onPressed,
+    style: destructive
+        ? TextButton.styleFrom(foregroundColor: const Color(0xffff7777))
+        : null,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon),
+        const SizedBox(height: 3),
+        FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
+      ],
+    ),
+  );
+
+  Widget _bulkToolbarButton({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool destructive = false,
+  }) => Padding(
+    padding: const EdgeInsets.only(right: 8),
+    child: OutlinedButton.icon(
+      key: key,
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
+      style: destructive
+          ? OutlinedButton.styleFrom(foregroundColor: const Color(0xffff7777))
+          : null,
+    ),
+  );
+
+  Future<void> _bulkCreateKit() async {
+    final selected = _selectedInventoryItems;
+    if (selected.isEmpty) return;
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    setState(() {
+      selectedInventoryIds.clear();
+    });
+    await _openCatalog(
+      initialKitBom: [
+        for (final (index, item) in selected.indexed)
+          KitBomEntry(
+            id: 'KIT-DRAFT-$stamp-LINE-$index',
+            productId: item.catalogProductId ?? item.id,
+            quantity: 1,
+            name: item.name,
+            section: 'Main component',
+          ),
+      ],
+    );
+  }
+
+  void _bulkArchiveOrRestore() {
+    final selected = _selectedInventoryItems;
+    if (selected.isEmpty) return;
+    final restore = selected.every((item) => item.archived);
+    setState(() {
+      for (var index = 0; index < inventory.length; index++) {
+        final item = inventory[index];
+        if (!selectedInventoryIds.contains(item.id)) continue;
+        inventory[index] = item.copyWith(
+          archived: !restore,
+          archiveDisposition: ArchiveDisposition.archived,
+        );
+        _recordAudit(restore ? 'restore' : 'archive', 'inventory', item.id, {
+          'name': item.name,
+          'bulk': 'true',
+        });
+      }
+      selectedInventoryIds.clear();
+    });
+    _persist();
+  }
+
+  Future<void> _bulkDelete() async {
+    final selected = _selectedInventoryItems;
+    if (selected.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${selected.length} items?'),
+        content: const Text(
+          'This permanently deletes every selected inventory item.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('confirm-bulk-delete'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      for (final item in selected) {
+        _recordAudit('delete', 'inventory', item.id, {
+          'name': item.name,
+          'bulk': 'true',
+        });
+      }
+      inventory.removeWhere((item) => selectedInventoryIds.contains(item.id));
+      selectedInventoryIds.clear();
+    });
+    _persist();
+  }
+
+  Future<void> _bulkChangeType() async {
+    final selected = _selectedInventoryItems;
+    if (selected.isEmpty) return;
+    final choice =
+        await showDialog<
+          ({InventoryType type, CustomItemTypeRecord? customType})
+        >(
+          context: context,
+          builder: (dialogContext) => SimpleDialog(
+            title: Text('Change type for ${selected.length} items'),
+            children: [
+              for (final value in InventoryType.values.where(
+                (value) => value != InventoryType.custom,
+              ))
+                SimpleDialogOption(
+                  key: Key('bulk-type-${value.name}'),
+                  onPressed: () => Navigator.pop(dialogContext, (
+                    type: value,
+                    customType: null,
+                  )),
+                  child: ListTile(
+                    leading: _typeIconVisual(
+                      typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+                      _typeIcon(value),
+                    ),
+                    title: Text(_inventoryTypeDisplayLabel(value)),
+                  ),
+                ),
+              for (final customType in customItemTypes)
+                SimpleDialogOption(
+                  key: Key('bulk-custom-type-${customType.id}'),
+                  onPressed: () => Navigator.pop(dialogContext, (
+                    type: InventoryType.custom,
+                    customType: customType,
+                  )),
+                  child: ListTile(
+                    leading: _typeIconVisual(
+                      customType.iconKey,
+                      Icons.tune_rounded,
+                    ),
+                    title: Text(customType.name),
+                  ),
+                ),
+            ],
+          ),
+        );
+    if (choice == null || !mounted) return;
+    final targetLabel =
+        choice.customType?.name ?? _inventoryTypeDisplayLabel(choice.type);
+    setState(() {
+      for (var index = 0; index < inventory.length; index++) {
+        final item = inventory[index];
+        if (!selectedInventoryIds.contains(item.id)) continue;
+        inventory[index] = item.copyWith(
+          type: choice.type,
+          customTypeId: choice.customType?.id ?? '',
+          customTypeName: choice.customType?.name ?? '',
+          customFieldValues: const {},
+          materialId: '',
+          materialName: '',
+          clearFilamentData:
+              item.type == InventoryType.filament &&
+              choice.type != InventoryType.filament,
+          clearPrintingData: !choice.type.supportsPrinting,
+          clearCatalogProductId: true,
+        );
+        _recordAudit('change type', 'inventory', item.id, {
+          'type': '${_itemTypeDisplayLabel(item)} → $targetLabel',
+          'bulk': 'true',
+        });
+      }
+      selectedInventoryIds.clear();
+    });
+    _persist();
   }
 
   Future<void> _addItem({
     String initialBarcode = '',
     InventoryItem? productTemplate,
     LabelOcrDraft? labelDraft,
+    FilamentColorSwatch? initialFilamentColor,
   }) async {
     if (!currentRole.canCreateInventory) {
       _showPermissionDenied('Your role cannot add inventory items.');
@@ -2236,10 +6880,17 @@ class _InventoryHomeState extends State<InventoryHome> {
         initialBarcode: initialBarcode,
         productTemplate: productTemplate,
         labelDraft: labelDraft,
+        initialFilamentColor: initialFilamentColor,
         machineTypes: machineTypes,
         machines: machines,
+        locations: locations,
         spoolTypes: spoolTypes,
+        materials: materials,
         customItemTypes: customItemTypes,
+        typeLabelOverrides: typeLabelOverrides,
+        typeIconOverrides: typeIconOverrides,
+        database: widget.database,
+        filamentColorsClient: _filamentColorsClient,
       ),
     );
     if (item != null && mounted) {
@@ -2259,7 +6910,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     final drafts = await showDialog<List<RapidItemDraft>>(
       context: context,
-      builder: (_) => const RapidizerDialog(),
+      builder: (_) => RapidizerDialog(
+        typeAliases: {
+          for (final type in InventoryType.values)
+            type: _inventoryTypeDisplayLabel(type),
+        },
+        materials: materials,
+      ),
     );
     if (drafts == null || drafts.isEmpty || !mounted) return;
     final now = DateTime.now();
@@ -2274,6 +6931,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             cost: draft.price,
             quantity: draft.quantity,
             color: _typeColor(draft.type),
+            itemColorName: draft.itemColorName,
+            itemColorLabel: draft.itemColorLabel,
+            materialId: draft.materialId,
+            materialName: draft.materialName,
           ),
         )
         .toList();
@@ -2289,44 +6950,612 @@ class _InventoryHomeState extends State<InventoryHome> {
     ).showSnackBar(SnackBar(content: Text('${items.length} items RAPIDIZED!')));
   }
 
-  Future<void> _openDetails(InventoryItem item) => showGeneralDialog<void>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: 'Close item details',
-    barrierColor: Colors.black54,
-    transitionDuration: const Duration(milliseconds: 220),
-    pageBuilder: (context, _, _) => Align(
-      alignment: Alignment.centerRight,
-      child: ItemDetailsPanel(
-        item: item,
-        machines: machines,
-        machineTypes: machineTypes,
-        spoolTypes: spoolTypes,
-        onChanged: _updateItemById,
-        canEdit: currentRole.canEditInventory,
-        canArchive: currentRole.canArchiveInventory,
+  Future<void> _openFilamentColors() async {
+    if (!currentRole.canCreateInventory) {
+      _showPermissionDenied('Your role cannot add inventory items.');
+      return;
+    }
+    final selected = await showDialog<FilamentColorSwatch>(
+      context: context,
+      builder: (_) => FilamentColorsSearchDialog(
+        client: _filamentColorsClient,
+        autoSearch: false,
       ),
-    ),
-    transitionBuilder: (context, animation, _, child) {
-      final curved = CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOutCubic,
-      );
-      return FadeTransition(
-        opacity: curved,
-        child: SlideTransition(
-          position: Tween(
-            begin: const Offset(.12, 0),
-            end: Offset.zero,
-          ).animate(curved),
-          child: child,
+    );
+    if (!mounted || selected == null) return;
+    await _addItem(initialFilamentColor: selected);
+  }
+
+  Future<bool> _importInventoryJson() async {
+    if (!currentRole.canCreateInventory) {
+      _showPermissionDenied('Your role cannot add inventory items.');
+      return false;
+    }
+    final picked = await FilePicker.pickFile(
+      dialogTitle: 'Import inventory items from JSON',
+      type: FileType.custom,
+      allowedExtensions: const ['json'],
+    );
+    if (picked == null || !mounted) return false;
+    try {
+      final bytes = await picked.readAsBytes();
+      if (bytes.length > 10 * 1024 * 1024) {
+        throw const FormatException('Inventory JSON must be 10 MB or smaller.');
+      }
+      final parsed = parseInventoryJson(utf8.decode(bytes));
+      if (!parsed.isValid) {
+        await _showInventoryJsonErrors(parsed.errors);
+        return false;
+      }
+      final prepared = prepareInventoryJsonImport(parsed.items);
+      if (prepared.errors.isNotEmpty) {
+        await _showInventoryJsonErrors(prepared.errors);
+        return false;
+      }
+      if (!mounted) return false;
+      final duplicateCount = prepared.items
+          .where(
+            (item) => inventory.any(
+              (existing) =>
+                  existing.type == item.type &&
+                  _normalized(existing.name) == _normalized(item.name),
+            ),
+          )
+          .length;
+      final imageCount = parsed.items
+          .where((draft) => draft.imageUrl.isNotEmpty)
+          .length;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.data_object_rounded),
+              const SizedBox(width: 10),
+              Expanded(child: Text('Import ${prepared.items.length} items?')),
+            ],
+          ),
+          content: SizedBox(
+            width: 720,
+            height: 600,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Chip(label: Text('${prepared.items.length} new items')),
+                    if (prepared.newMaterials.isNotEmpty)
+                      Chip(
+                        label: Text(
+                          '${prepared.newMaterials.length} new materials',
+                        ),
+                      ),
+                    if (prepared.newVendors.isNotEmpty)
+                      Chip(
+                        label: Text(
+                          '${prepared.newVendors.length} new vendors',
+                        ),
+                      ),
+                    if (prepared.newBrands.isNotEmpty)
+                      Chip(
+                        label: Text('${prepared.newBrands.length} new brands'),
+                      ),
+                    if (prepared.updatedBrands.isNotEmpty ||
+                        prepared.updatedVendors.isNotEmpty)
+                      Chip(
+                        label: Text(
+                          '${prepared.updatedBrands.length + prepared.updatedVendors.length} catalog links updated',
+                        ),
+                      ),
+                    if (imageCount > 0)
+                      Chip(label: Text('$imageCount product images')),
+                    if (duplicateCount > 0)
+                      Chip(
+                        avatar: const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                        ),
+                        label: Text('$duplicateCount possible duplicates'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Every row creates a new inventory item. Review possible duplicates before importing.',
+                  style: TextStyle(color: Color(0xffaeb5c5)),
+                ),
+                const SizedBox(height: 10),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: prepared.items.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final item = prepared.items[index];
+                      final duplicate = inventory.any(
+                        (existing) =>
+                            existing.type == item.type &&
+                            _normalized(existing.name) ==
+                                _normalized(item.name),
+                      );
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(
+                          duplicate
+                              ? Icons.warning_amber_rounded
+                              : _typeIcon(item.type),
+                          color: duplicate ? const Color(0xffffc15c) : null,
+                        ),
+                        title: Text(item.name),
+                        subtitle: Text(
+                          [
+                            _itemTypeDisplayLabel(item),
+                            if (item.materialName.isNotEmpty) item.materialName,
+                            'qty ${_formatBomQuantity(item.quantity)}',
+                            '\$${item.cost.toStringAsFixed(2)}',
+                            if (duplicate) 'Possible duplicate',
+                          ].join(' · '),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              key: const Key('confirm-inventory-json-import'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.file_download_done_outlined),
+              label: const Text('Import items'),
+            ),
+          ],
         ),
       );
-    },
-  );
+      if (confirmed != true || !mounted) return false;
+      var importedItems = prepared.items;
+      var importedImageCount = 0;
+      var failedImageCount = 0;
+      if (imageCount > 0) {
+        final imageProgress = ValueNotifier<int>(0);
+        final progressDialog = showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: const Text('Importing product images'),
+              content: SizedBox(
+                width: 420,
+                child: ValueListenableBuilder<int>(
+                  valueListenable: imageProgress,
+                  builder: (_, completed, _) => Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(
+                        value: imageCount == 0 ? null : completed / imageCount,
+                      ),
+                      const SizedBox(height: 12),
+                      Text('$completed of $imageCount images'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await WidgetsBinding.instance.endOfFrame;
+        final imageResult = await downloadInventoryJsonImages(
+          prepared.items,
+          parsed.items,
+          onProgress: (completed, _) => imageProgress.value = completed,
+        );
+        importedItems = imageResult.items;
+        importedImageCount = imageResult.imported;
+        failedImageCount = imageResult.failed;
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+          await progressDialog;
+        }
+        imageProgress.dispose();
+      }
+      if (!mounted) return false;
+      setState(() {
+        materials.addAll(prepared.newMaterials);
+        for (final replacement in prepared.updatedVendors.values) {
+          final index = vendors.indexWhere(
+            (vendor) => vendor.id == replacement.id,
+          );
+          if (index >= 0) vendors[index] = replacement;
+        }
+        for (final replacement in prepared.updatedBrands.values) {
+          final index = brands.indexWhere(
+            (brand) => brand.id == replacement.id,
+          );
+          if (index >= 0) brands[index] = replacement;
+        }
+        vendors.addAll(prepared.newVendors);
+        brands.addAll(prepared.newBrands);
+        inventory.addAll(importedItems);
+        for (final item in importedItems) {
+          _recordAddition(item);
+          _recordAudit('import', 'inventory', item.id, {
+            'name': item.name,
+            'source': 'JSON',
+          });
+        }
+        currentPage = 0;
+      });
+      _persist();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            [
+              '${prepared.items.length} inventory items imported.',
+              if (importedImageCount > 0) '$importedImageCount images added.',
+              if (failedImageCount > 0)
+                '$failedImageCount images could not be downloaded.',
+            ].join(' '),
+          ),
+        ),
+      );
+      return true;
+    } on FormatException catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('JSON import failed: ${error.message}')),
+      );
+      return false;
+    } catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('JSON import failed: $error')));
+      return false;
+    }
+  }
+
+  ({
+    List<InventoryItem> items,
+    List<MaterialRecord> newMaterials,
+    List<VendorRecord> newVendors,
+    List<BrandRecord> newBrands,
+    Map<String, VendorRecord> updatedVendors,
+    Map<String, BrandRecord> updatedBrands,
+    List<String> errors,
+  })
+  prepareInventoryJsonImport(List<InventoryJsonDraft> drafts) {
+    final preparedItems = <InventoryItem>[];
+    final availableMaterials = [...materials];
+    final newMaterials = <MaterialRecord>[];
+    final availableVendors = [...vendors];
+    final availableBrands = [...brands];
+    final newVendors = <VendorRecord>[];
+    final newBrands = <BrandRecord>[];
+    final updatedVendors = <String, VendorRecord>{};
+    final updatedBrands = <String, BrandRecord>{};
+    final errors = <String>[];
+    final now = DateTime.now();
+    for (final draft in drafts) {
+      final customType = customItemTypes
+          .where(
+            (candidate) =>
+                _normalized(candidate.name) == _normalized(draft.typeName),
+          )
+          .firstOrNull;
+      final type = draft.typeName.trim().isEmpty
+          ? InventoryType.other
+          : customType != null
+          ? InventoryType.custom
+          : smartMatchInventoryType(
+              draft.typeName,
+              typeAliases: {
+                for (final type in InventoryType.values)
+                  type: _inventoryTypeDisplayLabel(type),
+              },
+            );
+      if (type == null) {
+        errors.add(
+          'Row ${draft.rowNumber}: unknown Type “${draft.typeName}”. Add it in Catalog or correct the JSON.',
+        );
+        continue;
+      }
+      final typeKey = customType == null
+          ? 'type:${type.name}'
+          : 'custom:${customType.id}';
+      VendorRecord? vendor;
+      if (draft.vendor.isNotEmpty) {
+        vendor = availableVendors
+            .where(
+              (candidate) =>
+                  _normalized(candidate.name) == _normalized(draft.vendor),
+            )
+            .firstOrNull;
+        final vendorIsBrand =
+            draft.brand.isNotEmpty &&
+            _normalized(draft.brand) == _normalized(draft.vendor);
+        if (vendor == null) {
+          vendor = VendorRecord(
+            id: _newCatalogId('VEN'),
+            name: draft.vendor,
+            isBrand: vendorIsBrand,
+          );
+          availableVendors.add(vendor);
+          newVendors.add(vendor);
+        } else if (vendorIsBrand && !vendor.isBrand) {
+          final replacement = VendorRecord(
+            id: vendor.id,
+            name: vendor.name,
+            isBrand: true,
+            logoBytes: vendor.logoBytes,
+          );
+          final availableIndex = availableVendors.indexWhere(
+            (candidate) => candidate.id == vendor!.id,
+          );
+          availableVendors[availableIndex] = replacement;
+          final newIndex = newVendors.indexWhere(
+            (candidate) => candidate.id == vendor!.id,
+          );
+          if (newIndex >= 0) {
+            newVendors[newIndex] = replacement;
+          } else {
+            updatedVendors[replacement.id] = replacement;
+          }
+          vendor = replacement;
+        }
+      }
+      if (draft.brand.isNotEmpty) {
+        final existingBrand = availableBrands
+            .where(
+              (candidate) =>
+                  _normalized(candidate.name) == _normalized(draft.brand),
+            )
+            .firstOrNull;
+        final vendorIds = {
+          ...?existingBrand?.vendorIds,
+          if (vendor != null) vendor.id,
+        };
+        final categories = {...?existingBrand?.categories, type};
+        final replacement = BrandRecord(
+          id: existingBrand?.id ?? _newCatalogId('BRAND'),
+          name: existingBrand?.name ?? draft.brand,
+          vendorIds: vendorIds,
+          categories: categories,
+          logoBytes: existingBrand?.logoBytes,
+        );
+        if (existingBrand == null) {
+          availableBrands.add(replacement);
+          newBrands.add(replacement);
+        } else if (vendorIds.length != existingBrand.vendorIds.length ||
+            categories.length != existingBrand.categories.length) {
+          final availableIndex = availableBrands.indexWhere(
+            (candidate) => candidate.id == existingBrand.id,
+          );
+          availableBrands[availableIndex] = replacement;
+          final newIndex = newBrands.indexWhere(
+            (candidate) => candidate.id == existingBrand.id,
+          );
+          if (newIndex >= 0) {
+            newBrands[newIndex] = replacement;
+          } else {
+            updatedBrands[replacement.id] = replacement;
+          }
+        }
+      }
+      MaterialRecord? material;
+      if (draft.material.isNotEmpty) {
+        material = availableMaterials
+            .where(
+              (candidate) =>
+                  candidate.typeKey == typeKey &&
+                  _normalized(candidate.name) == _normalized(draft.material),
+            )
+            .firstOrNull;
+        if (material == null) {
+          material = MaterialRecord(
+            id: _newCatalogId('MAT'),
+            name: draft.material,
+            typeKey: typeKey,
+          );
+          availableMaterials.add(material);
+          newMaterials.add(material);
+        }
+      }
+      final namedColor = _itemColorSwatch(draft.color);
+      final labelColor = _itemColorSwatch(draft.colorLabel);
+      final itemColorName = namedColor != null
+          ? _colorHex(namedColor)
+          : labelColor != null
+          ? _colorHex(labelColor)
+          : _normalizeItemColorValue(draft.color);
+      final itemColorLabel = draft.colorLabel.isNotEmpty
+          ? draft.colorLabel
+          : draft.color.startsWith('#')
+          ? ''
+          : draft.color;
+      preparedItems.add(
+        InventoryItem(
+          id: _newInventoryId(),
+          name: draft.name,
+          type: type,
+          customTypeId: customType?.id ?? '',
+          customTypeName: customType?.name ?? '',
+          compatibility: draft.compatibility,
+          added: now,
+          cost: draft.cost,
+          quantity: draft.quantity,
+          color: _typeColor(type),
+          itemColorName: itemColorName,
+          itemColorLabel: itemColorLabel,
+          materialId: material?.id ?? '',
+          materialName: material?.name ?? '',
+          brand: draft.brand,
+          vendor: draft.vendor,
+          storageLocation: draft.storageLocation,
+          barcode: draft.barcode,
+          productUrl: draft.productUrl,
+          amsCompatible: type == InventoryType.filament && draft.amsCompatible,
+        ),
+      );
+    }
+    return (
+      items: preparedItems,
+      newMaterials: newMaterials,
+      newVendors: newVendors,
+      newBrands: newBrands,
+      updatedVendors: updatedVendors,
+      updatedBrands: updatedBrands,
+      errors: errors,
+    );
+  }
+
+  Future<void> _showInventoryJsonErrors(List<String> errors) =>
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Inventory JSON needs attention'),
+          content: SizedBox(
+            width: 620,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: errors.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (_, index) => Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: Color(0xffff6b7a),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(errors[index])),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+
+  StockLocationRecord? _itemStorageLocation(InventoryItem item) {
+    if (item.storageLocationId.isNotEmpty) {
+      final byId = locations
+          .where((location) => location.id == item.storageLocationId)
+          .firstOrNull;
+      if (byId != null) return byId;
+    }
+    final storedPath = _normalized(item.storageLocation);
+    if (storedPath.isEmpty) return null;
+    return locations
+        .where(
+          (location) =>
+              _normalized(_locationPath(location.id)) == storedPath ||
+              _normalized(location.name) == storedPath,
+        )
+        .firstOrNull;
+  }
+
+  Future<void> _openDetails(InventoryItem item) {
+    final storageLocation = _itemStorageLocation(item);
+    return showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close item details',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, _, _) => Align(
+        alignment: Alignment.centerRight,
+        child: ItemDetailsPanel(
+          item: item,
+          typeLabel: _itemTypeDisplayLabel(item),
+          typeIcon: _itemTypeIcon(item),
+          typeIconImageBytes: _iconImageBytesFromKey(_itemTypeIconKey(item)),
+          initialWidth: itemDetailsPanelWidth,
+          onWidthChanged: (width) => itemDetailsPanelWidth = width,
+          machines: machines,
+          machineTypes: machineTypes,
+          spoolTypes: spoolTypes,
+          onChanged: _updateItemById,
+          onEdit: currentRole.canEditInventory
+              ? (item) => _handleAction(item, ItemAction.edit)
+              : null,
+          onSplitOne:
+              currentRole.canEditInventory && currentRole.canCreateInventory
+              ? _splitOneIntoNewStack
+              : null,
+          canEdit: currentRole.canEditInventory,
+          canArchive: currentRole.canArchiveInventory,
+          canMarkDepleted: _itemCanMarkDepleted(item),
+          showStatus: _itemShowsStatus(item),
+          onStorageLocationTap: storageLocation == null
+              ? null
+              : () => _openLocation(storageLocation),
+        ),
+      ),
+      transitionBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween(
+              begin: const Offset(.12, 0),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _splitOneIntoNewStack(InventoryItem source) async {
+    if (!currentRole.canEditInventory || !currentRole.canCreateInventory) {
+      _showPermissionDenied(
+        'Your role cannot split inventory into a new stack.',
+      );
+      return;
+    }
+    final index = inventory.indexWhere((item) => item.id == source.id);
+    if (index < 0) return;
+    final current = inventory[index];
+    if (current.quantity <= 1) {
+      _showPermissionDenied('This stack needs more than one item to split.');
+      return;
+    }
+
+    final splitItem = current.copyWith(id: _newInventoryId(), quantity: 1);
+    setState(() {
+      inventory[index] = current.copyWith(quantity: current.quantity - 1);
+      inventory.add(splitItem);
+      _recordAudit('split', 'inventory', splitItem.id, {
+        'source': current.id,
+        'name': splitItem.name,
+        'quantity': '1',
+      });
+    });
+    _persist();
+    if (mounted) await _openDetails(splitItem);
+  }
 
   Future<void> _handleAction(InventoryItem item, ItemAction action) async {
     final allowed = switch (action) {
+      ItemAction.showCompatibleFilaments => true,
       ItemAction.delete => currentRole.canHardDeleteItems,
       ItemAction.duplicate => currentRole.canCreateInventory,
       ItemAction.archive => currentRole.canArchiveInventory,
@@ -2338,6 +7567,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       return;
     }
     switch (action) {
+      case ItemAction.showCompatibleFilaments:
+        await showDialog<void>(
+          context: context,
+          builder: (_) => _CompatibleFilamentsDialog(
+            printedPart: item,
+            filaments: _compatibleFilamentsFor(item),
+            spoolSizeLabel: _spoolSizeLabel,
+          ),
+        );
       case ItemAction.resetDryTimer:
         if (item.dryingMinutes == null) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2362,10 +7600,15 @@ class _InventoryHomeState extends State<InventoryHome> {
             vendors: vendors,
             brands: brands,
             spoolTypes: spoolTypes,
+            materials: materials,
             customItemTypes: customItemTypes,
+            typeLabelOverrides: typeLabelOverrides,
+            typeIconOverrides: typeIconOverrides,
             products: products,
             machineTypes: machineTypes,
             machines: machines,
+            locations: locations,
+            database: widget.database,
           ),
         );
         if (edited != null) _replaceItem(item, edited);
@@ -2414,11 +7657,40 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (confirmed == true && mounted) {
           setState(() {
             inventory.remove(item);
+            selectedInventoryIds.remove(item.id);
             _recordAudit('delete', 'inventory', item.id, {'name': item.name});
           });
           _persist();
         }
     }
+  }
+
+  List<InventoryItem> _compatibleFilamentsFor(InventoryItem printedPart) {
+    final stockedFilaments = inventory
+        .where(
+          (candidate) =>
+              candidate.type == InventoryType.filament &&
+              !candidate.archived &&
+              candidate.quantity > 0,
+        )
+        .toList();
+    final partTags = printedPart.compatibility
+        .map(_normalized)
+        .where((tag) => tag.isNotEmpty)
+        .toSet();
+    final partMachines = printedPart.compatibleMachineIds.toSet();
+    if (partTags.isEmpty && partMachines.isEmpty) return stockedFilaments;
+
+    return stockedFilaments.where((filament) {
+      final sharedMachine = filament.compatibleMachineIds.any(
+        partMachines.contains,
+      );
+      final filamentText = _normalized(
+        '${filament.name} ${filament.brand} ${filament.materialName} ${filament.compatibility.join(' ')}',
+      );
+      final sharedTag = partTags.any(filamentText.contains);
+      return sharedMachine || sharedTag;
+    }).toList();
   }
 
   void _showPermissionDenied(String message) {
@@ -2504,18 +7776,90 @@ class _InventoryHomeState extends State<InventoryHome> {
     _checkMoistureThresholdAnimations();
   }
 
-  Future<void> _openCatalog({String? initialKitId}) => showDialog<void>(
+  void _adjustItemQuantity(InventoryItem item, double delta) {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return;
+    }
+    final current = inventory
+        .where((candidate) => candidate.id == item.id)
+        .firstOrNull;
+    if (current == null) return;
+    final quantity = math.max(0, current.quantity + delta).toDouble();
+    if (quantity == current.quantity) return;
+    _quantityCommitOriginals.putIfAbsent(item.id, () => current);
+    setState(() {
+      replaceInventoryItemById(
+        inventory,
+        current.id,
+        current.copyWith(quantity: quantity),
+      );
+    });
+    _invalidateSearchCaches();
+    _quantityCommitTimers.remove(item.id)?.cancel();
+    _quantityCommitTimers[item.id] = Timer(
+      const Duration(seconds: 1),
+      () => _commitPendingQuantityChange(item.id),
+    );
+  }
+
+  void _commitPendingQuantityChange(String itemId) {
+    _quantityCommitTimers.remove(itemId)?.cancel();
+    final original = _quantityCommitOriginals.remove(itemId);
+    if (original == null || !mounted) return;
+    var changed = false;
+    setState(() => changed = _recordPendingQuantityAudit(itemId, original));
+    if (!changed) return;
+    _persist();
+    _checkMoistureThresholdAnimations();
+  }
+
+  bool _recordPendingQuantityAudit(String itemId, InventoryItem original) {
+    final current = inventory
+        .where((candidate) => candidate.id == itemId)
+        .firstOrNull;
+    if (current == null || current.quantity == original.quantity) return false;
+    _recordAudit('edit', 'inventory', itemId, {
+      'quantity':
+          '${_formatBomQuantity(original.quantity)} → ${_formatBomQuantity(current.quantity)}',
+    });
+    if (!_isLowStock(original) && _isLowStock(current)) {
+      _lowStockAnimationVersions[itemId] =
+          (_lowStockAnimationVersions[itemId] ?? 0) + 1;
+    }
+    return true;
+  }
+
+  Future<void> _openCatalog({
+    String? initialKitId,
+    List<KitBomEntry>? initialKitBom,
+  }) => showDialog<void>(
     context: context,
     builder: (_) => CatalogManagerDialog(
       vendors: vendors,
       brands: brands,
       spoolTypes: spoolTypes,
+      materials: materials,
       customItemTypes: customItemTypes,
+      typeLabelOverrides: typeLabelOverrides,
+      typeIconOverrides: typeIconOverrides,
+      typeDepletionSettings: typeDepletionSettings,
+      typeStatusSettings: typeStatusSettings,
+      deletedTypeKeys: deletedTypeKeys,
+      customTypeUsageCounts: {
+        for (final customType in customItemTypes)
+          customType.id: inventory
+              .where((item) => item.customTypeId == customType.id)
+              .length,
+      },
       products: products,
+      inventoryItems: inventory,
       machineTypes: machineTypes,
       machines: machines,
       kits: kits,
       initialKitId: initialKitId,
+      initialKitBom: initialKitBom,
+      onImportKitPackage: _importKitPackage,
       onVendorAdded: (vendor) {
         setState(() => vendors.add(vendor));
         _persist();
@@ -2528,10 +7872,137 @@ class _InventoryHomeState extends State<InventoryHome> {
         setState(() => spoolTypes.add(spoolType));
         _persist();
       },
+      onMaterialAdded: (material) {
+        setState(() => materials.add(material));
+        _persist();
+      },
+      onMaterialUpdated: (material) {
+        setState(() {
+          final index = materials.indexWhere(
+            (candidate) => candidate.id == material.id,
+          );
+          final previous = index >= 0 ? materials[index] : null;
+          if (index >= 0) materials[index] = material;
+          for (var index = 0; index < inventory.length; index++) {
+            if (inventory[index].materialId == material.id) {
+              inventory[index] = previous?.typeKey == material.typeKey
+                  ? inventory[index].copyWith(materialName: material.name)
+                  : inventory[index].copyWith(materialId: '', materialName: '');
+            }
+            if (inventory[index].spoolMaterialId == material.id) {
+              inventory[index] = previous?.typeKey == material.typeKey
+                  ? inventory[index].copyWith(spoolMaterialName: material.name)
+                  : inventory[index].copyWith(
+                      spoolMaterialId: '',
+                      spoolMaterialName: '',
+                    );
+            }
+            if (inventory[index].masterSpoolMaterialId == material.id) {
+              inventory[index] = previous?.typeKey == material.typeKey
+                  ? inventory[index].copyWith(
+                      masterSpoolMaterialName: material.name,
+                    )
+                  : inventory[index].copyWith(
+                      masterSpoolMaterialId: '',
+                      masterSpoolMaterialName: '',
+                    );
+            }
+          }
+        });
+        _persist();
+      },
+      onMaterialDeleted: (material) {
+        setState(() {
+          materials.removeWhere((candidate) => candidate.id == material.id);
+          for (var index = 0; index < inventory.length; index++) {
+            if (inventory[index].materialId == material.id) {
+              inventory[index] = inventory[index].copyWith(
+                materialId: '',
+                materialName: '',
+              );
+            }
+            if (inventory[index].spoolMaterialId == material.id) {
+              inventory[index] = inventory[index].copyWith(
+                spoolMaterialId: '',
+                spoolMaterialName: '',
+              );
+            }
+            if (inventory[index].masterSpoolMaterialId == material.id) {
+              inventory[index] = inventory[index].copyWith(
+                masterSpoolMaterialId: '',
+                masterSpoolMaterialName: '',
+              );
+            }
+          }
+        });
+        _persist();
+      },
       onCustomItemTypeAdded: (customType) {
         setState(() => customItemTypes.add(customType));
         _persist();
       },
+      onCustomItemTypeUpdated: (customType) {
+        setState(() {
+          final index = customItemTypes.indexWhere(
+            (candidate) => candidate.id == customType.id,
+          );
+          if (index >= 0) customItemTypes[index] = customType;
+          for (var index = 0; index < inventory.length; index++) {
+            final item = inventory[index];
+            if (item.customTypeId == customType.id) {
+              inventory[index] = item.copyWith(customTypeName: customType.name);
+            }
+          }
+        });
+        _persist();
+      },
+      onCustomItemTypeDeleted: (customType) {
+        setState(() {
+          customItemTypes.removeWhere(
+            (candidate) => candidate.id == customType.id,
+          );
+          for (var index = 0; index < inventory.length; index++) {
+            final item = inventory[index];
+            if (item.customTypeId == customType.id) {
+              inventory[index] = item.copyWith(
+                type: InventoryType.other,
+                customTypeId: '',
+                customTypeName: '',
+                customFieldValues: const {},
+                materialId: '',
+                materialName: '',
+              );
+            }
+          }
+          if (customTypeFilterId == customType.id) {
+            customTypeFilterId = null;
+            type = null;
+          }
+        });
+        _persist();
+      },
+      onBuiltInTypeRenamed: (entry) {
+        setState(() => typeLabelOverrides[entry.key] = entry.value);
+        _persist();
+      },
+      onBuiltInTypeIconChanged: (entry) {
+        setState(() => typeIconOverrides[entry.key] = entry.value);
+        _persist();
+      },
+      onBuiltInTypeDepletionChanged: (entry) {
+        setState(() => typeDepletionSettings[entry.key] = entry.value);
+        _persist();
+      },
+      onBuiltInTypeStatusChanged: (entry) {
+        setState(() => typeStatusSettings[entry.key] = entry.value);
+        _persist();
+      },
+      onBuiltInTypeDeleted: _deleteBuiltInType,
+      onBuiltInTypeRestored: (key) {
+        setState(() => deletedTypeKeys.remove(key));
+        _persist();
+      },
+      canDeleteCustomItemTypes: workspaceOwner,
       onProductAdded: (product) {
         setState(() => products.add(product));
         _persist();
@@ -2542,6 +8013,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       },
       onMachineAdded: (machine) {
         setState(() => machines.add(machine));
+        _persist();
+      },
+      onMachineUpdated: (machine) {
+        setState(() {
+          final index = machines.indexWhere(
+            (candidate) => candidate.id == machine.id,
+          );
+          if (index >= 0) machines[index] = machine;
+        });
         _persist();
       },
       onKitAdded: (kit) {
@@ -2558,19 +8038,645 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Future<void> _openKitDetails(KitRecord kit) => showDialog<void>(
+  Future<bool> _importKitPackage() async {
+    if (!(Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      _showPermissionDenied('Kit package import is available on desktop.');
+      return false;
+    }
+    final picked = await FilePicker.pickFile(
+      dialogTitle: 'Import Inventorinator kit package',
+      type: FileType.custom,
+      allowedExtensions: const ['json'],
+    );
+    if (picked == null || !mounted) return false;
+    try {
+      final bytes = await picked.readAsBytes();
+      if (bytes.length > 10 * 1024 * 1024) {
+        throw const FormatException('Kit packages must be 10 MB or smaller.');
+      }
+      final parsed = parseInventorinatorKitPackage(utf8.decode(bytes));
+      if (!mounted) return false;
+      if (!parsed.isValid) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Kit package needs attention'),
+            content: SizedBox(
+              width: 620,
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: parsed.errors.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (_, index) => Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.error_outline_rounded,
+                      color: Color(0xffff6b7a),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(parsed.errors[index])),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+        return false;
+      }
+      final previewPlan = createKitPackageImportPlan(parsed.package!);
+      if (!mounted) return false;
+      final decision = await showDialog<_KitPackageImportDecision>(
+        context: context,
+        builder: (_) => _KitPackageImportPreviewDialog(plan: previewPlan),
+      );
+      if (decision == null || !mounted) return false;
+      final plan = createKitPackageImportPlan(
+        parsed.package!,
+        inventoryMatchesByPartId: decision.inventoryMatchesByPartId,
+      );
+      setState(() {
+        inventory
+          ..clear()
+          ..addAll(plan.inventory);
+        brands
+          ..clear()
+          ..addAll(plan.brands);
+        materials
+          ..clear()
+          ..addAll(plan.materials);
+        products
+          ..clear()
+          ..addAll(plan.products);
+        machineTypes
+          ..clear()
+          ..addAll(plan.machineTypes);
+        machines
+          ..clear()
+          ..addAll(plan.machines);
+        kits
+          ..clear()
+          ..addAll(plan.kits);
+        for (final item in plan.newInventoryItems) {
+          _recordAddition(item);
+        }
+        _recordAudit(
+          'import',
+          'kit',
+          _kitPackageStableId('KIT', plan.package.id),
+          {
+            'name': plan.package.name,
+            'parts': plan.package.parts.length.toString(),
+            'machines': plan.package.machines.length.toString(),
+          },
+        );
+        currentPage = 0;
+      });
+      _persist();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${plan.package.name} imported · ${plan.package.parts.length} BOM lines · ${plan.newInventoryItems.length} zero-quantity items added',
+          ),
+        ),
+      );
+      return true;
+    } on FormatException catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kit package import failed: ${error.message}')),
+      );
+      return false;
+    } catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kit package import failed: $error')),
+      );
+      return false;
+    }
+  }
+
+  _KitPackageImportPlan createKitPackageImportPlan(
+    InventorinatorKitPackage package, {
+    Map<String, String> inventoryMatchesByPartId = const {},
+  }) {
+    final existingInventory = [...inventory];
+    final nextInventory = [...inventory];
+    final nextBrands = [...brands];
+    final nextMaterials = [...materials];
+    final nextProducts = [...products];
+    final nextMachineTypes = [...machineTypes];
+    final nextMachines = [...machines];
+    final nextKits = [...kits];
+    final newInventoryItems = <InventoryItem>[];
+    var newProductCount = 0;
+    var reusedProductCount = 0;
+    var newMachineCount = 0;
+    var updatedMachineCount = 0;
+    final matchedInventoryIdsByPartId = <String, String>{};
+    final kitId = _kitPackageStableId('KIT', package.id);
+
+    final importedMachineIds = <String>[];
+    for (final packageMachine in package.machines) {
+      var machineTypeIndex = nextMachineTypes.indexWhere(
+        (candidate) =>
+            _normalized(candidate.name) == _normalized(packageMachine.type),
+      );
+      if (machineTypeIndex < 0) {
+        nextMachineTypes.add(
+          MachineTypeRecord(
+            id: _kitPackageStableId('MT', package.id, packageMachine.type),
+            name: packageMachine.type,
+          ),
+        );
+        machineTypeIndex = nextMachineTypes.length - 1;
+      }
+      final stableMachineId = _kitPackageStableId(
+        'MCH',
+        package.id,
+        packageMachine.id,
+      );
+      var machineIndex = nextMachines.indexWhere(
+        (candidate) => candidate.id == stableMachineId,
+      );
+      machineIndex = machineIndex >= 0
+          ? machineIndex
+          : nextMachines.indexWhere(
+              (candidate) =>
+                  _normalized(candidate.name) ==
+                  _normalized(packageMachine.name),
+            );
+      final sourceUrls = packageMachine.sources
+          .map((source) => source.url)
+          .toSet()
+          .toList();
+      if (machineIndex >= 0) {
+        final existing = nextMachines[machineIndex];
+        nextMachines[machineIndex] = MachineRecord(
+          id: existing.id,
+          name: packageMachine.name,
+          model: packageMachine.model,
+          address: packageMachine.address,
+          typeId: nextMachineTypes[machineTypeIndex].id,
+          kitIds: {...existing.kitIds, kitId},
+          sourceUrls: {...existing.sourceUrls, ...sourceUrls}.toList(),
+          imageBytes: existing.imageBytes,
+        );
+        importedMachineIds.add(existing.id);
+        updatedMachineCount++;
+      } else {
+        final machine = MachineRecord(
+          id: stableMachineId,
+          name: packageMachine.name,
+          model: packageMachine.model,
+          address: packageMachine.address,
+          typeId: nextMachineTypes[machineTypeIndex].id,
+          kitIds: {kitId},
+          sourceUrls: sourceUrls,
+        );
+        nextMachines.add(machine);
+        importedMachineIds.add(machine.id);
+        newMachineCount++;
+      }
+    }
+
+    final sectionNames = {
+      for (final section in package.sections) section.id: section.name,
+    };
+    final bom = <KitBomEntry>[];
+    for (final part in package.parts) {
+      final packageType = InventoryType.values.byName(part.type);
+      final hasMatchOverride = inventoryMatchesByPartId.containsKey(part.id);
+      final requestedInventoryId = inventoryMatchesByPartId[part.id] ?? '';
+      var matchedInventoryIndex = requestedInventoryId.isEmpty
+          ? -1
+          : nextInventory.indexWhere(
+              (candidate) => candidate.id == requestedInventoryId,
+            );
+      if (!hasMatchOverride) {
+        matchedInventoryIndex = nextInventory.indexWhere(
+          (candidate) =>
+              !candidate.archived &&
+              candidate.type == packageType &&
+              _normalized(candidate.name) == _normalized(part.name),
+        );
+        if (matchedInventoryIndex < 0) {
+          final rankedCandidates =
+              nextInventory
+                  .asMap()
+                  .entries
+                  .where((entry) => !entry.value.archived)
+                  .map(
+                    (entry) => (
+                      index: entry.key,
+                      score: _kitPartInventoryMatchScore(part, entry.value),
+                    ),
+                  )
+                  .toList()
+                ..sort((a, b) => b.score.compareTo(a.score));
+          if (rankedCandidates.isNotEmpty &&
+              rankedCandidates.first.score >= .84) {
+            matchedInventoryIndex = rankedCandidates.first.index;
+          }
+        }
+      }
+      final matchedInventory = matchedInventoryIndex >= 0
+          ? nextInventory[matchedInventoryIndex]
+          : null;
+      final type = matchedInventory?.type ?? packageType;
+      if (matchedInventory != null) {
+        matchedInventoryIdsByPartId[part.id] = matchedInventory.id;
+      }
+      String brandId = '';
+      if (part.brand.isNotEmpty) {
+        var brandIndex = nextBrands.indexWhere(
+          (candidate) => _normalized(candidate.name) == _normalized(part.brand),
+        );
+        if (brandIndex < 0) {
+          nextBrands.add(
+            BrandRecord(
+              id: _kitPackageStableId('BR', package.id, part.brand),
+              name: part.brand,
+              vendorIds: const {},
+              categories: {type},
+            ),
+          );
+          brandIndex = nextBrands.length - 1;
+        } else if (!nextBrands[brandIndex].categories.contains(type)) {
+          final existing = nextBrands[brandIndex];
+          nextBrands[brandIndex] = BrandRecord(
+            id: existing.id,
+            name: existing.name,
+            vendorIds: existing.vendorIds,
+            categories: {...existing.categories, type},
+            logoBytes: existing.logoBytes,
+          );
+        }
+        brandId = nextBrands[brandIndex].id;
+      }
+
+      MaterialRecord? material;
+      if (part.material.isNotEmpty) {
+        final typeKey = 'type:${type.name}';
+        material = nextMaterials
+            .where(
+              (candidate) =>
+                  candidate.typeKey == typeKey &&
+                  _normalized(candidate.name) == _normalized(part.material),
+            )
+            .firstOrNull;
+        if (material == null) {
+          material = MaterialRecord(
+            id: _kitPackageStableId(
+              'MAT',
+              package.id,
+              '${type.name}-${part.material}',
+            ),
+            name: part.material,
+            typeKey: typeKey,
+          );
+          nextMaterials.add(material);
+        }
+      }
+
+      final stableProductId = _kitPackageStableId('PROD', package.id, part.id);
+      var productIndex = matchedInventory?.catalogProductId == null
+          ? -1
+          : nextProducts.indexWhere(
+              (candidate) => candidate.id == matchedInventory!.catalogProductId,
+            );
+      productIndex = productIndex >= 0
+          ? productIndex
+          : nextProducts.indexWhere(
+              (candidate) => candidate.id == stableProductId,
+            );
+      productIndex = productIndex >= 0
+          ? productIndex
+          : nextProducts.indexWhere(
+              (candidate) =>
+                  candidate.category == type &&
+                  _normalized(candidate.name) ==
+                      _normalized(matchedInventory?.name ?? part.name),
+            );
+      final partSourceUrls = part.sources
+          .map((source) => source.url)
+          .toSet()
+          .toList();
+      late CatalogProduct product;
+      if (productIndex >= 0) {
+        final existing = nextProducts[productIndex];
+        product = CatalogProduct(
+          id: existing.id,
+          brandId: brandId.isEmpty ? existing.brandId : brandId,
+          category: existing.category,
+          name: existing.name,
+          defaultCost: part.unitCost,
+          dryingMinutes: existing.dryingMinutes,
+          printingInstructions: existing.printingInstructions,
+          dryingInstructions: existing.dryingInstructions,
+          storageInstructions: existing.storageInstructions,
+          sourceUrls: {...existing.sourceUrls, ...partSourceUrls}.toList(),
+          imageBytes: existing.imageBytes,
+        );
+        nextProducts[productIndex] = product;
+        reusedProductCount++;
+      } else {
+        product = CatalogProduct(
+          id: stableProductId,
+          brandId: brandId,
+          category: type,
+          name: matchedInventory?.name ?? part.name,
+          defaultCost: matchedInventory?.cost ?? part.unitCost,
+          sourceUrls: partSourceUrls,
+        );
+        nextProducts.add(product);
+        newProductCount++;
+      }
+
+      if (matchedInventoryIndex >= 0 &&
+          nextInventory[matchedInventoryIndex].catalogProductId != product.id) {
+        nextInventory[matchedInventoryIndex] =
+            nextInventory[matchedInventoryIndex].copyWith(
+              catalogProductId: product.id,
+            );
+      }
+      final forceNewInventoryItem =
+          hasMatchOverride && requestedInventoryId.isEmpty;
+      final inventoryExists =
+          matchedInventoryIndex >= 0 ||
+          (!forceNewInventoryItem &&
+              nextInventory.any(
+                (candidate) =>
+                    candidate.catalogProductId == product.id ||
+                    (candidate.type == packageType &&
+                        _normalized(candidate.name) == _normalized(part.name)),
+              ));
+      if (!inventoryExists) {
+        final item = InventoryItem(
+          id: _kitPackageStableId('INV', package.id, part.id),
+          name: part.name,
+          type: type,
+          compatibility: part.compatibility,
+          added: DateTime.now(),
+          cost: part.unitCost,
+          color: _typeColor(type),
+          quantity: 0,
+          brand: part.brand,
+          productUrl:
+              partSourceUrls.firstOrNull ??
+              package.sources.firstOrNull?.url ??
+              '',
+          compatibleMachineIds: importedMachineIds,
+          catalogProductId: product.id,
+          materialId: material?.id ?? '',
+          materialName: material?.name ?? '',
+        );
+        nextInventory.add(item);
+        newInventoryItems.add(item);
+      }
+      bom.add(
+        KitBomEntry(
+          id: _kitPackageStableId('LINE', package.id, part.id),
+          productId: product.id,
+          quantity: part.quantity,
+          name: part.name,
+          section: sectionNames[part.sectionId]!,
+        ),
+      );
+    }
+
+    final kitIndex = nextKits.indexWhere((candidate) => candidate.id == kitId);
+    final kit = KitRecord(
+      id: kitId,
+      name: package.name,
+      bom: bom,
+      sections: package.sections.map((section) => section.name).toList(),
+      sourceUrls: package.sources.map((source) => source.url).toList(),
+      imageBytes: kitIndex >= 0 ? nextKits[kitIndex].imageBytes : null,
+    );
+    if (kitIndex >= 0) {
+      nextKits[kitIndex] = kit;
+    } else {
+      nextKits.add(kit);
+    }
+
+    return _KitPackageImportPlan(
+      package: package,
+      existingInventory: existingInventory,
+      inventory: nextInventory,
+      brands: nextBrands,
+      materials: nextMaterials,
+      products: nextProducts,
+      machineTypes: nextMachineTypes,
+      machines: nextMachines,
+      kits: nextKits,
+      newInventoryItems: newInventoryItems,
+      newProductCount: newProductCount,
+      reusedProductCount: reusedProductCount,
+      newMachineCount: newMachineCount,
+      updatedMachineCount: updatedMachineCount,
+      kitWillUpdate: kitIndex >= 0,
+      matchedInventoryIdsByPartId: matchedInventoryIdsByPartId,
+    );
+  }
+
+  void _deleteBuiltInType(String key) {
+    setState(() {
+      deletedTypeKeys.add(key);
+      typeLabelOverrides.remove(key);
+      typeIconOverrides.remove(key);
+
+      if (key.startsWith('item:')) {
+        final typeName = key.substring('item:'.length);
+        final deletedType = InventoryType.values
+            .where((candidate) => candidate.name == typeName)
+            .firstOrNull;
+        if (deletedType != null && deletedType != InventoryType.other) {
+          for (var index = 0; index < inventory.length; index++) {
+            final item = inventory[index];
+            if (item.type == deletedType) {
+              inventory[index] = item.copyWith(type: InventoryType.other);
+            }
+          }
+          for (var index = 0; index < products.length; index++) {
+            final product = products[index];
+            if (product.category != deletedType) continue;
+            products[index] = CatalogProduct(
+              id: product.id,
+              brandId: product.brandId,
+              category: InventoryType.other,
+              name: product.name,
+              defaultCost: product.defaultCost,
+              dryingMinutes: product.dryingMinutes,
+              printingInstructions: product.printingInstructions,
+              dryingInstructions: product.dryingInstructions,
+              storageInstructions: product.storageInstructions,
+              sourceUrls: product.sourceUrls,
+              imageBytes: product.imageBytes,
+            );
+          }
+          if (type == deletedType) type = null;
+        }
+      } else if (key.startsWith('catalog:')) {
+        final filterName = key.substring('catalog:'.length);
+        if (catalogFilter?.name == filterName) catalogFilter = null;
+      }
+      currentPage = 0;
+    });
+    _persist();
+  }
+
+  Future<void> _openKitDetails(KitRecord kit) {
+    final availableQuantity = _inventoryAvailabilitySnapshot();
+    return showDialog<void>(
+      context: context,
+      builder: (_) => KitDetailsDialog(
+        kit: kit,
+        kits: kits,
+        products: products,
+        inventory: inventory,
+        availableQuantity: availableQuantity,
+        onMatchInventory: _matchKitBomLineToInventory,
+        canMatchInventory: currentRole.canManageCatalog,
+        onAddShortage: _addKitShortageToShoppingList,
+        onBuild: _createBuild,
+        canBuild: currentRole.canCreateBuilds,
+        canDelete: currentRole.canHardDeleteItems,
+        onDelete: _confirmDeleteKit,
+        buildDisabledReason: currentRole.canCreateBuilds
+            ? null
+            : _buildDisabledReason,
+      ),
+    );
+  }
+
+  Future<void> _openMachineDetails(MachineRecord machine) => showDialog<void>(
     context: context,
-    builder: (_) => KitDetailsDialog(
-      kit: kit,
-      kits: kits,
-      products: products,
-      availableQuantity: _availableInventoryQuantity,
-      onBuild: _createBuild,
-      canBuild: currentRole.canCreateBuilds,
-      buildDisabledReason: currentRole.canCreateBuilds
-          ? null
-          : _buildDisabledReason,
-    ),
+    builder: (dialogContext) {
+      final linkedKits = kits
+          .where((kit) => machine.kitIds.contains(kit.id))
+          .toList();
+      final typeName = _machineTypePath(machine.typeId).trim();
+      return AlertDialog(
+        key: Key('machine-details-${machine.id}'),
+        title: Row(
+          children: [
+            _catalogRecordVisual(
+              machine.imageBytes,
+              _isPrinter(machine)
+                  ? Icons.print_outlined
+                  : Icons.precision_manufacturing_outlined,
+              _isPrinter(machine)
+                  ? const Color(0xff42d8c7)
+                  : const Color(0xffffb34d),
+              48,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(machine.name)),
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (typeName.isNotEmpty)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.category_outlined),
+                    title: const Text('Type'),
+                    subtitle: Text(typeName),
+                  ),
+                if (machine.model.trim().isNotEmpty)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.badge_outlined),
+                    title: const Text('Model'),
+                    subtitle: Text(machine.model),
+                  ),
+                if (machine.address.trim().isNotEmpty)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.lan_outlined),
+                    title: const Text('Address'),
+                    subtitle: SelectableText(
+                      machine.address,
+                      key: Key('machine-address-${machine.id}'),
+                    ),
+                  ),
+                if (linkedKits.isNotEmpty) ...[
+                  const Divider(),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8, bottom: 4),
+                    child: Text(
+                      'Associated kits',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  for (final kit in linkedKits)
+                    ListTile(
+                      key: Key('machine-kit-details-${kit.id}'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.inventory_2_outlined),
+                      title: Text(kit.name),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        Navigator.of(dialogContext).pop();
+                        unawaited(_openKitDetails(kit));
+                      },
+                    ),
+                ],
+                if (machine.sourceUrls.isNotEmpty) ...[
+                  const Divider(),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8, bottom: 4),
+                    child: Text(
+                      'Sources',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  for (final source in machine.sourceUrls)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.link_rounded),
+                      title: Text(
+                        source,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.open_in_new_rounded),
+                      onTap: () {
+                        final uri = Uri.tryParse(source);
+                        if (uri != null) {
+                          unawaited(
+                            launchUrl(
+                              uri,
+                              mode: LaunchMode.externalApplication,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    },
   );
 
   String get _buildDisabledReason {
@@ -2581,7 +8687,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           jsonDecode(source) as Map<String, dynamic>,
         );
         if (config.syncMode == 'supabase' && config.workspaceRole == null) {
-          return 'Build unavailable: the cloud role has not loaded. Update the server role migration, then sync again.';
+          return 'Build unavailable: the remote role has not loaded. Update the server role migration, then sync again.';
         }
       } catch (_) {
         // Fall through to the normal role explanation.
@@ -2607,10 +8713,317 @@ class _InventoryHomeState extends State<InventoryHome> {
         (item) =>
             !item.archived &&
             item.quantity > 0 &&
-            (item.catalogProductId == productId ||
+            (item.id == productId ||
+                item.catalogProductId == productId ||
                 _normalized(item.name) == _normalized(name)),
       )
       .fold(0, (total, item) => total + item.quantity);
+
+  String _stockKey(String productId, String name) {
+    final normalizedName = _normalized(name);
+    final match =
+        inventory
+            .where(
+              (item) =>
+                  item.id == productId || item.catalogProductId == productId,
+            )
+            .firstOrNull ??
+        inventory
+            .where((item) => _normalized(item.name) == normalizedName)
+            .firstOrNull;
+    if (match != null) {
+      return match.catalogProductId?.isNotEmpty == true
+          ? 'product:${match.catalogProductId}'
+          : 'inventory:${match.id}';
+    }
+    return productId.isEmpty ? 'name:$normalizedName' : 'product:$productId';
+  }
+
+  double _reservedInventoryQuantity(String productId, String name) {
+    final key = _stockKey(productId, name);
+    return builds
+        .where((build) => build.completedAt == null)
+        .expand((build) => build.lines)
+        .where((line) => _stockKey(line.productId, line.name) == key)
+        .fold<double>(
+          0,
+          (total, line) =>
+              total +
+              (line.requiredQuantity - line.usedQuantity).clamp(
+                0,
+                line.requiredQuantity,
+              ),
+        );
+  }
+
+  double Function(String productId, String name)
+  _inventoryAvailabilitySnapshot() {
+    final byId = <String, InventoryItem>{};
+    final byCatalogId = <String, InventoryItem>{};
+    final byName = <String, InventoryItem>{};
+    for (final item in inventory) {
+      byId.putIfAbsent(item.id, () => item);
+      final catalogId = item.catalogProductId;
+      if (catalogId != null && catalogId.isNotEmpty) {
+        byCatalogId.putIfAbsent(catalogId, () => item);
+      }
+      byName.putIfAbsent(_normalized(item.name), () => item);
+    }
+
+    String stockKey(String productId, String name) {
+      final normalizedName = _normalized(name);
+      final match =
+          byId[productId] ?? byCatalogId[productId] ?? byName[normalizedName];
+      if (match != null) {
+        return match.catalogProductId?.isNotEmpty == true
+            ? 'product:${match.catalogProductId}'
+            : 'inventory:${match.id}';
+      }
+      return productId.isEmpty ? 'name:$normalizedName' : 'product:$productId';
+    }
+
+    final reservedByKey = <String, double>{};
+    for (final build in builds.where((build) => build.completedAt == null)) {
+      for (final line in build.lines) {
+        final remaining = (line.requiredQuantity - line.usedQuantity).clamp(
+          0,
+          line.requiredQuantity,
+        );
+        final key = stockKey(line.productId, line.name);
+        reservedByKey[key] = (reservedByKey[key] ?? 0) + remaining;
+      }
+    }
+
+    return (productId, name) {
+      final normalizedName = _normalized(name);
+      final available = inventory
+          .where(
+            (item) =>
+                !item.archived &&
+                item.quantity > 0 &&
+                (item.id == productId ||
+                    item.catalogProductId == productId ||
+                    _normalized(item.name) == normalizedName),
+          )
+          .fold<double>(0, (total, item) => total + item.quantity);
+      return math.max(
+        0,
+        available - (reservedByKey[stockKey(productId, name)] ?? 0),
+      );
+    };
+  }
+
+  Map<String, ({String productId, String name, double quantity})>
+  _flattenKitRequirements(KitRecord kit) {
+    final result =
+        <String, ({String productId, String name, double quantity})>{};
+    void expand(KitRecord source, double multiplier, Set<String> path) {
+      if (!path.add(source.id)) return;
+      for (final line in source.bom) {
+        final nested = kits
+            .where((candidate) => candidate.id == line.productId)
+            .firstOrNull;
+        if (nested != null) {
+          expand(nested, multiplier * line.quantity, {...path});
+          continue;
+        }
+        final name = _kitLineName(line);
+        final key = _stockKey(line.productId, name);
+        final existing = result[key];
+        result[key] = (
+          productId: line.productId,
+          name: name,
+          quantity: (existing?.quantity ?? 0) + line.quantity * multiplier,
+        );
+      }
+    }
+
+    expand(kit, 1, <String>{});
+    return result;
+  }
+
+  _KitBuildability _kitBuildability(KitRecord kit) {
+    final requirements = _flattenKitRequirements(kit).values;
+    if (requirements.isEmpty) {
+      return const _KitBuildability(
+        buildCount: 0,
+        missingLineCount: 0,
+        reservedQuantity: 0,
+      );
+    }
+    var count = 1 << 30;
+    var missing = 0;
+    var reserved = 0.0;
+    for (final requirement in requirements) {
+      final raw = _availableInventoryQuantity(
+        requirement.productId,
+        requirement.name,
+      );
+      final held = _reservedInventoryQuantity(
+        requirement.productId,
+        requirement.name,
+      );
+      final available = math.max(0, raw - held);
+      reserved += math.min(raw, held);
+      if (available + .0001 < requirement.quantity) missing++;
+      count = math.min(count, (available / requirement.quantity).floor());
+    }
+    return _KitBuildability(
+      buildCount: count == 1 << 30 ? 0 : count,
+      missingLineCount: missing,
+      reservedQuantity: reserved,
+    );
+  }
+
+  Future<void> _openBuildability() => showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      final rows =
+          [for (final kit in kits) (kit: kit, status: _kitBuildability(kit))]
+            ..sort((left, right) {
+              final byReady = right.status.buildCount.compareTo(
+                left.status.buildCount,
+              );
+              return byReady != 0
+                  ? byReady
+                  : left.kit.name.compareTo(right.kit.name);
+            });
+      return AlertDialog(
+        key: const Key('buildability-dialog'),
+        title: const Row(
+          children: [
+            Icon(Icons.inventory_outlined),
+            SizedBox(width: 10),
+            Expanded(child: Text('What can I build?')),
+          ],
+        ),
+        content: SizedBox(
+          width: 680,
+          height: math.min(620, 108.0 * rows.length + 40),
+          child: rows.isEmpty
+              ? const Center(
+                  child: Text('Add a kit to calculate buildability.'),
+                )
+              : ListView.separated(
+                  itemCount: rows.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final row = rows[index];
+                    final status = row.status;
+                    return ListTile(
+                      key: Key('buildability-${row.kit.id}'),
+                      leading: CircleAvatar(
+                        child: status.canBuild
+                            ? const Icon(Icons.check_rounded)
+                            : const _ShoppingCartIcon(),
+                      ),
+                      title: Text(row.kit.name),
+                      subtitle: Text(
+                        status.canBuild
+                            ? 'Buildable ×${status.buildCount}${status.reservedQuantity > 0 ? ' · ${_formatBomQuantity(status.reservedQuantity)} reserved by active builds' : ''}'
+                            : '${status.missingLineCount} shortage${status.missingLineCount == 1 ? '' : 's'}${status.reservedQuantity > 0 ? ' · ${_formatBomQuantity(status.reservedQuantity)} reserved' : ''}',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        Navigator.of(dialogContext).pop();
+                        unawaited(_openKitDetails(row.kit));
+                      },
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+
+  KitRecord _matchKitBomLineToInventory(
+    KitRecord source,
+    int lineIndex,
+    InventoryItem item,
+  ) {
+    if (!currentRole.canManageCatalog || lineIndex >= source.bom.length) {
+      return source;
+    }
+    final previous = source.bom[lineIndex];
+    final updatedLines = [...source.bom];
+    updatedLines[lineIndex] = KitBomEntry(
+      id: previous.id,
+      productId: item.catalogProductId ?? item.id,
+      quantity: previous.quantity,
+      name: item.name,
+      section: previous.section,
+    );
+    final updated = KitRecord(
+      id: source.id,
+      name: source.name,
+      bom: List.unmodifiable(updatedLines),
+      sections: source.sections,
+      sourceUrls: source.sourceUrls,
+      imageBytes: source.imageBytes,
+    );
+    setState(() {
+      final index = kits.indexWhere((candidate) => candidate.id == source.id);
+      if (index >= 0) kits[index] = updated;
+      _recordAudit('edit', 'kit', source.id, {
+        'name': source.name,
+        'bomLine': previous.name ?? previous.productId,
+        'matchedInventory': item.name,
+        'matchedInventoryId': item.id,
+      });
+    });
+    _persist();
+    return updated;
+  }
+
+  void _addKitShortageToShoppingList(
+    KitRecord kit,
+    KitBomEntry line,
+    double missing,
+  ) {
+    if (missing <= 0) return;
+    final existingIndex = shoppingList.indexWhere(
+      (entry) =>
+          entry.kitId == kit.id &&
+          entry.bomLineId == line.id &&
+          entry.status != ShoppingListStatus.received,
+    );
+    final name = _kitLineName(line);
+    setState(() {
+      if (existingIndex >= 0) {
+        final existing = shoppingList[existingIndex];
+        shoppingList[existingIndex] = existing.copyWith(
+          quantityNeeded: math.max(existing.quantityNeeded, missing),
+        );
+      } else {
+        shoppingList.add(
+          ShoppingListEntry(
+            id: 'SHOP-${DateTime.now().microsecondsSinceEpoch}',
+            name: name,
+            productId: line.productId,
+            quantityNeeded: missing,
+            kitId: kit.id,
+            bomLineId: line.id,
+            sourceUrl: kit.sourceUrls.firstOrNull ?? '',
+          ),
+        );
+      }
+      _recordAudit('add', 'shopping', line.id, {
+        'kit': kit.name,
+        'item': name,
+        'quantity': missing.toString(),
+      });
+    });
+    _persist();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$name added to the shopping list.')),
+    );
+  }
 
   void _createBuild(KitRecord kit) {
     if (!currentRole.canCreateBuilds) {
@@ -2620,7 +9033,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       return;
     }
     final lines = <BuildLine>[];
-    void expand(KitRecord source, String sectionPrefix, Set<String> path) {
+    void expand(
+      KitRecord source,
+      String sectionPrefix,
+      double multiplier,
+      Set<String> path,
+    ) {
       if (!path.add(source.id)) return;
       for (final line in source.bom) {
         final section = [sectionPrefix, line.section]
@@ -2630,7 +9048,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             .where((candidate) => candidate.id == line.productId)
             .firstOrNull;
         if (nested != null) {
-          expand(nested, section.isEmpty ? nested.name : section, {...path});
+          expand(
+            nested,
+            section.isEmpty ? nested.name : section,
+            multiplier * line.quantity,
+            {...path},
+          );
         } else {
           lines.add(
             BuildLine(
@@ -2638,14 +9061,14 @@ class _InventoryHomeState extends State<InventoryHome> {
               productId: line.productId,
               name: _kitLineName(line),
               section: section.isEmpty ? 'Unassigned' : section,
-              requiredQuantity: line.quantity,
+              requiredQuantity: line.quantity * multiplier,
             ),
           );
         }
       }
     }
 
-    expand(kit, '', <String>{});
+    expand(kit, '', 1, <String>{});
     final build = BuildRecord(
       id: 'BUILD-${DateTime.now().microsecondsSinceEpoch}',
       kitId: kit.id,
@@ -2686,6 +9109,27 @@ class _InventoryHomeState extends State<InventoryHome> {
           onCompletedChanged: (completed) =>
               _setBuildCompleted(build, completed),
         ),
+      );
+
+  KitRecord _kitForBuild(BuildRecord build) =>
+      kits.where((candidate) => candidate.id == build.kitId).firstOrNull ??
+      KitRecord(
+        id: build.kitId,
+        name: build.name.replaceFirst(
+          RegExp(r'\s+build$', caseSensitive: false),
+          '',
+        ),
+        sections: build.lines.map((line) => line.section).toSet().toList(),
+        bom: [
+          for (final line in build.lines)
+            KitBomEntry(
+              id: line.id,
+              productId: line.productId,
+              quantity: line.requiredQuantity,
+              name: line.name,
+              section: line.section,
+            ),
+        ],
       );
 
   bool _ownsBuild(BuildRecord build) =>
@@ -2760,7 +9204,8 @@ class _InventoryHomeState extends State<InventoryHome> {
             (candidate) =>
                 !candidate.archived &&
                 candidate.quantity > 0 &&
-                (candidate.catalogProductId == line.productId ||
+                (candidate.id == line.productId ||
+                    candidate.catalogProductId == line.productId ||
                     _normalized(candidate.name) == _normalized(line.name)),
           )
           .firstOrNull;
@@ -2815,18 +9260,79 @@ class _InventoryHomeState extends State<InventoryHome> {
         position.dx,
         position.dy,
       ),
-      items: const [
-        PopupMenuItem(
+      constraints: const BoxConstraints(minWidth: 220, maxWidth: 280),
+      items: [
+        const PopupMenuItem(
           value: 'edit',
-          child: ListTile(
-            leading: Icon(Icons.edit_outlined),
-            title: Text('Edit kit / BOM'),
-            contentPadding: EdgeInsets.zero,
+          height: 52,
+          padding: EdgeInsets.symmetric(horizontal: 12),
+          child: _PopupActionRow(
+            actionKey: 'edit-kit',
+            icon: Icons.edit_outlined,
+            label: 'Edit kit / BOM',
           ),
         ),
+        if (currentRole.canHardDeleteItems)
+          const PopupMenuItem(
+            value: 'delete',
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'delete-kit',
+              icon: Icons.delete_outline_rounded,
+              label: 'Delete kit',
+              destructive: true,
+            ),
+          ),
       ],
     );
     if (action == 'edit' && mounted) await _openKitEditor(kit);
+    if (action == 'delete' && mounted) await _confirmDeleteKit(kit);
+  }
+
+  Future<bool> _confirmDeleteKit(KitRecord kit) async {
+    final unfinishedBuilds = builds
+        .where((build) => build.kitId == kit.id && build.completedAt == null)
+        .length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${kit.name}?'),
+        content: Text(
+          unfinishedBuilds > 0
+              ? 'You have $unfinishedBuilds ${unfinishedBuilds == 1 ? 'build' : 'builds'} in progress.'
+              : 'This permanently deletes the kit and its BOM.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete-kit'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete Kit (permanent)'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return false;
+    setState(() {
+      kits.removeWhere((candidate) => candidate.id == kit.id);
+      for (final machine in machines) {
+        machine.kitIds.remove(kit.id);
+      }
+      _recordAudit('delete', 'kit', kit.id, {
+        'name': kit.name,
+        'unfinishedBuilds': unfinishedBuilds.toString(),
+      });
+    });
+    _persist();
+    return true;
   }
 
   Future<void> _openScanner() async {
@@ -2869,9 +9375,61 @@ class _InventoryHomeState extends State<InventoryHome> {
           .toList()
         ..sort((a, b) => a.quantity.compareTo(b.quantity));
 
+  String _quantityAlertKey(InventoryItem item) =>
+      'quantity:${item.id}:${item.quantityAlertThreshold}';
+
+  String _moistureAlertKey(InventoryItem item) =>
+      'moisture:${item.id}:${item.lastDriedAt?.toIso8601String()}:${item.moistureAlertThresholdMinutes}';
+
+  List<InventoryItem> get _unreadQuantityAlerts => _quantityAlerts
+      .where(
+        (item) => !_readInventoryAlertKeys.contains(_quantityAlertKey(item)),
+      )
+      .toList();
+
+  List<InventoryItem> get _unreadMoistureAlerts => _moistureAlerts
+      .where(
+        (item) => !_readInventoryAlertKeys.contains(_moistureAlertKey(item)),
+      )
+      .toList();
+
+  Set<String> get _activeInventoryAlertKeys => {
+    ..._quantityAlerts.map(_quantityAlertKey),
+    ..._moistureAlerts.map(_moistureAlertKey),
+  };
+
+  void _saveReadInventoryAlerts() {
+    widget.database?.saveStringPreference(
+      'read_inventory_alert_keys',
+      jsonEncode(_readInventoryAlertKeys.toList()),
+    );
+  }
+
+  void _reconcileReadInventoryAlerts() {
+    final activeKeys = _activeInventoryAlertKeys;
+    final previousLength = _readInventoryAlertKeys.length;
+    _readInventoryAlertKeys.removeWhere((key) => !activeKeys.contains(key));
+    if (_readInventoryAlertKeys.length != previousLength) {
+      _saveReadInventoryAlerts();
+    }
+  }
+
+  void _markInventoryAlertRead(String key) {
+    if (!_readInventoryAlertKeys.add(key)) return;
+    setState(() {});
+    _saveReadInventoryAlerts();
+  }
+
+  void _markAllInventoryAlertsRead() {
+    final keys = _activeInventoryAlertKeys;
+    if (keys.every(_readInventoryAlertKeys.contains)) return;
+    setState(() => _readInventoryAlertKeys.addAll(keys));
+    _saveReadInventoryAlerts();
+  }
+
   int get _inventoryAlertCount => {
-    ..._moistureAlerts.map((item) => item.id),
-    ..._quantityAlerts.map((item) => item.id),
+    ..._unreadMoistureAlerts.map((item) => item.id),
+    ..._unreadQuantityAlerts.map((item) => item.id),
   }.length;
 
   Future<void> _openDebugPanel() async {
@@ -2892,10 +9450,29 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   Future<void> _openAnimationControls() => showDialog<void>(
     context: context,
-    builder: (_) => AnimationControlsDialog(
+    builder: (_) => PersonalizationSettingsDialog(
       animationDurationPercent: animationDurationPercent,
       animationRecurrenceSeconds: animationRecurrenceSeconds,
+      photoCardsEnabled: photoCardsEnabled,
+      customIconAnimationMode: customIconAnimationMode,
+      colorTheme: widget.colorTheme,
+      brightnessMode: widget.brightnessMode,
+      customThemeColor: widget.customThemeColor,
       onSettingsChanged: _updateAnimationSettings,
+      onColorThemeChanged: widget.onColorThemeChanged ?? (_) {},
+      onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
+      onCustomThemeColorChanged: widget.onCustomThemeColorChanged ?? (_) {},
+      onPhotoCardsChanged: (value) {
+        setState(() => photoCardsEnabled = value);
+        widget.database?.saveBoolPreference('photo_cards_enabled', value);
+      },
+      onCustomIconAnimationModeChanged: (value) {
+        setState(() => customIconAnimationMode = value);
+        widget.database?.saveStringPreference(
+          'custom_icon_animation_mode',
+          value.name,
+        );
+      },
     ),
   );
 
@@ -2918,8 +9495,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     context: context,
     builder: (dialogContext) => StatefulBuilder(
       builder: (context, setDialogState) {
-        final moistureAlerts = _moistureAlerts;
-        final quantityAlerts = _quantityAlerts;
+        final moistureAlerts = _unreadMoistureAlerts;
+        final quantityAlerts = _unreadQuantityAlerts;
         return AlertDialog(
           title: const Row(
             children: [
@@ -2970,7 +9547,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 const Divider(),
                 Expanded(
                   child: moistureAlerts.isEmpty && quantityAlerts.isEmpty
-                      ? const Center(child: Text('No inventory alerts.'))
+                      ? const Center(child: Text('No unread inventory alerts.'))
                       : ListView(
                           children: [
                             if (quantityAlerts.isNotEmpty) ...[
@@ -2987,6 +9564,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                               ),
                               ...quantityAlerts.map(
                                 (item) => ListTile(
+                                  key: Key('quantity-alert-${item.id}'),
                                   leading: const Icon(
                                     Icons.inventory_2_outlined,
                                     color: Color(0xffffa552),
@@ -2996,6 +9574,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                     '${_formatBomQuantity(item.quantity)} remaining · alert at ${_formatBomQuantity(item.quantityAlertThreshold!)}',
                                   ),
                                   onTap: () {
+                                    _markInventoryAlertRead(
+                                      _quantityAlertKey(item),
+                                    );
                                     Navigator.pop(dialogContext);
                                     _openDetails(item);
                                   },
@@ -3017,6 +9598,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                               ...moistureAlerts.map((item) {
                                 final remaining = _moistureRemaining(item)!;
                                 return ListTile(
+                                  key: Key('moisture-alert-${item.id}'),
                                   leading: Icon(
                                     Icons.water_drop_rounded,
                                     color: remaining <= Duration.zero
@@ -3026,6 +9608,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                   title: Text(item.name),
                                   subtitle: Text(_moistureRemainingLabel(item)),
                                   onTap: () {
+                                    _markInventoryAlertRead(
+                                      _moistureAlertKey(item),
+                                    );
                                     Navigator.pop(dialogContext);
                                     _openDetails(item);
                                   },
@@ -3039,6 +9624,17 @@ class _InventoryHomeState extends State<InventoryHome> {
             ),
           ),
           actions: [
+            TextButton.icon(
+              key: const Key('mark-all-alerts-read'),
+              onPressed: moistureAlerts.isEmpty && quantityAlerts.isEmpty
+                  ? null
+                  : () {
+                      _markAllInventoryAlertsRead();
+                      setDialogState(() {});
+                    },
+              icon: const Icon(Icons.done_all_rounded),
+              label: const Text('Mark all as read'),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Close'),
@@ -3142,7 +9738,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                             leading: const Icon(Icons.add_circle_outline),
                             title: Text(entry.name),
                             subtitle: Text(
-                              '${_typeLabel(entry.type)} · ${entry.deviceName} · $when',
+                              '${_inventoryTypeDisplayLabel(entry.type)} · ${entry.deviceName} · $when',
                             ),
                           );
                         },
@@ -3162,44 +9758,25 @@ class _InventoryHomeState extends State<InventoryHome> {
   );
 
   Future<bool> _renameThisDevice() async {
-    final controller = TextEditingController(text: deviceName);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Name this device'),
-        content: TextField(
-          key: const Key('device-name'),
-          controller: controller,
-          autofocus: true,
-          maxLength: 40,
-          decoration: const InputDecoration(
-            hintText: 'Workshop desktop, Pixel, Laptop…',
-          ),
-          onSubmitted: (value) => Navigator.pop(dialogContext, value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+    final name = await showDeviceNameDialog(
+      context,
+      initialName: deviceName,
+      explainAndroidRestriction: Platform.isAndroid,
     );
-    controller.dispose();
     final cleaned = name?.trim();
     if (cleaned == null || cleaned.isEmpty || !mounted) return false;
     setState(() => deviceName = cleaned);
     widget.database?.saveStringPreference('device_name', cleaned);
+    widget.database?.saveBoolPreference('device_name_confirmed', true);
     return true;
   }
 
   void _persist() {
+    _reconcileReadInventoryAlerts();
+    _invalidateSearchCaches();
     widget.database?.saveState(_currentStateJson());
     if (!_applyingCloudState) {
+      _localStateRevision++;
       _syncDebounce?.cancel();
       _syncDebounce = Timer(
         const Duration(milliseconds: 700),
@@ -3213,16 +9790,52 @@ class _InventoryHomeState extends State<InventoryHome> {
     vendors: vendors,
     brands: brands,
     spoolTypes: spoolTypes,
+    materials: materials,
     customItemTypes: customItemTypes,
+    typeLabelOverrides: typeLabelOverrides,
+    typeIconOverrides: typeIconOverrides,
+    typeDepletionSettings: typeDepletionSettings,
+    typeStatusSettings: typeStatusSettings,
+    deletedTypeKeys: deletedTypeKeys,
     products: products,
     machineTypes: machineTypes,
     machines: machines,
     kits: kits,
     builds: builds,
+    locations: locations,
+    shoppingList: shoppingList,
     auditLog: auditLog,
     additionHistory: additionHistory,
     historyLimit: historyLimit,
   );
+
+  bool _initializeLegacyLocations() {
+    var changed = false;
+    final byName = <String, StockLocationRecord>{
+      for (final location in locations)
+        location.name.trim().toLowerCase(): location,
+    };
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      final name = item.storageLocation.trim();
+      if (name.isEmpty) continue;
+      final key = name.toLowerCase();
+      final location = byName.putIfAbsent(key, () {
+        final created = StockLocationRecord(
+          id: 'LOC-${base64UrlEncode(utf8.encode(key)).replaceAll('=', '')}',
+          name: name,
+        );
+        locations.add(created);
+        changed = true;
+        return created;
+      });
+      if (item.storageLocationId.isEmpty) {
+        inventory[index] = item.copyWith(storageLocationId: location.id);
+        changed = true;
+      }
+    }
+    return changed;
+  }
 
   void _recordAddition(InventoryItem item) {
     additionHistory.removeWhere((entry) => entry.itemId == item.id);
@@ -3267,7 +9880,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _applyCloudState(String source) {
     final restored = decodeWorkshopState(source);
     if (restored == null) {
-      throw const FormatException('The cloud inventory could not be read.');
+      throw const FormatException('The remote inventory could not be read.');
     }
     _applyingCloudState = true;
     var initializedKitSections = false;
@@ -3275,6 +9888,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       inventory
         ..clear()
         ..addAll(restored.inventory);
+      selectedInventoryIds.retainAll(inventory.map((item) => item.id).toSet());
       _initializeDryingTimers();
       vendors
         ..clear()
@@ -3285,9 +9899,27 @@ class _InventoryHomeState extends State<InventoryHome> {
       spoolTypes
         ..clear()
         ..addAll(restored.spoolTypes);
+      materials
+        ..clear()
+        ..addAll(restored.materials);
       customItemTypes
         ..clear()
         ..addAll(restored.customItemTypes);
+      typeLabelOverrides
+        ..clear()
+        ..addAll(restored.typeLabelOverrides);
+      typeIconOverrides
+        ..clear()
+        ..addAll(restored.typeIconOverrides);
+      typeDepletionSettings
+        ..clear()
+        ..addAll(restored.typeDepletionSettings);
+      typeStatusSettings
+        ..clear()
+        ..addAll(restored.typeStatusSettings);
+      deletedTypeKeys
+        ..clear()
+        ..addAll(restored.deletedTypeKeys);
       products
         ..clear()
         ..addAll(restored.products);
@@ -3297,13 +9929,25 @@ class _InventoryHomeState extends State<InventoryHome> {
       machines
         ..clear()
         ..addAll(restored.machines);
+      selectedMachineIds.retainAll(
+        machines.map((machine) => machine.id).toSet(),
+      );
       kits
         ..clear()
         ..addAll(restored.kits);
+      selectedKitIds.retainAll(kits.map((kit) => kit.id).toSet());
       initializedKitSections = _initializeKitSections();
       builds
         ..clear()
         ..addAll(restored.builds);
+      locations
+        ..clear()
+        ..addAll(restored.locations);
+      shoppingList
+        ..clear()
+        ..addAll(restored.shoppingList);
+      _initializeLegacyLocations();
+      selectedBuildIds.retainAll(builds.map((build) => build.id).toSet());
       auditLog
         ..clear()
         ..addAll(restored.auditLog);
@@ -3430,9 +10074,77 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _sameJson(Object? a, Object? b) =>
       jsonEncode(_sortedJson(a)) == jsonEncode(_sortedJson(b));
 
+  Future<bool> _recoverExpiredOwnerSession(
+    LocalDatabase database,
+    SupabaseConfig failedConfig,
+  ) async {
+    final workspaceId = failedConfig.workspaceId;
+    if (failedConfig.workspaceRole != 'owner' || workspaceId == null) {
+      return false;
+    }
+    final recoveryKey = database.loadWorkspaceRecoveryKey(workspaceId);
+    if (recoveryKey == null) return false;
+    try {
+      return await database.withSyncSessionLock(() async {
+        final source = database.loadSyncConfig();
+        final latest = source == null
+            ? failedConfig
+            : SupabaseConfig.fromJson(
+                jsonDecode(source) as Map<String, dynamic>,
+              );
+        final service = SupabaseSyncService(latest);
+        final session = await service.signInAnonymously();
+        await service.requireCurrentSchema(session);
+        final replacement = await service.recoverWorkspace(
+          session,
+          workspaceId: workspaceId,
+          recoveryKey: recoveryKey,
+          deviceName: deviceName,
+        );
+        final recovered = latest.copyWith(
+          userId: session.userId,
+          workspaceId: replacement.workspaceId,
+          workspaceRole: 'owner',
+          accessToken: session.accessToken,
+          accessTokenExpiresAt: session.expiresAt,
+          refreshToken: session.refreshToken,
+        );
+        database.saveWorkspaceRecoveryKey(
+          replacement.workspaceId,
+          replacement.key,
+        );
+        database.saveSyncConfig(jsonEncode(recovered.toJson()));
+        if (mounted) {
+          setState(() {
+            currentRole = WorkspaceRole.admin;
+            workspaceOwner = true;
+            currentUserId = session.userId;
+          });
+        }
+        return true;
+      });
+    } catch (error) {
+      debugPrint('Automatic owner-session recovery failed: $error');
+      return false;
+    }
+  }
+
   Future<void> _syncAutomatically() async {
     final database = widget.database;
-    if (database == null || _syncing) return;
+    if (database == null || _syncing || _autoSyncPausedForAuthentication) {
+      return;
+    }
+    if (_quantityCommitTimers.isNotEmpty) return;
+    if (_inventoryIsScrolling.value) {
+      _deferredAutoSync?.cancel();
+      _deferredAutoSync = Timer(
+        const Duration(milliseconds: 750),
+        () => unawaited(_syncAutomatically()),
+      );
+      return;
+    }
+    _deferredAutoSync?.cancel();
+    _deferredAutoSync = null;
     final saved = database.loadSyncConfig();
     if (saved == null) return;
     late SupabaseConfig config;
@@ -3449,26 +10161,62 @@ class _InventoryHomeState extends State<InventoryHome> {
         config.workspaceId == null) {
       return;
     }
+    var retryAfterRecovery = false;
     _syncing = true;
     try {
-      final session = await SupabaseSyncService(config).refresh();
-      config = config.copyWith(
-        userId: session.userId,
-        refreshToken: session.refreshToken,
-      );
-      // Supabase rotates refresh tokens. Persist the replacement before doing
-      // any other network work so an interruption cannot strand this device.
-      database.saveSyncConfig(jsonEncode(config.toJson()));
+      final refreshed = await database.withSyncSessionLock(() async {
+        final latestSource = database.loadSyncConfig();
+        final latest = latestSource == null
+            ? config
+            : SupabaseConfig.fromJson(
+                jsonDecode(latestSource) as Map<String, dynamic>,
+              );
+        final cachedSession = latest.cachedSession;
+        if (cachedSession != null) {
+          return (config: latest, session: cachedSession);
+        }
+        final nextSession = await SupabaseSyncService(latest).refresh();
+        final nextConfig = latest.copyWith(
+          userId: nextSession.userId,
+          accessToken: nextSession.accessToken,
+          accessTokenExpiresAt: nextSession.expiresAt,
+          refreshToken: nextSession.refreshToken,
+        );
+        // Refresh tokens rotate. Persist the replacement while the per-database
+        // session lock is held; normal sync polls reuse the access token until
+        // shortly before it expires instead of rotating on every poll.
+        database.saveSyncConfig(jsonEncode(nextConfig.toJson()));
+        return (config: nextConfig, session: nextSession);
+      });
+      config = refreshed.config;
+      final session = refreshed.session;
       var service = SupabaseSyncService(config);
       await service.requireCurrentSchema(session);
       try {
         final role = await service.currentRole(session);
+        final roleChanged = config.workspaceRole != role;
         config = config.copyWith(workspaceRole: role);
-        database.saveSyncConfig(jsonEncode(config.toJson()));
-        if (mounted) {
+        if (roleChanged) {
+          database.saveSyncConfig(jsonEncode(config.toJson()));
+        }
+        if (role == 'owner') {
+          final recoveryKey = await service.ensureRecoveryKey(session);
+          if (recoveryKey != null &&
+              config.workspaceId != null &&
+              database.loadWorkspaceRecoveryKey(config.workspaceId!) !=
+                  recoveryKey) {
+            database.saveWorkspaceRecoveryKey(config.workspaceId!, recoveryKey);
+          }
+        }
+        final nextRole = WorkspaceRole.fromServer(role);
+        final nextOwner = role == 'owner';
+        if (mounted &&
+            (currentRole != nextRole ||
+                workspaceOwner != nextOwner ||
+                currentUserId != session.userId)) {
           setState(() {
-            currentRole = WorkspaceRole.fromServer(role);
-            workspaceOwner = role == 'owner';
+            currentRole = nextRole;
+            workspaceOwner = nextOwner;
             currentUserId = session.userId;
           });
         }
@@ -3485,7 +10233,37 @@ class _InventoryHomeState extends State<InventoryHome> {
       } catch (error) {
         debugPrint('Device registration failed; continuing sync: $error');
       }
+
+      final remoteUpdatedAt = await service.latestUpdatedAt(session);
+      final remoteUnchanged =
+          remoteUpdatedAt != null &&
+          config.lastSyncedAt != null &&
+          remoteUpdatedAt.isAtSameMomentAs(config.lastSyncedAt!);
+      if (remoteUnchanged && _localStateRevision == _lastSyncedLocalRevision) {
+        return;
+      }
+
+      if (remoteUnchanged) {
+        final syncingRevision = _localStateRevision;
+        final local = _canonicalJson(_currentStateJson());
+        final updated = await service.upload(
+          session,
+          local,
+          auditEvents: _pendingAuditEvents,
+        );
+        config = config.copyWith(
+          lastSyncedAt: updated,
+          lastSyncedStateJson: local,
+        );
+        database.saveSyncConfig(jsonEncode(config.toJson()));
+        _lastSyncedLocalRevision = syncingRevision;
+        _pendingAuditEvents.clear();
+        _lastSyncConflict = null;
+        return;
+      }
+
       final cloud = await service.download(session);
+      final syncingRevision = _localStateRevision;
       final local = _canonicalJson(_currentStateJson());
       if (cloud == null) {
         final updated = await service.upload(
@@ -3517,6 +10295,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         config = config.copyWith(lastSyncedStateJson: merged);
       }
       database.saveSyncConfig(jsonEncode(config.toJson()));
+      _lastSyncedLocalRevision = syncingRevision;
       _pendingAuditEvents.clear();
       _lastSyncConflict = null;
     } on WorkshopMergeConflict catch (error) {
@@ -3525,20 +10304,50 @@ class _InventoryHomeState extends State<InventoryHome> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Sync paused: ${error.toString()} Open Cloud sync to choose which version to keep.',
+              'Sync paused: ${error.toString()} Open Remote Sync to choose which version to keep.',
             ),
             duration: const Duration(seconds: 8),
           ),
         );
+      }
+    } on SupabaseSyncException catch (error) {
+      if (error.isInvalidRefreshToken) {
+        retryAfterRecovery = await _recoverExpiredOwnerSession(
+          database,
+          config,
+        );
+        if (!retryAfterRecovery) {
+          _autoSyncPausedForAuthentication = true;
+          _syncPoll?.cancel();
+          debugPrint(
+            'Automatic sync paused until Remote Sync is reopened: $error',
+          );
+          if (mounted && canManageWorkspaceDevices(config.workspaceRole)) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Remote session expired. Open Remote Sync to reconnect.',
+                ),
+                duration: Duration(seconds: 8),
+              ),
+            );
+          }
+        }
+      } else {
+        debugPrint('Automatic sync failed: $error');
       }
     } catch (error) {
       debugPrint('Automatic sync failed: $error');
     } finally {
       _syncing = false;
     }
+    if (retryAfterRecovery && mounted) {
+      _autoSyncPausedForAuthentication = false;
+      unawaited(_syncAutomatically());
+    }
   }
 
-  Future<void> _openCloudSync() async {
+  Future<void> _openCloudSync({String? initialPairingCode}) async {
     final database = widget.database;
     if (database == null) return;
     final source = database.loadSyncConfig();
@@ -3557,6 +10366,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         database: database,
         localStateJson: _currentStateJson(),
         onCloudState: _applyRemoteCloudState,
+        initialPairingCode: initialPairingCode,
       ),
     );
     _startAutoSync();
@@ -3586,7 +10396,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     database.saveSyncConfig(jsonEncode(config.toJson()));
     if (mounted) {
-      await _openCloudSync();
+      await _openCloudSync(initialPairingCode: choice.pairingPayload);
       _startAutoSync();
     }
   }
@@ -3596,48 +10406,118 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (database == null) return;
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Local database'),
-        content: SelectableText(
-          'Inventorinator saves every inventory and catalog change automatically.\n\n${database.path}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
+      builder: (dialogContext) {
+        Widget tile(IconData icon, String label) => Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 32),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        );
+
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.storage_rounded),
+              const SizedBox(width: 10),
+              const Expanded(child: Text('Local database')),
+              IconButton(
+                key: const Key('close-local-database'),
+                tooltip: 'Close',
+                onPressed: () => Navigator.pop(dialogContext),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
           ),
-          OutlinedButton.icon(
-            key: const Key('import-database'),
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              _importDatabase();
-            },
-            icon: const Icon(Icons.file_upload_outlined),
-            label: const Text('Import'),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Inventorinator saves every inventory and catalog change automatically.',
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    database.path,
+                    style: Theme.of(dialogContext).textTheme.bodySmall,
+                  ),
+                  const Divider(height: 28),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      const gap = 10.0;
+                      final useColumns = constraints.maxWidth >= 220;
+                      final tileWidth = useColumns
+                          ? (constraints.maxWidth - gap) / 2
+                          : constraints.maxWidth;
+
+                      Widget action(Widget child) =>
+                          SizedBox(width: tileWidth, height: 104, child: child);
+
+                      return Wrap(
+                        spacing: gap,
+                        runSpacing: gap,
+                        children: [
+                          action(
+                            OutlinedButton(
+                              key: const Key('import-database'),
+                              onPressed: () {
+                                Navigator.pop(dialogContext);
+                                _importDatabase();
+                              },
+                              child: tile(Icons.file_upload_outlined, 'Import'),
+                            ),
+                          ),
+                          action(
+                            OutlinedButton(
+                              key: const Key('export-database'),
+                              onPressed: () {
+                                Navigator.pop(dialogContext);
+                                _exportDatabase();
+                              },
+                              child: tile(
+                                Icons.file_download_outlined,
+                                'Export',
+                              ),
+                            ),
+                          ),
+                          action(
+                            FilledButton(
+                              key: const Key('delete-database'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.red,
+                              ),
+                              onPressed: currentRole.canDeleteDatabase
+                                  ? () async {
+                                      Navigator.pop(dialogContext);
+                                      await _confirmDeleteDatabase();
+                                    }
+                                  : null,
+                              child: tile(
+                                Icons.delete_forever_outlined,
+                                'Delete database',
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
           ),
-          OutlinedButton.icon(
-            key: const Key('export-database'),
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              _exportDatabase();
-            },
-            icon: const Icon(Icons.file_download_outlined),
-            label: const Text('Export'),
-          ),
-          FilledButton.icon(
-            key: const Key('delete-database'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: currentRole.canDeleteDatabase
-                ? () async {
-                    Navigator.pop(dialogContext);
-                    await _confirmDeleteDatabase();
-                  }
-                : null,
-            icon: const Icon(Icons.delete_forever_outlined),
-            label: const Text('Delete database'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -3793,9 +10673,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       machineTypes.clear();
       machines.clear();
       kits.clear();
+      typeIconOverrides.clear();
       additionHistory.clear();
       archivedOnly = false;
       type = null;
+      customTypeFilterId = null;
+      itemColorFilter = null;
     });
     _persist();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3809,6 +10692,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     Uint8List? imageBytes,
   ) async {
     final value = rawCode.trim();
+    const locationPrefix = 'inventorinator:location:';
+    if (value.startsWith(locationPrefix)) {
+      final locationId = value.substring(locationPrefix.length);
+      final location = locations
+          .where(
+            (candidate) =>
+                candidate.id.toLowerCase() == locationId.toLowerCase(),
+          )
+          .firstOrNull;
+      if (location == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No location matches “$locationId”.')),
+        );
+        return;
+      }
+      Navigator.of(context).pop();
+      await _openLocation(location);
+      return;
+    }
     if (mode == ScanMode.ingest) {
       if (imageBytes != null) {
         final knownProduct = inventory
@@ -3888,68 +10790,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       return Padding(
         padding: EdgeInsets.fromLTRB(
           compact ? 12 : 20,
-          20,
+          12,
           compact ? 12 : 20,
           14,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (compact) ...[
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _scanButton(),
-                    const SizedBox(width: 8),
-                    _rapidizerButton(),
-                    const SizedBox(width: 8),
-                    ..._centerHeaderActions(),
-                    const SizedBox(width: 8),
-                    ..._databaseHeaderActions(),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _headerIdentity(showText: !narrow, compactLogo: narrow),
-                  SizedBox(width: narrow ? 4 : 12),
-                  _catalogButton(),
-                  const Spacer(),
-                  _viewToggle(),
-                ],
-              ),
-            ] else ...[
-              Row(
-                children: [
-                  _scanButton(),
-                  const SizedBox(width: 8),
-                  _rapidizerButton(),
-                  Expanded(
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: _centerHeaderActions(),
-                      ),
-                    ),
-                  ),
-                  ..._databaseHeaderActions(),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _headerIdentity(),
-                  const SizedBox(width: 16),
-                  _catalogButton(),
-                  const Spacer(),
-                  _viewToggle(),
-                ],
-              ),
-            ],
-            const SizedBox(height: 22),
             TextField(
+              key: const Key('inventory-search'),
+              controller: inventorySearchController,
+              focusNode: inventorySearchFocusNode,
               onChanged: (value) => setState(() {
                 query = value;
                 currentPage = 0;
@@ -3959,86 +10810,96 @@ class _InventoryHomeState extends State<InventoryHome> {
                 hintText: compact
                     ? 'Search inventory…'
                     : 'Search items, types, compatibility…  Try “E3DV6”',
-                suffixIcon: const Icon(Icons.tune_rounded),
               ),
             ),
             const SizedBox(height: 14),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+            if (catalogFilter == null &&
+                availableItemColorFilters.isNotEmpty) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _typeChip(null, 'Everything'),
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: FilterChip(
-                      key: const Key('archived-view'),
-                      avatar: const Icon(Icons.archive_outlined, size: 18),
-                      label: const Text('Archived'),
-                      selected: archivedOnly,
-                      onSelected: (selected) => setState(() {
-                        archivedOnly = selected;
-                        catalogFilter = null;
-                        if (selected) type = null;
-                        currentPage = 0;
-                      }),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 8,
-                      ),
-                    ),
-                  ),
-                  _catalogFilterChip(
-                    CatalogViewFilter.kits,
-                    'Kits',
-                    Icons.inventory_2_outlined,
-                  ),
-                  _catalogFilterChip(
-                    CatalogViewFilter.builds,
-                    'Builds',
-                    Icons.construction_rounded,
-                  ),
-                  _catalogFilterChip(
-                    CatalogViewFilter.machines,
-                    'Machines',
-                    Icons.precision_manufacturing_outlined,
-                  ),
-                  _catalogFilterChip(
-                    CatalogViewFilter.printers,
-                    'Printers',
-                    Icons.print_outlined,
-                  ),
-                  _catalogFilterChip(
-                    CatalogViewFilter.tools,
-                    'Tools',
-                    Icons.handyman_outlined,
-                  ),
-                  ...InventoryType.values.map(
-                    (value) => _typeChip(value, _typeLabel(value)),
-                  ),
+                  Expanded(child: _typeFilterPanel(compact: narrow)),
+                  const SizedBox(width: 8),
+                  Expanded(child: _colorFilterPanel(compact: narrow)),
                 ],
               ),
-            ),
-            const SizedBox(height: 14),
-            if (compact) ...[
+              const SizedBox(height: 8),
+              if (narrow) ...[
+                Row(
+                  children: [
+                    _resultCount(),
+                    const Spacer(),
+                    _sortControl(compact: true),
+                    const SizedBox(width: 8),
+                    _viewOptions(),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _mobileSizeControls(),
+              ] else
+                Row(
+                  children: [
+                    _resultCount(),
+                    const SizedBox(width: 12),
+                    _sortControl(showLabel: !compact),
+                    const SizedBox(width: 12),
+                    Expanded(child: _sizeControls(expandSliders: true)),
+                    const SizedBox(width: 12),
+                    _viewOptions(),
+                  ],
+                ),
+            ] else if (compact) ...[
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _resultCount(),
-                  const Spacer(),
-                  if (catalogFilter == null) _sortControl(),
+                  Expanded(child: _typeFilterPanel(compact: narrow)),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 13),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (catalogFilter == null)
+                          _sortControl(compact: narrow),
+                        const SizedBox(width: 8),
+                        _viewOptions(),
+                      ],
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 4),
-              _pageSizeControl(expandSlider: true),
-            ] else
               Row(
                 children: [
                   _resultCount(),
-                  const Spacer(),
-                  if (catalogFilter == null) ...[
-                    _sortControl(showLabel: true),
-                    const SizedBox(width: 12),
-                  ],
-                  _pageSizeControl(),
+                  const SizedBox(width: 12),
+                  Expanded(child: _sizeControls(expandSliders: true)),
+                ],
+              ),
+            ] else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 320, child: _typeFilterPanel()),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 13),
+                      child: Row(
+                        children: [
+                          _resultCount(),
+                          const SizedBox(width: 12),
+                          if (catalogFilter == null) ...[
+                            _sortControl(showLabel: true),
+                            const SizedBox(width: 12),
+                          ],
+                          Expanded(child: _sizeControls(expandSliders: true)),
+                          const SizedBox(width: 12),
+                          _viewOptions(),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
           ],
@@ -4047,47 +10908,199 @@ class _InventoryHomeState extends State<InventoryHome> {
     },
   );
 
-  Widget _resultCount() => Text(
-    catalogFilter == null
-        ? archivedOnly
-              ? '${visibleItems.length} archived'
-              : '${visibleItems.length} items'
-        : '${visibleCatalogRecords.length} ${switch (catalogFilter!) {
-            CatalogViewFilter.kits => 'kits',
-            CatalogViewFilter.builds => 'builds',
-            CatalogViewFilter.machines => 'machines',
-            CatalogViewFilter.printers => 'printers',
-            CatalogViewFilter.tools => 'tools',
-          }}',
-    style: const TextStyle(
-      color: Color(0xff9da5b7),
-      fontWeight: FontWeight.w600,
+  Widget _titleHeader() => LayoutBuilder(
+    builder: (context, constraints) {
+      final narrow = constraints.maxWidth < 600;
+      return Padding(
+        padding: EdgeInsets.fromLTRB(narrow ? 12 : 20, 16, narrow ? 12 : 20, 4),
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: _headerIdentity(compactLogo: narrow),
+          ),
+        ),
+      );
+    },
+  );
+
+  Widget _floatingHeaderActionBar() => ValueListenableBuilder<bool>(
+    valueListenable: _inventoryIsScrolling,
+    child: AnimatedContainer(
+      key: const Key('floating-header-actions'),
+      duration: Duration.zero,
+      decoration: _floatingActionBarDecoration(reduceEffects: false),
+      clipBehavior: Clip.antiAlias,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 920;
+          if (compact) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              child: _compactHeaderActionStrip(
+                showOverflowHint: constraints.maxWidth < 600,
+              ),
+            );
+          }
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              children: [
+                ..._centerHeaderActions(),
+                const Spacer(),
+                ..._databaseHeaderActions(),
+              ],
+            ),
+          );
+        },
+      ),
+    ),
+    builder: (context, scrolling, child) => Padding(
+      key: const Key('floating-header-shell'),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: IgnorePointer(
+        ignoring: scrolling,
+        child: AnimatedOpacity(
+          key: const Key('floating-header-visibility'),
+          duration: Duration.zero,
+          opacity: scrolling ? 0 : 1,
+          child: child,
+        ),
+      ),
     ),
   );
 
-  Widget _sortControl({bool showLabel = false}) {
-    final dropdown = DropdownButton<InventorySort>(
-      value: sort,
-      isExpanded: !showLabel,
-      underline: const SizedBox(),
-      borderRadius: BorderRadius.circular(16),
-      items: const [
-        DropdownMenuItem(value: InventorySort.type, child: Text('Type')),
-        DropdownMenuItem(value: InventorySort.age, child: Text('Age')),
-        DropdownMenuItem(value: InventorySort.cost, child: Text('Cost')),
-        DropdownMenuItem(
-          value: InventorySort.dryingTime,
-          child: Text('Drying time'),
+  BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) =>
+      BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: .55),
         ),
-        DropdownMenuItem(
-          value: InventorySort.moistureRemaining,
-          child: Text('Moisture remaining'),
+        boxShadow: reduceEffects
+            ? const []
+            : [
+                BoxShadow(
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: .18),
+                  blurRadius: 18,
+                  spreadRadius: 1,
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: .46),
+                  blurRadius: 5,
+                  offset: Offset(0, 2),
+                ),
+              ],
+      );
+
+  Widget _resultCount() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        catalogFilter == null
+            ? archivedOnly
+                  ? '${visibleItems.length} archived'
+                  : type == null &&
+                        customTypeFilterId == null &&
+                        itemColorFilter == null
+                  ? '${visibleItems.length + visibleEverythingCatalogRecords.length} records'
+                  : '${visibleItems.length} items'
+            : '${visibleCatalogRecords.length} ${_catalogViewDisplayLabel(catalogFilter!).toLowerCase()}',
+        style: const TextStyle(
+          color: Color(0xff9da5b7),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      if (catalogFilter == CatalogViewFilter.kits) ...[
+        const SizedBox(width: 10),
+        Tooltip(
+          message: 'What can I build?',
+          child: IconButton.outlined(
+            key: const Key('open-buildability'),
+            onPressed: _openBuildability,
+            icon: const Icon(Icons.inventory_outlined, size: 18),
+          ),
         ),
       ],
-      onChanged: (value) => setState(() {
-        sort = value!;
+    ],
+  );
+
+  Widget _sortControl({bool showLabel = false, bool compact = false}) {
+    String label(InventorySort value) => switch (value) {
+      InventorySort.type => 'Type',
+      InventorySort.quantity => 'Quantity',
+      InventorySort.age => 'Age',
+      InventorySort.cost => 'Cost',
+      InventorySort.dryingTime => 'Drying time',
+      InventorySort.moistureRemaining => 'Moisture remaining',
+    };
+    IconData icon(InventorySort value) => switch (value) {
+      InventorySort.type => Icons.category_outlined,
+      InventorySort.quantity => Icons.numbers_rounded,
+      InventorySort.age => Icons.schedule_rounded,
+      InventorySort.cost => Icons.attach_money_rounded,
+      InventorySort.dryingTime => Icons.local_fire_department_outlined,
+      InventorySort.moistureRemaining => Icons.water_drop_outlined,
+    };
+    final dropdown = PopupMenuButton<InventorySort>(
+      key: const Key('sort-menu'),
+      tooltip: 'Sort items',
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      initialValue: sort,
+      constraints: const BoxConstraints(minWidth: 230, maxWidth: 280),
+      onSelected: (value) => setState(() {
+        sort = value;
         currentPage = 0;
       }),
+      itemBuilder: (context) => [
+        for (final value in InventorySort.values)
+          PopupMenuItem(
+            value: value,
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'sort-${value.name}',
+              icon: icon(value),
+              label: label(value),
+              selected: sort == value,
+            ),
+          ),
+      ],
+      child: _GlassFilterChip(
+        key: const Key('sort-glass-surface'),
+        selected: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 9, 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon(sort),
+                size: 17,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              if (!compact) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    label(sort),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -4100,49 +11113,195 @@ class _InventoryHomeState extends State<InventoryHome> {
           const SizedBox(width: 8),
           dropdown,
         ] else
-          SizedBox(width: 140, child: dropdown),
+          SizedBox(width: compact ? 64 : 180, child: dropdown),
       ],
     );
   }
 
-  Widget _pageSizeControl({bool expandSlider = false}) {
-    final slider = Slider(
-      key: const Key('page-size-slider'),
-      value: pageSizeIndex.toDouble(),
-      min: 0,
-      max: (_pageSizes.length - 1).toDouble(),
-      divisions: _pageSizes.length - 1,
-      label: '${_pageSizes[pageSizeIndex]}',
-      onChanged: (value) => setState(() {
-        pageSizeIndex = value.round();
-        currentPage = 0;
-      }),
-    );
-    return Row(
-      mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
-      children: [
-        const Text(
-          'Page size',
-          style: TextStyle(color: Color(0xff7f8798), fontSize: 12),
+  Widget _pageSizeControl({
+    bool expandSlider = false,
+    bool compactLabel = false,
+  }) => ValueListenableBuilder<double>(
+    valueListenable: _pageSizeSliderValue,
+    builder: (context, previewValue, _) {
+      final palette =
+          Theme.of(context).extension<InventorinatorColors>() ??
+          InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      final previewIndex = previewValue.round().clamp(0, _pageSizes.length - 1);
+      final slider = SliderTheme(
+        data: SliderTheme.of(context).copyWith(
+          thumbShape: _pageSizeThumbShape,
+          thumbColor: palette.base,
+          activeTrackColor: palette.accent,
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+          overlayColor: palette.base.withValues(alpha: .16),
         ),
-        if (expandSlider)
-          Expanded(child: slider)
-        else
-          SizedBox(width: 190, child: slider),
-        SizedBox(
-          width: 38,
-          child: Text(
-            '${_pageSizes[pageSizeIndex]}',
-            textAlign: TextAlign.end,
-            style: const TextStyle(fontWeight: FontWeight.w700),
+        child: Slider(
+          key: const Key('page-size-slider'),
+          value: previewValue,
+          min: 0,
+          max: (_pageSizes.length - 1).toDouble(),
+          divisions: _pageSizes.length - 1,
+          label: '${_pageSizes[previewIndex]}',
+          onChanged: _previewPageSize,
+        ),
+      );
+      return Row(
+        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+        children: [
+          Text(
+            compactLabel ? 'Page' : 'Page size',
+            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
           ),
-        ),
+          if (expandSlider)
+            Expanded(child: slider)
+          else
+            SizedBox(width: 190, child: slider),
+          SizedBox(
+            width: compactLabel ? 28 : 38,
+            child: Text(
+              '${_pageSizes[previewIndex]}',
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+
+  void _previewPageSize(double value) {
+    _pageSizeSliderValue.value = value.roundToDouble();
+    _pageSizeCommitTimer?.cancel();
+    _pageSizeCommitTimer = Timer(const Duration(seconds: 1), () {
+      if (!mounted) return;
+      final nextIndex = _pageSizeSliderValue.value.round();
+      if (nextIndex == pageSizeIndex) return;
+      setState(() {
+        pageSizeIndex = nextIndex;
+        currentPage = 0;
+      });
+    });
+  }
+
+  Widget _sizeControls({bool expandSliders = false}) {
+    if (!gridView) return _pageSizeControl(expandSlider: expandSliders);
+    return Row(
+      mainAxisSize: expandSliders ? MainAxisSize.max : MainAxisSize.min,
+      children: [
+        if (expandSliders)
+          Expanded(
+            child: _pageSizeControl(expandSlider: true, compactLabel: true),
+          )
+        else
+          _pageSizeControl(),
+        const SizedBox(width: 14),
+        if (expandSliders)
+          Expanded(
+            child: _cardSizeControl(expandSlider: true, compactLabel: true),
+          )
+        else
+          _cardSizeControl(),
       ],
     );
+  }
+
+  Widget _mobileSizeControls() => Container(
+    key: const Key('mobile-size-controls'),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    child: SliderTheme(
+      data: SliderTheme.of(context).copyWith(
+        trackHeight: 3,
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+      ),
+      child: Column(
+        children: [
+          _pageSizeControl(expandSlider: true),
+          if (gridView) ...[
+            Divider(
+              height: 1,
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+            _cardSizeControl(expandSlider: true),
+          ],
+        ],
+      ),
+    ),
+  );
+
+  Widget _cardSizeControl({
+    bool expandSlider = false,
+    bool compactLabel = false,
+  }) => ValueListenableBuilder<double>(
+    valueListenable: _cardSizeSliderValue,
+    builder: (context, previewValue, _) {
+      final palette =
+          Theme.of(context).extension<InventorinatorColors>() ??
+          InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      final slider = SliderTheme(
+        data: SliderTheme.of(context).copyWith(
+          thumbShape: _cardSizeThumbShape,
+          thumbColor: palette.base,
+          activeTrackColor: palette.accent,
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+          overlayColor: palette.base.withValues(alpha: .16),
+        ),
+        child: Slider(
+          key: const Key('card-size-slider'),
+          value: previewValue,
+          min: _minimumCardSizePercent,
+          max: _maximumCardSizePercent,
+          label: '${previewValue.round()}%',
+          onChanged: _previewCardSize,
+        ),
+      );
+      return Row(
+        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+        children: [
+          Text(
+            compactLabel ? 'Card' : 'Card size',
+            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
+          ),
+          if (expandSlider)
+            Expanded(child: slider)
+          else
+            SizedBox(width: 120, child: slider),
+          SizedBox(
+            width: compactLabel ? 38 : 42,
+            child: Text(
+              '${previewValue.round()}%',
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+
+  void _previewCardSize(double value) {
+    _cardSizeSliderValue.value = value;
+    _cardSizeCommitTimer?.cancel();
+    _cardSizeCommitTimer = Timer(const Duration(seconds: 1), () {
+      if (!mounted) return;
+      final nextValue = _cardSizeSliderValue.value;
+      if (nextValue == cardSizePercent) return;
+      cardSizePercent = nextValue;
+      widget.database?.saveStringPreference(
+        'inventory_card_size_percent',
+        nextValue.toStringAsFixed(1),
+      );
+    });
   }
 
   Widget _headerIdentity({bool showText = true, bool compactLogo = false}) =>
       Row(
+        key: const Key('app-title-block'),
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
@@ -4189,96 +11348,1527 @@ class _InventoryHomeState extends State<InventoryHome> {
         ],
       );
 
-  Widget _scanButton() => OutlinedButton.icon(
-    key: const Key('open-scanner'),
-    onPressed: _openScanner,
-    icon: const Icon(Icons.qr_code_scanner_rounded),
-    label: const Text('Scan'),
+  Widget _compactHeaderActionStrip({required bool showOverflowHint}) => Stack(
+    alignment: Alignment.centerRight,
+    children: [
+      SingleChildScrollView(
+        key: const Key('compact-header-actions'),
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.only(right: showOverflowHint ? 36 : 0),
+        child: Row(
+          children: [
+            ..._centerHeaderActions(),
+            const SizedBox(width: 8),
+            ..._databaseHeaderActions(),
+          ],
+        ),
+      ),
+      if (showOverflowHint)
+        Positioned(
+          right: 0,
+          top: 0,
+          bottom: 0,
+          child: IgnorePointer(
+            child: Container(
+              key: const Key('header-more-indicator'),
+              width: 42,
+              alignment: Alignment.centerRight,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Theme.of(context).scaffoldBackgroundColor
+                        .withValues(alpha: 0),
+                    Theme.of(context).scaffoldBackgroundColor,
+                  ],
+                ),
+              ),
+              child: Icon(
+                Icons.chevron_right_rounded,
+                color: Theme.of(context).colorScheme.primary,
+                size: 28,
+              ),
+            ),
+          ),
+        ),
+    ],
   );
 
-  Widget _rapidizerButton() => OutlinedButton.icon(
-    key: const Key('open-rapidizer'),
-    onPressed: _openRapidizer,
-    icon: const Icon(Icons.bolt_rounded),
-    label: const Text('Rapidizer'),
+  Widget _glassQuickAction({
+    required Key key,
+    required VoidCallback? onPressed,
+    required IconData icon,
+    required String label,
+    bool iconOnly = false,
+    Offset iconOffset = Offset.zero,
+    double iconOnlyWidth = 48,
+  }) {
+    final iconWidget = Transform.translate(
+      offset: iconOffset,
+      child: Icon(icon, size: 24),
+    );
+    if (iconOnly) {
+      return Tooltip(
+        message: label,
+        child: OutlinedButton(
+          key: key,
+          onPressed: onPressed,
+          style: _quickActionStyle.copyWith(
+            minimumSize: WidgetStatePropertyAll(Size(iconOnlyWidth, 44)),
+            maximumSize: WidgetStatePropertyAll(Size(iconOnlyWidth, 44)),
+            padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+            alignment: Alignment.center,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Center(child: iconWidget),
+        ),
+      );
+    }
+    return OutlinedButton(
+      key: key,
+      onPressed: onPressed,
+      style: _quickActionStyle,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [iconWidget, const SizedBox(width: 10), Text(label)],
+      ),
+    );
+  }
+
+  Widget _scanButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
+      _glassQuickAction(
+        key: const Key('open-scanner'),
+        onPressed: _openScanner,
+        icon: Icons.qr_code_scanner_rounded,
+        label: 'Scan',
+        iconOnly: iconOnly,
+        iconOnlyWidth: iconOnlyWidth,
+      );
+
+  Widget _rapidizerButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
+      _glassQuickAction(
+        key: const Key('open-rapidizer'),
+        onPressed: _openRapidizer,
+        icon: Icons.bolt_rounded,
+        label: 'Rapidizer',
+        iconOnly: iconOnly,
+        iconOnlyWidth: iconOnlyWidth,
+      );
+
+  Widget _filamentColorsButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+  }) => Tooltip(
+    message: 'Search FilamentColors.xyz',
+    child: _glassQuickAction(
+      key: const Key('open-filament-colors'),
+      onPressed: _openFilamentColors,
+      icon: Icons.palette_outlined,
+      label: 'FilamentColors.xyz',
+      iconOnly: iconOnly,
+      iconOnlyWidth: iconOnlyWidth,
+    ),
+  );
+
+  Widget _inventoryJsonButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+  }) => Tooltip(
+    message: 'Import inventory items from JSON',
+    child: _glassQuickAction(
+      key: const Key('open-inventory-json-import'),
+      onPressed: currentRole.canCreateInventory ? _importInventoryJson : null,
+      icon: Icons.data_object_rounded,
+      label: 'JSON',
+      iconOnly: iconOnly,
+      iconOnlyWidth: iconOnlyWidth,
+    ),
+  );
+
+  String _locationPath(String id, [Set<String>? visited]) {
+    final seen = visited ?? <String>{};
+    if (!seen.add(id)) return '';
+    final location = locations.where((value) => value.id == id).firstOrNull;
+    if (location == null) return '';
+    if (location.parentId == null) return location.name;
+    final parent = _locationPath(location.parentId!, seen);
+    return parent.isEmpty ? location.name : '$parent / ${location.name}';
+  }
+
+  bool _locationIsWithin(String candidateId, String ancestorId) {
+    var currentId = candidateId;
+    final visited = <String>{};
+    while (visited.add(currentId)) {
+      if (currentId == ancestorId) return true;
+      final current = locations
+          .where((location) => location.id == currentId)
+          .firstOrNull;
+      final parentId = current?.parentId;
+      if (parentId == null) return false;
+      currentId = parentId;
+    }
+    return false;
+  }
+
+  Future<void> _openLocation(
+    StockLocationRecord location, {
+    StateSetter? stockroomRefresh,
+  }) async {
+    final path = _locationPath(location.id);
+    final items =
+        inventory
+            .where(
+              (item) =>
+                  item.storageLocationId.isNotEmpty &&
+                  _locationIsWithin(item.storageLocationId, location.id),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    final totalUnits = items.fold<double>(
+      0,
+      (total, item) => total + item.quantity,
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final compact = MediaQuery.sizeOf(dialogContext).width < 600;
+        final availableHeight = MediaQuery.sizeOf(dialogContext).height - 150;
+        final qrCode = Container(
+          key: Key('location-qr-${location.id}'),
+          width: 168,
+          height: 168,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: QrImageView(
+            key: Key('location-qr-image-${location.id}'),
+            data: 'inventorinator:location:${location.id}',
+          ),
+        );
+        final locationInfo = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${items.length} item${items.length == 1 ? '' : 's'} · ${_formatBomQuantity(totalUnits)} units',
+              key: Key('location-summary-${location.id}'),
+              style: Theme.of(dialogContext).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Includes inventory in this location and its child locations.',
+              style: Theme.of(dialogContext).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  key: Key('download-location-qr-${location.id}'),
+                  onPressed: () =>
+                      _downloadLocationQr(dialogContext, location, path),
+                  icon: const Icon(Icons.download_rounded),
+                  label: const Text('Download QR'),
+                ),
+                FilledButton.icon(
+                  key: Key('move-items-from-location-${location.id}'),
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    final refresh =
+                        stockroomRefresh ??
+                        (VoidCallback callback) {
+                          if (mounted) setState(callback);
+                        };
+                    unawaited(_moveItemsToLocation(location, refresh));
+                  },
+                  icon: const Icon(Icons.drive_file_move_outline),
+                  label: const Text('Move items here'),
+                ),
+              ],
+            ),
+          ],
+        );
+        return AlertDialog(
+          key: Key('location-details-${location.id}'),
+          title: Row(
+            children: [
+              const _LocationIcon(),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(path, maxLines: 2, overflow: TextOverflow.ellipsis),
+              ),
+              IconButton(
+                key: const Key('close-location-details'),
+                tooltip: 'Close location',
+                style: _destructiveIconButtonStyle(dialogContext),
+                onPressed: () => Navigator.pop(dialogContext),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 680,
+            height: availableHeight.clamp(360.0, 650.0),
+            child: Column(
+              children: [
+                if (compact)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Align(alignment: Alignment.center, child: qrCode),
+                      const SizedBox(height: 16),
+                      locationInfo,
+                    ],
+                  )
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      qrCode,
+                      const SizedBox(width: 16),
+                      Expanded(child: locationInfo),
+                    ],
+                  ),
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: items.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No inventory is assigned to this area yet.',
+                            textAlign: TextAlign.center,
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: items.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final item = items[index];
+                            return ListTile(
+                              key: Key('location-item-${item.id}'),
+                              leading: _ItemVisual(
+                                item: item,
+                                size: 42,
+                                typeIcon: _itemTypeIcon(item),
+                                typeIconImageBytes: _iconImageBytesFromKey(
+                                  _itemTypeIconKey(item),
+                                ),
+                              ),
+                              title: Text(item.name),
+                              subtitle: Text(
+                                '${_locationPath(item.storageLocationId)} · ${_itemTypeDisplayLabel(item)}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: Text(
+                                '×${_formatBomQuantity(item.quantity)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              onTap: () {
+                                Navigator.pop(dialogContext);
+                                _openDetails(item);
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _addLocation(StateSetter refresh) async {
+    final controller = TextEditingController();
+    String? parentId;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add location'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const Key('new-location-name'),
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Location name'),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  key: const Key('new-location-parent'),
+                  initialValue: parentId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Inside (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('Top level'),
+                    ),
+                    for (final location in locations)
+                      DropdownMenuItem(
+                        value: location.id,
+                        child: Text(_locationPath(location.id)),
+                      ),
+                  ],
+                  onChanged: (value) => parentId = value,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('confirm-add-location'),
+              onPressed: controller.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
+              child: const Text('Add location'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final name = controller.text.trim();
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (accepted != true || name.isEmpty || !mounted) return;
+    locations.add(
+      StockLocationRecord(
+        id: 'LOC-${DateTime.now().microsecondsSinceEpoch}',
+        name: name,
+        parentId: parentId,
+      ),
+    );
+    _recordAudit('create', 'location', locations.last.id, {'name': name});
+    _persist();
+    refresh(() {});
+    if (mounted) setState(() {});
+  }
+
+  void _refreshStructuredLocationPaths() {
+    final validIds = locations.map((location) => location.id).toSet();
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      if (item.storageLocationId.isEmpty) continue;
+      if (!validIds.contains(item.storageLocationId)) {
+        inventory[index] = item.copyWith(
+          storageLocationId: '',
+          storageLocation: '',
+        );
+        continue;
+      }
+      inventory[index] = item.copyWith(
+        storageLocation: _locationPath(item.storageLocationId),
+      );
+    }
+  }
+
+  Future<void> _renameLocation(
+    StockLocationRecord location,
+    StateSetter refresh,
+  ) async {
+    final controller = TextEditingController(text: location.name);
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Rename location'),
+          content: TextField(
+            key: const Key('rename-location-name'),
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Location name'),
+            onChanged: (_) => setDialogState(() {}),
+            onSubmitted: (_) {
+              if (controller.text.trim().isNotEmpty) {
+                Navigator.pop(dialogContext, true);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              key: const Key('confirm-rename-location'),
+              onPressed: controller.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Rename'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final nextName = controller.text.trim();
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (accepted != true || nextName.isEmpty || !mounted) return;
+    final oldPath = _locationPath(location.id);
+    final index = locations.indexWhere((entry) => entry.id == location.id);
+    if (index < 0) return;
+    locations[index] = StockLocationRecord(
+      id: location.id,
+      name: nextName,
+      parentId: location.parentId,
+    );
+    _refreshStructuredLocationPaths();
+    _recordAudit('rename', 'location', location.id, {
+      'name': '$oldPath → ${_locationPath(location.id)}',
+    });
+    _persist();
+    refresh(() {});
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _deleteLocation(
+    StockLocationRecord location,
+    StateSetter refresh,
+  ) async {
+    final directItemCount = inventory
+        .where((item) => item.storageLocationId == location.id)
+        .length;
+    final childCount = locations
+        .where((entry) => entry.parentId == location.id)
+        .length;
+    final parent = location.parentId == null
+        ? null
+        : locations.where((entry) => entry.id == location.parentId).firstOrNull;
+    final destination = parent == null
+        ? 'No location'
+        : _locationPath(parent.id);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${_locationPath(location.id)}?'),
+        content: Text(
+          [
+            'This permanently removes the location.',
+            if (directItemCount > 0)
+              '$directItemCount directly stored item${directItemCount == 1 ? '' : 's'} will move to $destination.',
+            if (childCount > 0)
+              '$childCount child location${childCount == 1 ? '' : 's'} will move up one level.',
+          ].join('\n\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('confirm-delete-location'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete location'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final oldPath = _locationPath(location.id);
+    for (var index = 0; index < locations.length; index++) {
+      final child = locations[index];
+      if (child.parentId != location.id) continue;
+      locations[index] = StockLocationRecord(
+        id: child.id,
+        name: child.name,
+        parentId: location.parentId,
+      );
+    }
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      if (item.storageLocationId != location.id) continue;
+      inventory[index] = item.copyWith(
+        storageLocationId: parent?.id ?? '',
+        storageLocation: parent == null ? '' : _locationPath(parent.id),
+      );
+    }
+    locations.removeWhere((entry) => entry.id == location.id);
+    _refreshStructuredLocationPaths();
+    _recordAudit('delete', 'location', location.id, {
+      'name': oldPath,
+      'items moved': directItemCount.toString(),
+      'children moved': childCount.toString(),
+    });
+    _persist();
+    refresh(() {});
+    if (mounted) setState(() {});
+  }
+
+  void _moveInventoryItem(InventoryItem item, StockLocationRecord location) {
+    setState(() {
+      replaceInventoryItemById(
+        inventory,
+        item.id,
+        item.copyWith(
+          storageLocationId: location.id,
+          storageLocation: _locationPath(location.id),
+        ),
+      );
+      _recordAudit('move', 'inventory', item.id, {
+        'name': item.name,
+        'location': _locationPath(location.id),
+      });
+    });
+    _persist();
+  }
+
+  Future<void> _moveItemsToLocation(
+    StockLocationRecord location,
+    StateSetter refresh,
+  ) async {
+    var query = '';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final needle = _normalized(query);
+          final matches = inventory
+              .where(
+                (item) =>
+                    !item.archived &&
+                    (needle.isEmpty ||
+                        _normalized(
+                          '${item.name} ${item.brand} ${item.barcode} ${item.id}',
+                        ).contains(needle)),
+              )
+              .toList();
+          return AlertDialog(
+            key: const Key('move-items-to-location-dialog'),
+            title: Text('Move to ${_locationPath(location.id)}'),
+            content: SizedBox(
+              width: 580,
+              height: 520,
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('move-location-search'),
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                            prefixIcon: Icon(Icons.search_rounded),
+                            hintText: 'Search items, brands, IDs, or barcodes',
+                          ),
+                          onChanged: (value) =>
+                              setDialogState(() => query = value),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        key: const Key('scan-item-to-location'),
+                        tooltip: 'Scan item into this location',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => InventoryQrScanner(
+                              onCode: (code, mode, image) {
+                                final value = code.trim();
+                                final id =
+                                    value.startsWith('inventorinator:item:')
+                                    ? value.substring(
+                                        'inventorinator:item:'.length,
+                                      )
+                                    : value;
+                                final match = inventory
+                                    .where(
+                                      (item) =>
+                                          item.id.toLowerCase() ==
+                                              id.toLowerCase() ||
+                                          item.barcode == value,
+                                    )
+                                    .firstOrNull;
+                                if (match != null) {
+                                  _moveInventoryItem(match, location);
+                                }
+                                Navigator.of(context).pop();
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      match == null
+                                          ? 'No inventory item matches that code.'
+                                          : '${match.name} moved to ${_locationPath(location.id)}.',
+                                    ),
+                                  ),
+                                );
+                                refresh(() {});
+                                setDialogState(() {});
+                              },
+                            ),
+                          ),
+                        ),
+                        icon: const Icon(Icons.qr_code_scanner_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: matches.length,
+                      itemBuilder: (context, index) {
+                        final item = matches[index];
+                        final here = item.storageLocationId == location.id;
+                        return ListTile(
+                          key: Key('move-item-${item.id}'),
+                          leading: Icon(item.icon),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            item.storageLocation.isEmpty
+                                ? 'No location'
+                                : item.storageLocation,
+                          ),
+                          trailing: here
+                              ? const Icon(Icons.check_rounded)
+                              : const Icon(Icons.arrow_forward_rounded),
+                          onTap: here
+                              ? null
+                              : () {
+                                  _moveInventoryItem(item, location);
+                                  refresh(() {});
+                                  setDialogState(() {});
+                                },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Done'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _receiveShoppingEntry(
+    ShoppingListEntry entry,
+    StateSetter refresh,
+  ) async {
+    final remaining = math
+        .max(0, entry.quantityNeeded - entry.quantityReceived)
+        .toDouble();
+    final matched = inventory
+        .where(
+          (item) =>
+              item.id == entry.productId ||
+              item.catalogProductId == entry.productId ||
+              _normalized(item.name) == _normalized(entry.name),
+        )
+        .firstOrNull;
+    if (matched == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Match ${entry.name} to an inventory item first.'),
+        ),
+      );
+      return;
+    }
+    final controller = TextEditingController(
+      text: _formatBomQuantity(remaining),
+    );
+    final amount = await showDialog<double>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Receive ${entry.name}'),
+        content: TextField(
+          key: const Key('receive-shopping-quantity'),
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Quantity received'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-receive-shopping'),
+            onPressed: () => Navigator.pop(
+              dialogContext,
+              double.tryParse(controller.text.trim()),
+            ),
+            child: const Text('Receive'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    if (amount == null || amount <= 0 || !mounted) return;
+    setState(() {
+      replaceInventoryItemById(
+        inventory,
+        matched.id,
+        matched.copyWith(quantity: matched.quantity + amount),
+      );
+      final index = shoppingList.indexWhere((value) => value.id == entry.id);
+      if (index >= 0) {
+        final received = entry.quantityReceived + amount;
+        shoppingList[index] = entry.copyWith(
+          quantityReceived: received,
+          status: received + .0001 >= entry.quantityNeeded
+              ? ShoppingListStatus.received
+              : ShoppingListStatus.ordered,
+        );
+      }
+      _recordAudit('receive', 'shopping', entry.id, {
+        'item': entry.name,
+        'quantity': amount.toString(),
+        'inventoryId': matched.id,
+      });
+    });
+    _persist();
+    refresh(() {});
+  }
+
+  ButtonStyle _destructiveIconButtonStyle(BuildContext context) {
+    final danger = Theme.of(context).colorScheme.error;
+    Widget dangerLayer(
+      BuildContext context,
+      Set<WidgetState> states,
+      Widget? child,
+    ) {
+      final active =
+          states.contains(WidgetState.hovered) ||
+          states.contains(WidgetState.focused) ||
+          states.contains(WidgetState.pressed);
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          color: danger.withValues(alpha: active ? .2 : .11),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: danger.withValues(alpha: active ? .72 : .42),
+          ),
+          boxShadow: active
+              ? [
+                  BoxShadow(
+                    color: danger.withValues(alpha: .2),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : const [],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: child ?? const SizedBox.shrink(),
+        ),
+      );
+    }
+
+    return ButtonStyle(
+      foregroundColor: WidgetStatePropertyAll(danger),
+      backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      padding: const WidgetStatePropertyAll(EdgeInsets.all(8)),
+      minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+      shape: const WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(10)),
+        ),
+      ),
+      backgroundBuilder: dangerLayer,
+    );
+  }
+
+  Future<void> _openStockroom() => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => DefaultTabController(
+      length: 2,
+      child: StatefulBuilder(
+        builder: (context, refresh) {
+          final compact = MediaQuery.sizeOf(context).width < 600;
+          final sortedLocations = [
+            ...locations,
+          ]..sort((a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)));
+          return AlertDialog(
+            key: const Key('stockroom-dialog'),
+            title: Row(
+              children: [
+                const Icon(Icons.warehouse_outlined),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('Stockroom')),
+                IconButton(
+                  key: const Key('close-stockroom'),
+                  tooltip: 'Close Stockroom',
+                  onPressed: () => Navigator.pop(dialogContext),
+                  style: _destructiveIconButtonStyle(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 760,
+              height: 650,
+              child: Column(
+                children: [
+                  const TabBar(
+                    tabs: [
+                      Tab(
+                        icon: Icon(Icons.account_tree_outlined),
+                        text: 'Locations',
+                      ),
+                      Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
+                    ],
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        Column(
+                          children: [
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                child: FilledButton.icon(
+                                  key: const Key('add-location'),
+                                  onPressed: () => _addLocation(refresh),
+                                  icon: const Icon(Icons.add_rounded),
+                                  label: const Text('Add location'),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: sortedLocations.isEmpty
+                                  ? const Center(
+                                      child: Text(
+                                        'Add a shelf, cabinet, bin, or room.',
+                                      ),
+                                    )
+                                  : ListView.builder(
+                                      itemCount: sortedLocations.length,
+                                      itemBuilder: (context, index) {
+                                        final location = sortedLocations[index];
+                                        final count = inventory
+                                            .where(
+                                              (item) =>
+                                                  item.storageLocationId ==
+                                                  location.id,
+                                            )
+                                            .length;
+                                        Widget locationActions() => Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton.filledTonal(
+                                              key: Key(
+                                                'move-items-location-${location.id}',
+                                              ),
+                                              tooltip: 'Move items',
+                                              onPressed: () =>
+                                                  _moveItemsToLocation(
+                                                    location,
+                                                    refresh,
+                                                  ),
+                                              icon: const Icon(
+                                                Icons.drive_file_move_outline,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            IconButton(
+                                              key: Key(
+                                                'rename-location-${location.id}',
+                                              ),
+                                              tooltip:
+                                                  'Rename ${_locationPath(location.id)}',
+                                              onPressed: () => _renameLocation(
+                                                location,
+                                                refresh,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.edit_outlined,
+                                              ),
+                                            ),
+                                            IconButton(
+                                              key: Key(
+                                                'delete-location-${location.id}',
+                                              ),
+                                              tooltip:
+                                                  'Delete ${_locationPath(location.id)}',
+                                              style:
+                                                  _destructiveIconButtonStyle(
+                                                    context,
+                                                  ),
+                                              onPressed: () => _deleteLocation(
+                                                location,
+                                                refresh,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.delete_outline_rounded,
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                        if (compact) {
+                                          return Card(
+                                            clipBehavior: Clip.antiAlias,
+                                            child: InkWell(
+                                              key: Key(
+                                                'location-${location.id}',
+                                              ),
+                                              onTap: () => _openLocation(
+                                                location,
+                                                stockroomRefresh: refresh,
+                                              ),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      14,
+                                                      12,
+                                                      8,
+                                                      8,
+                                                    ),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment
+                                                          .stretch,
+                                                  children: [
+                                                    Row(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets.only(
+                                                                top: 2,
+                                                              ),
+                                                          child: _LocationIcon(
+                                                            key: Key(
+                                                              'location-pin-${location.id}',
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 12,
+                                                        ),
+                                                        Expanded(
+                                                          child: Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              Text(
+                                                                _locationPath(
+                                                                  location.id,
+                                                                ),
+                                                              ),
+                                                              Text(
+                                                                '$count item${count == 1 ? '' : 's'}',
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Align(
+                                                      alignment:
+                                                          Alignment.centerRight,
+                                                      child: locationActions(),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        return Card(
+                                          child: ListTile(
+                                            key: Key('location-${location.id}'),
+                                            onTap: () => _openLocation(
+                                              location,
+                                              stockroomRefresh: refresh,
+                                            ),
+                                            leading: _LocationIcon(
+                                              key: Key(
+                                                'location-pin-${location.id}',
+                                              ),
+                                            ),
+                                            title: Text(
+                                              _locationPath(location.id),
+                                            ),
+                                            subtitle: Text(
+                                              '$count item${count == 1 ? '' : 's'}',
+                                            ),
+                                            trailing: locationActions(),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
+                        shoppingList.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'Add shortages from a kit BOM to shop and receive them here.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.only(top: 10),
+                                itemCount: shoppingList.length,
+                                itemBuilder: (context, index) {
+                                  final entry = shoppingList[index];
+                                  final remaining = math.max(
+                                    0,
+                                    entry.quantityNeeded -
+                                        entry.quantityReceived,
+                                  );
+                                  return Card(
+                                    key: Key('shopping-${entry.id}'),
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        14,
+                                        12,
+                                        8,
+                                        8,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              entry.status ==
+                                                      ShoppingListStatus
+                                                          .received
+                                                  ? const Icon(
+                                                      Icons
+                                                          .check_circle_rounded,
+                                                    )
+                                                  : const _ShoppingCartIcon(),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Text(
+                                                  entry.name,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Need ${_formatBomQuantity(entry.quantityNeeded)} · Received ${_formatBomQuantity(entry.quantityReceived)}${entry.quantityOrdered > 0 ? ' · Ordered ${_formatBomQuantity(entry.quantityOrdered)}' : ''}',
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Wrap(
+                                            alignment: WrapAlignment.end,
+                                            spacing: 6,
+                                            runSpacing: 6,
+                                            children: [
+                                              if (entry.status ==
+                                                  ShoppingListStatus.needed)
+                                                OutlinedButton(
+                                                  onPressed: () {
+                                                    setState(() {
+                                                      shoppingList[index] =
+                                                          entry.copyWith(
+                                                            quantityOrdered: entry
+                                                                .quantityNeeded,
+                                                            status:
+                                                                ShoppingListStatus
+                                                                    .ordered,
+                                                          );
+                                                    });
+                                                    _persist();
+                                                    refresh(() {});
+                                                  },
+                                                  child: const Text('Ordered'),
+                                                ),
+                                              FilledButton(
+                                                onPressed: remaining <= 0
+                                                    ? null
+                                                    : () =>
+                                                          _receiveShoppingEntry(
+                                                            entry,
+                                                            refresh,
+                                                          ),
+                                                child: const Text('Receive'),
+                                              ),
+                                              IconButton(
+                                                key: Key(
+                                                  'remove-shopping-${entry.id}',
+                                                ),
+                                                tooltip:
+                                                    'Remove from shopping list',
+                                                style:
+                                                    _destructiveIconButtonStyle(
+                                                      context,
+                                                    ),
+                                                onPressed: () {
+                                                  setState(
+                                                    () => shoppingList.removeAt(
+                                                      index,
+                                                    ),
+                                                  );
+                                                  _persist();
+                                                  refresh(() {});
+                                                },
+                                                icon:
+                                                    const _ShoppingCartIcon.remove(
+                                                      key: Key(
+                                                        'remove-shopping-cart-glyph',
+                                                      ),
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ),
+  );
+
+  Widget _stockroomButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
+      Tooltip(
+        message: 'Locations, shopping, and receiving',
+        child: _glassQuickAction(
+          key: const Key('open-stockroom'),
+          onPressed: _openStockroom,
+          icon: Icons.warehouse_outlined,
+          label: 'Stockroom',
+          iconOnly: iconOnly,
+          iconOffset: const Offset(-2, 0),
+          iconOnlyWidth: iconOnlyWidth,
+        ),
+      );
+
+  Widget _bottomActionBar() {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _inventoryIsScrolling,
+      child: AnimatedContainer(
+        key: const Key('bottom-action-surface'),
+        duration: Duration.zero,
+        decoration: _floatingActionBarDecoration(reduceEffects: false),
+        clipBehavior: Clip.antiAlias,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Collapse before the longest labels can crowd or clip. The
+            // compact rail is intentionally used through medium desktop
+            // widths, not only at phone sizes.
+            final iconOnly = constraints.maxWidth < 1180;
+            final taper = ((constraints.maxWidth - 760) / (1180 - 760)).clamp(
+              0.0,
+              1.0,
+            );
+            final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
+            final addItem = _glassQuickAction(
+              key: const Key('add-item'),
+              onPressed: currentRole.canCreateInventory ? _addItem : null,
+              icon: Icons.add_rounded,
+              label: 'Add item',
+              iconOnly: iconOnly,
+              iconOnlyWidth: iconOnlyWidth,
+            );
+            final rightActions = <Widget>[
+              _scanButton(iconOnly: iconOnly, iconOnlyWidth: iconOnlyWidth),
+              const SizedBox(width: 12),
+              addItem,
+              const SizedBox(width: 12),
+              _rapidizerButton(
+                iconOnly: iconOnly,
+                iconOnlyWidth: iconOnlyWidth,
+              ),
+              const SizedBox(width: 12),
+              _filamentColorsButton(
+                iconOnly: iconOnly,
+                iconOnlyWidth: iconOnlyWidth,
+              ),
+              const SizedBox(width: 12),
+              _inventoryJsonButton(
+                iconOnly: iconOnly,
+                iconOnlyWidth: iconOnlyWidth,
+              ),
+            ];
+            if (iconOnly) {
+              final fittedIconWidth = math.min(
+                iconOnlyWidth,
+                // Reserve the same 14 px outer inset used by the expanded
+                // bar, plus the compact gaps between its seven actions.
+                math.max(36.0, (constraints.maxWidth - 48) / 7),
+              );
+              final compactAddItem = _glassQuickAction(
+                key: const Key('add-item'),
+                onPressed: currentRole.canCreateInventory ? _addItem : null,
+                icon: Icons.add_rounded,
+                label: 'Add item',
+                iconOnly: true,
+                iconOnlyWidth: fittedIconWidth,
+              );
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
+                ),
+                child: SizedBox(
+                  height: 44,
+                  child: Row(
+                    key: const Key('compact-bottom-action-group'),
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _catalogButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                          const SizedBox(width: 4),
+                          _stockroomButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _scanButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                          const SizedBox(width: 4),
+                          compactAddItem,
+                          const SizedBox(width: 4),
+                          _rapidizerButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                          const SizedBox(width: 4),
+                          _filamentColorsButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                          const SizedBox(width: 4),
+                          _inventoryJsonButton(
+                            iconOnly: true,
+                            iconOnlyWidth: fittedIconWidth,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(
+                children: [
+                  _catalogButton(),
+                  const SizedBox(width: 12),
+                  _stockroomButton(),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        reverse: false,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: rightActions,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+      builder: (context, scrolling, child) => SafeArea(
+        key: const Key('bottom-quick-actions'),
+        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: IgnorePointer(
+          ignoring: scrolling,
+          child: AnimatedOpacity(
+            key: const Key('bottom-action-visibility'),
+            duration: Duration.zero,
+            opacity: scrolling ? 0 : 1,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  ButtonStyle get _quickActionStyle => ButtonStyle(
+    foregroundColor: WidgetStatePropertyAll(
+      Theme.of(context).colorScheme.onSurface,
+    ),
+    backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+    overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+    side: const WidgetStatePropertyAll(BorderSide.none),
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ),
+    iconSize: const WidgetStatePropertyAll(24),
+    textStyle: const WidgetStatePropertyAll(
+      TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+    ),
   );
 
   List<Widget> _centerHeaderActions() => [
-    OutlinedButton.icon(
-      key: const Key('moisture-alerts'),
-      onPressed: _openMoistureAlerts,
-      icon: Badge.count(
-        count: _inventoryAlertCount,
-        isLabelVisible: _inventoryAlertCount > 0,
-        child: const Icon(Icons.notifications_outlined),
+    SizedBox(
+      height: 48,
+      child: OutlinedButton.icon(
+        key: const Key('moisture-alerts'),
+        onPressed: _openMoistureAlerts,
+        icon: Badge.count(
+          count: _inventoryAlertCount,
+          isLabelVisible: _inventoryAlertCount > 0,
+          child: const Icon(Icons.notifications_outlined),
+        ),
+        label: const Text('Alerts'),
       ),
-      label: const Text('Alerts'),
     ),
     const SizedBox(width: 8),
-    OutlinedButton.icon(
-      key: const Key('addition-history'),
-      onPressed: _openAdditionHistory,
-      icon: const Icon(Icons.new_releases_outlined),
-      label: const Text('New items'),
+    SizedBox(
+      height: 48,
+      child: OutlinedButton.icon(
+        key: const Key('addition-history'),
+        onPressed: _openAdditionHistory,
+        icon: const Icon(Icons.new_releases_outlined),
+        label: const Text('New items'),
+      ),
     ),
   ];
 
   List<Widget> _databaseHeaderActions() => [
-    IconButton.outlined(
-      key: const Key('database-settings'),
-      tooltip: 'Local database',
-      onPressed: widget.database == null ? null : _openDatabaseSettings,
-      iconSize: 16,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.storage_rounded),
-    ),
-    const SizedBox(width: 5),
-    IconButton.outlined(
-      key: const Key('cloud-sync'),
-      tooltip: 'Cloud sync',
-      onPressed: widget.database == null ? null : _openCloudSync,
-      iconSize: 16,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.cloud_sync_outlined),
-    ),
-    const SizedBox(width: 5),
-    IconButton.outlined(
-      key: const Key('animation-controls'),
-      tooltip: 'Animation controls',
-      onPressed: _openAnimationControls,
-      iconSize: 16,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.animation_rounded),
-    ),
-    const SizedBox(width: 5),
-    IconButton.outlined(
-      key: const Key('debug-panel'),
-      tooltip: 'Debug effects',
-      onPressed: _openDebugPanel,
-      iconSize: 16,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.bug_report_outlined),
-    ),
-    const SizedBox(width: 5),
-    IconButton.outlined(
-      key: const Key('audit-log'),
-      tooltip: 'Change log',
-      onPressed: _openAuditLog,
-      iconSize: 16,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.history_rounded),
+    SizedBox(
+      height: 48,
+      child: Material(
+        key: const Key('config-action-group'),
+        color: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(11),
+          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _configBlockButton(
+              key: const Key('database-settings'),
+              tooltip: 'Local database',
+              onPressed: widget.database == null ? null : _openDatabaseSettings,
+              icon: Icons.storage_rounded,
+            ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('cloud-sync'),
+              tooltip: 'Remote Sync',
+              onPressed: widget.database == null ? null : _openCloudSync,
+              icon: Icons.cloud_sync_outlined,
+            ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('personalization-settings'),
+              tooltip: 'Personalization settings',
+              onPressed: _openAnimationControls,
+              icon: Icons.palette_outlined,
+            ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('debug-panel'),
+              tooltip: 'Debug effects',
+              onPressed: _openDebugPanel,
+              icon: Icons.bug_report_outlined,
+            ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('audit-log'),
+              tooltip: 'Change log',
+              onPressed: _openAuditLog,
+              icon: Icons.history_rounded,
+            ),
+          ],
+        ),
+      ),
     ),
   ];
+
+  Widget _configBlockButton({
+    required Key key,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required IconData icon,
+  }) {
+    Widget joinedGlassLayer(
+      BuildContext context,
+      Set<WidgetState> states,
+      Widget? child,
+    ) => _GlassButtonSurface(states: states, joined: true, child: child);
+
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      iconSize: 18,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      style: IconButton.styleFrom(
+        shape: const RoundedRectangleBorder(),
+        backgroundColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+      ).copyWith(backgroundBuilder: joinedGlassLayer),
+      icon: Icon(icon),
+    );
+  }
+
+  Widget _configBlockDivider() => SizedBox(
+    width: 1,
+    height: 48,
+    child: ColoredBox(color: Theme.of(context).colorScheme.outlineVariant),
+  );
 
   Future<void> _openAuditLog() => showDialog<void>(
     context: context,
@@ -4316,14 +12906,40 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _catalogButton() => OutlinedButton.icon(
-    key: const Key('open-catalog'),
-    onPressed: currentRole.canManageCatalog ? _openCatalog : null,
-    icon: const Icon(Icons.category_outlined),
-    label: const Text('Catalog'),
-  );
+  Widget _catalogButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
+      _glassQuickAction(
+        key: const Key('open-catalog'),
+        onPressed: currentRole.canManageCatalog ? _openCatalog : null,
+        icon: Icons.category_outlined,
+        label: 'Catalog',
+        iconOnly: iconOnly,
+        iconOnlyWidth: iconOnlyWidth,
+      );
 
   Widget _viewToggle() => SegmentedButton<bool>(
+    key: const Key('inventory-view-toggle'),
+    style: ButtonStyle(
+      backgroundColor: WidgetStatePropertyAll(
+        Theme.of(context).colorScheme.surface,
+      ),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      foregroundColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.disabled)
+            ? const Color(0xff6f7180)
+            : states.contains(WidgetState.selected)
+            ? Theme.of(context).colorScheme.primary
+            : Theme.of(context).colorScheme.onSurface,
+      ),
+      side: WidgetStatePropertyAll(
+        BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+    ),
     segments: const [
       ButtonSegment(
         value: false,
@@ -4340,21 +12956,313 @@ class _InventoryHomeState extends State<InventoryHome> {
     showSelectedIcon: false,
     onSelectionChanged: (value) => setState(() => gridView = value.first),
   );
+
+  Widget _viewOptions() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      _viewToggle(),
+      const SizedBox(width: 8),
+      Tooltip(
+        message: hideZeroQuantityItems
+            ? 'Show zero-quantity items'
+            : 'Hide zero-quantity items',
+        child: IconButton(
+          key: const Key('hide-zero-quantity-items'),
+          isSelected: hideZeroQuantityItems,
+          onPressed: catalogFilter != null
+              ? null
+              : () {
+                  setState(() {
+                    hideZeroQuantityItems = !hideZeroQuantityItems;
+                    currentPage = 0;
+                  });
+                  widget.database?.saveBoolPreference(
+                    'hide_zero_quantity_items',
+                    hideZeroQuantityItems,
+                  );
+                },
+          icon: const Icon(Icons.visibility_outlined),
+          selectedIcon: const Icon(Icons.visibility_off_outlined),
+          style: ButtonStyle(
+            minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+            backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+            overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            foregroundColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.disabled)
+                  ? const Color(0xff6f7180)
+                  : Theme.of(context).colorScheme.onSurface,
+            ),
+            side: const WidgetStatePropertyAll(BorderSide.none),
+            shape: WidgetStatePropertyAll(
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  String get _activeTypeFilterLabel {
+    if (archivedOnly) return 'Archived';
+    if (catalogFilter case final filter?) {
+      return _catalogViewDisplayLabel(filter);
+    }
+    if (customTypeFilterId case final id?) {
+      return customItemTypes
+              .where((candidate) => candidate.id == id)
+              .firstOrNull
+              ?.name ??
+          'Custom type';
+    }
+    if (type case final selected?) {
+      return _inventoryTypeDisplayLabel(selected);
+    }
+    return 'Everything';
+  }
+
+  Widget _activeTypeFilterVisual() {
+    if (archivedOnly) return const Icon(Icons.archive_outlined, size: 20);
+    if (catalogFilter case final selected?) {
+      return _typeIconVisual(
+        typeIconOverrides[_catalogViewDefinitionKey(selected)],
+        _catalogViewIcon(selected),
+        size: 20,
+      );
+    }
+    if (customTypeFilterId case final id?) {
+      final custom = customItemTypes
+          .where((candidate) => candidate.id == id)
+          .firstOrNull;
+      return _typeIconVisual(custom?.iconKey, Icons.tune_rounded, size: 20);
+    }
+    if (type case final selected?) {
+      return _typeIconVisual(
+        typeIconOverrides[_inventoryTypeDefinitionKey(selected)],
+        _typeIcon(selected),
+        size: 20,
+      );
+    }
+    return const Icon(Icons.category_outlined, size: 20);
+  }
+
+  Widget _typeFilterPanel({bool compact = false}) => Material(
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(18),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('type-filter-panel'),
+        controller: typeFilterExpansionController,
+        initiallyExpanded: typePanelExpanded,
+        onExpansionChanged: (expanded) =>
+            setState(() => typePanelExpanded = expanded),
+        tilePadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16),
+        minTileHeight: compact ? 62 : null,
+        dense: compact,
+        visualDensity: compact
+            ? const VisualDensity(horizontal: -3, vertical: -3)
+            : null,
+        leading: _activeTypeFilterVisual(),
+        title: Text(
+          'Types',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: compact ? 15 : null,
+          ),
+        ),
+        subtitle: Text(
+          _activeTypeFilterLabel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: const Color(0xff9da5b7),
+            fontSize: compact ? 11 : null,
+          ),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SingleChildScrollView(
+              key: const Key('type-filter-options-scroll'),
+              primary: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  runSpacing: 8,
+                  children: [
+                    _typeChip(null, 'Everything'),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _GlassFilterChip(
+                        selected: archivedOnly,
+                        child: FilterChip(
+                          key: const Key('archived-view'),
+                          avatar: const Icon(Icons.archive_outlined, size: 18),
+                          label: const Text('Archived'),
+                          selected: archivedOnly,
+                          onSelected: (selected) {
+                            _collapseTypePanel();
+                            setState(() {
+                              archivedOnly = selected;
+                              catalogFilter = null;
+                              itemColorFilter = null;
+                              if (selected) {
+                                type = null;
+                                customTypeFilterId = null;
+                              }
+                              currentPage = 0;
+                            });
+                            _scrollToFilteredResults();
+                          },
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 8,
+                          ),
+                          backgroundColor: Colors.transparent,
+                          selectedColor: Colors.transparent,
+                          side: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    for (final filter in CatalogViewFilter.values)
+                      if (!deletedTypeKeys.contains(
+                        _catalogViewDefinitionKey(filter),
+                      ))
+                        _catalogFilterChip(
+                          filter,
+                          _catalogViewDisplayLabel(filter),
+                          _catalogViewIcon(filter),
+                        ),
+                    ...InventoryType.values
+                        .where(
+                          (value) =>
+                              value != InventoryType.custom &&
+                              !deletedTypeKeys.contains(
+                                _inventoryTypeDefinitionKey(value),
+                              ),
+                        )
+                        .map(
+                          (value) => _typeChip(
+                            value,
+                            _inventoryTypeDisplayLabel(value),
+                          ),
+                        ),
+                    ...customItemTypes.map(_customTypeChip),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  void _collapseTypePanel() {
+    if (typePanelExpanded) typeFilterExpansionController.collapse();
+  }
+
+  void _collapseColorPanel() {
+    if (colorPanelExpanded) colorFilterExpansionController.collapse();
+  }
+
+  void _scrollToFilteredResults() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !inventoryScrollController.hasClients) return;
+      inventoryScrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
   Widget _typeChip(InventoryType? value, String label) => Padding(
     padding: const EdgeInsets.only(right: 8),
-    child: FilterChip(
-      label: Text(label),
+    child: _GlassFilterChip(
       selected:
           catalogFilter == null &&
           type == value &&
+          customTypeFilterId == null &&
           (value != null || !archivedOnly),
-      onSelected: (_) => setState(() {
-        type = value;
-        catalogFilter = null;
-        archivedOnly = false;
-        currentPage = 0;
-      }),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: FilterChip(
+        key: Key('type-filter-${value?.name ?? 'everything'}'),
+        avatar: value == null
+            ? null
+            : _typeIconVisual(
+                typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+                _typeIcon(value),
+                size: 18,
+              ),
+        label: Text(label),
+        selected:
+            catalogFilter == null &&
+            type == value &&
+            customTypeFilterId == null &&
+            (value != null || !archivedOnly),
+        onSelected: (_) {
+          _collapseTypePanel();
+          setState(() {
+            type = value;
+            customTypeFilterId = null;
+            catalogFilter = null;
+            itemColorFilter = null;
+            archivedOnly = false;
+            currentPage = 0;
+          });
+          _scrollToFilteredResults();
+        },
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        side: BorderSide.none,
+      ),
+    ),
+  );
+
+  Widget _customTypeChip(CustomItemTypeRecord customType) => Padding(
+    padding: const EdgeInsets.only(right: 8),
+    child: _GlassFilterChip(
+      selected:
+          catalogFilter == null &&
+          type == InventoryType.custom &&
+          customTypeFilterId == customType.id,
+      child: FilterChip(
+        key: Key('custom-type-filter-${customType.id}'),
+        avatar: _typeIconVisual(
+          customType.iconKey,
+          Icons.tune_rounded,
+          size: 18,
+        ),
+        label: Text(customType.name),
+        selected:
+            catalogFilter == null &&
+            type == InventoryType.custom &&
+            customTypeFilterId == customType.id,
+        onSelected: (_) {
+          _collapseTypePanel();
+          setState(() {
+            type = InventoryType.custom;
+            customTypeFilterId = customType.id;
+            catalogFilter = null;
+            itemColorFilter = null;
+            archivedOnly = false;
+            currentPage = 0;
+          });
+          _scrollToFilteredResults();
+        },
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        side: BorderSide.none,
+      ),
     ),
   );
 
@@ -4364,20 +13272,180 @@ class _InventoryHomeState extends State<InventoryHome> {
     IconData icon,
   ) => Padding(
     padding: const EdgeInsets.only(right: 8),
-    child: FilterChip(
-      key: Key('catalog-filter-${value.name}'),
-      avatar: Icon(icon, size: 18),
-      label: Text(label),
+    child: _GlassFilterChip(
       selected: catalogFilter == value,
-      onSelected: (_) => setState(() {
-        catalogFilter = value;
-        type = null;
-        archivedOnly = false;
-        currentPage = 0;
-      }),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: FilterChip(
+        key: Key('catalog-filter-${value.name}'),
+        avatar: _typeIconVisual(
+          typeIconOverrides[_catalogViewDefinitionKey(value)],
+          icon,
+          size: 18,
+        ),
+        label: Text(label),
+        selected: catalogFilter == value,
+        onSelected: (_) {
+          _collapseTypePanel();
+          setState(() {
+            catalogFilter = value;
+            type = null;
+            customTypeFilterId = null;
+            itemColorFilter = null;
+            archivedOnly = false;
+            currentPage = 0;
+          });
+          _scrollToFilteredResults();
+        },
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        side: BorderSide.none,
+      ),
     ),
   );
+
+  Widget _colorFilterPanel({bool compact = false}) {
+    final selected = availableItemColorFilters
+        .where((color) => color.value == itemColorFilter)
+        .firstOrNull;
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: const Key('color-filter-panel'),
+          controller: colorFilterExpansionController,
+          initiallyExpanded: colorPanelExpanded,
+          onExpansionChanged: (expanded) =>
+              setState(() => colorPanelExpanded = expanded),
+          tilePadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16),
+          minTileHeight: compact ? 62 : null,
+          dense: compact,
+          visualDensity: compact
+              ? const VisualDensity(horizontal: -3, vertical: -3)
+              : null,
+          leading: selected == null
+              ? const Icon(Icons.palette_outlined, size: 20)
+              : Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color:
+                        _itemColorSwatch(selected.value) ??
+                        const Color(0xff8c929f),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xff687185)),
+                  ),
+                ),
+          title: Text(
+            'Colors',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: compact ? 15 : null,
+            ),
+          ),
+          subtitle: Text(
+            selected == null
+                ? 'All colors'
+                : '${selected.label} · ${selected.hex}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: const Color(0xff9da5b7),
+              fontSize: compact ? 11 : null,
+            ),
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: SingleChildScrollView(
+                key: const Key('color-filter-scroll'),
+                primary: false,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _GlassFilterChip(
+                        selected: itemColorFilter == null,
+                        child: FilterChip(
+                          key: const Key('color-filter-all'),
+                          label: const Text('All colors'),
+                          selected: itemColorFilter == null,
+                          onSelected: (_) {
+                            _collapseColorPanel();
+                            setState(() {
+                              itemColorFilter = null;
+                              currentPage = 0;
+                            });
+                            _scrollToFilteredResults();
+                          },
+                          backgroundColor: Colors.transparent,
+                          selectedColor: Colors.transparent,
+                          side: BorderSide.none,
+                        ),
+                      ),
+                      for (final color in availableItemColorFilters)
+                        _GlassFilterChip(
+                          selected: itemColorFilter == color.value,
+                          child: FilterChip(
+                            key: Key('color-filter-${color.value}'),
+                            avatar: CircleAvatar(
+                              backgroundColor:
+                                  _itemColorSwatch(color.value) ??
+                                  const Color(0xff8c929f),
+                            ),
+                            label: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  color.label,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  color.hex,
+                                  style: const TextStyle(
+                                    color: Color(0xff9da5b7),
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            selected: itemColorFilter == color.value,
+                            onSelected: (_) {
+                              _collapseColorPanel();
+                              setState(() {
+                                itemColorFilter = color.value;
+                                currentPage = 0;
+                              });
+                              _scrollToFilteredResults();
+                            },
+                            backgroundColor: Colors.transparent,
+                            selectedColor: Colors.transparent,
+                            side: BorderSide.none,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _catalogRecordCard(Object record, {bool list = false}) {
     late final IconData icon;
@@ -4386,6 +13454,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     late final String title;
     late final String subtitle;
     late final String detail;
+    Uint8List? recordImage;
     if (record is KitRecord) {
       final totalUnits = record.bom.fold<double>(
         0,
@@ -4399,12 +13468,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           .length;
       icon = Icons.inventory_2_outlined;
       accent = const Color(0xffa987ff);
-      category = 'KIT';
+      category = _catalogViewDisplayLabel(CatalogViewFilter.kits).toUpperCase();
       title = record.name;
       subtitle = '${record.bom.length} BOM lines · $totalLabel units';
       detail = machineCount == 0
           ? 'Not assigned to a machine'
           : '$machineCount compatible ${machineCount == 1 ? 'machine' : 'machines'}';
+      recordImage = record.imageBytes;
     } else if (record is BuildRecord) {
       final used = record.lines.fold<double>(
         0,
@@ -4416,7 +13486,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
       icon = Icons.construction_rounded;
       accent = const Color(0xffffb34d);
-      category = 'BUILD';
+      category = _catalogViewDisplayLabel(CatalogViewFilter.builds)
+          .toUpperCase();
       title = record.name;
       subtitle =
           '${record.lines.length} lines · ${_formatBomQuantity(used)} / ${_formatBomQuantity(required)} used';
@@ -4425,12 +13496,18 @@ class _InventoryHomeState extends State<InventoryHome> {
         record.shared ? 'Shared' : 'Unshared',
         'Created by ${record.createdBy}',
       ].join(' · ');
+      recordImage = kits
+          .where((kit) => kit.id == record.kitId)
+          .firstOrNull
+          ?.imageBytes;
     } else {
       final machine = record as MachineRecord;
       final printer = _isPrinter(machine);
       icon = printer ? Icons.print_outlined : Icons.handyman_outlined;
       accent = printer ? const Color(0xff42d8c7) : const Color(0xffffb34d);
-      category = printer ? 'PRINTER' : 'TOOL';
+      category = _catalogViewDisplayLabel(
+        printer ? CatalogViewFilter.printers : CatalogViewFilter.tools,
+      ).toUpperCase();
       title = machine.name;
       subtitle = [
         machine.model,
@@ -4441,82 +13518,122 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ? 'No address or kit assigned'
                 : '${machine.kitIds.length} associated ${machine.kitIds.length == 1 ? 'kit' : 'kits'}'
           : machine.address;
+      recordImage = machine.imageBytes;
     }
     final content = list
         ? ListTile(
-            leading: Icon(icon, color: accent),
+            leading: _catalogRecordVisual(recordImage, icon, accent, 42),
             title: Text(title),
             subtitle: Text('$category · $subtitle\n$detail'),
             isThreeLine: true,
             trailing: const Icon(Icons.chevron_right_rounded),
           )
-        : Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(icon, color: accent, size: 30),
-                const Spacer(),
-                Text(
-                  category,
-                  style: TextStyle(
-                    color: accent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.1,
-                  ),
+        : LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 450;
+              return Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _catalogRecordVisual(recordImage, icon, accent, 42),
+                    if (compact) const SizedBox(height: 16) else const Spacer(),
+                    Text(
+                      category,
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Color(0xffa4abba)),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xff7f8798),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Color(0xffa4abba)),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  detail,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xff7f8798),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           );
+    final selected = switch (record) {
+      KitRecord value => selectedKitIds.contains(value.id),
+      BuildRecord value => selectedBuildIds.contains(value.id),
+      MachineRecord value => selectedMachineIds.contains(value.id),
+      _ => false,
+    };
     return Card(
+      key: Key(
+        'catalog-record-${switch (record) {
+          KitRecord value => value.id,
+          BuildRecord value => value.id,
+          MachineRecord value => value.id,
+          _ => record.hashCode,
+        }}',
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(
+          color: selected
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.outlineVariant,
+          width: selected ? 2 : 1,
+        ),
+      ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: record is KitRecord
-            ? () => _openKitDetails(record)
-            : record is BuildRecord
-            ? () {
-                final kit = kits
-                    .where((candidate) => candidate.id == record.kitId)
-                    .firstOrNull;
-                if (kit != null) _openBuildQueue(record, kit);
-              }
-            : _openCatalog,
+        onTap: () => _handleCatalogRecordTap(record),
         onSecondaryTapDown: record is KitRecord
             ? (details) => _showKitContextMenu(record, details.globalPosition)
+            : record is BuildRecord
+            ? (_) => _openBuildQueue(record, _kitForBuild(record))
             : null,
-        onLongPress: record is KitRecord ? () => _openKitEditor(record) : null,
+        onLongPress: () => _selectCatalogRecord(record),
         child: content,
       ),
     );
   }
+
+  Widget _catalogRecordVisual(
+    Uint8List? imageBytes,
+    IconData fallbackIcon,
+    Color accent,
+    double size,
+  ) => ClipRRect(
+    borderRadius: BorderRadius.circular(size * .25),
+    child: SizedBox.square(
+      dimension: size,
+      child: imageBytes == null
+          ? ColoredBox(
+              color: accent.withValues(alpha: .14),
+              child: Icon(fallbackIcon, color: accent, size: size * .65),
+            )
+          : Image.memory(imageBytes, fit: BoxFit.cover),
+    ),
+  );
 
   Widget _pageNavigation(int page, int pageCount, int totalItems) {
     final first = (page - 2).clamp(0, (pageCount - 5).clamp(0, pageCount));
@@ -4565,9 +13682,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _changePage(int nextPage) {
     if (nextPage == currentPage) return;
     setState(() {
-      pageMotionDirection = nextPage > currentPage ? 1 : -1;
       currentPage = nextPage;
-      pageAnimationKey++;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!inventoryScrollController.hasClients) return;
@@ -4580,59 +13695,56 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 }
 
-class PageItemEntrance extends StatelessWidget {
-  const PageItemEntrance({
-    super.key,
-    required this.pageKey,
-    required this.index,
-    required this.direction,
-    required this.child,
-  });
-  final int pageKey;
-  final int index;
-  final int direction;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
-    key: ValueKey('page-$pageKey-item-$index'),
-    tween: Tween(begin: 0, end: 1),
-    duration: Duration(milliseconds: 300 + (index.clamp(0, 12) * 24)),
-    curve: Curves.easeOutBack,
-    builder: (context, value, child) => Opacity(
-      opacity: value.clamp(0, 1),
-      child: Transform.translate(
-        offset: Offset(direction * (1 - value) * 34, (1 - value) * 10),
-        child: Transform.scale(
-          scale: .97 + (.03 * value),
-          alignment: Alignment.center,
-          child: child,
-        ),
-      ),
-    ),
-    child: child,
-  );
-}
-
-class KitDetailsDialog extends StatelessWidget {
+class KitDetailsDialog extends StatefulWidget {
   const KitDetailsDialog({
     super.key,
     required this.kit,
     required this.kits,
     required this.products,
+    this.inventory = const [],
     required this.availableQuantity,
+    this.onMatchInventory,
+    this.canMatchInventory = false,
+    this.onAddShortage,
     required this.onBuild,
     this.canBuild = true,
+    this.canDelete = false,
+    this.onDelete,
     this.buildDisabledReason,
   });
 
   final KitRecord kit;
   final List<KitRecord> kits;
   final List<CatalogProduct> products;
+  final List<InventoryItem> inventory;
   final double Function(String productId, String name) availableQuantity;
+  final KitRecord Function(KitRecord kit, int lineIndex, InventoryItem item)?
+  onMatchInventory;
+  final bool canMatchInventory;
+  final void Function(KitRecord kit, KitBomEntry line, double missing)?
+  onAddShortage;
   final ValueChanged<KitRecord> onBuild;
   final bool canBuild;
+  final bool canDelete;
+  final Future<bool> Function(KitRecord kit)? onDelete;
   final String? buildDisabledReason;
+
+  @override
+  State<KitDetailsDialog> createState() => _KitDetailsDialogState();
+}
+
+class _KitDetailsDialogState extends State<KitDetailsDialog> {
+  late KitRecord kit = widget.kit;
+  List<KitRecord> get kits => widget.kits;
+  List<CatalogProduct> get products => widget.products;
+  List<InventoryItem> get inventory => widget.inventory;
+  double Function(String productId, String name) get availableQuantity =>
+      widget.availableQuantity;
+  ValueChanged<KitRecord> get onBuild => widget.onBuild;
+  bool get canBuild => widget.canBuild;
+  bool get canDelete => widget.canDelete;
+  Future<bool> Function(KitRecord kit)? get onDelete => widget.onDelete;
+  String? get buildDisabledReason => widget.buildDisabledReason;
 
   String _lineName(KitBomEntry line) =>
       line.name ??
@@ -4667,9 +13779,267 @@ class KitDetailsDialog extends StatelessWidget {
     return result;
   }
 
+  Future<void> _showSources(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Kit sources'),
+      content: SizedBox(
+        width: 580,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: kit.sourceUrls.length,
+          itemBuilder: (_, index) => ListTile(
+            leading: const Icon(Icons.link_rounded),
+            title: Text(
+              kit.sourceUrls[index],
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: () => launchUrl(
+              Uri.parse(kit.sourceUrls[index]),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+
+  int _inventoryMatchScore(InventoryItem item, String targetName) {
+    final target = _normalizedStockName(targetName);
+    final candidate = _normalizedStockName(item.name);
+    if (candidate == target) return 10000;
+    var score = 0;
+    if (candidate.contains(target) || target.contains(candidate)) score += 4000;
+    final targetTokens = targetName
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.length > 1)
+        .toSet();
+    final candidateText = [
+      item.name,
+      item.typeLabel,
+      item.materialName,
+      item.brand,
+      item.vendor,
+    ].join(' ').toLowerCase();
+    score += targetTokens.where(candidateText.contains).length * 300;
+    return score;
+  }
+
+  Future<void> _matchBomLine(BuildContext context, int lineIndex) async {
+    final line = kit.bom[lineIndex];
+    final targetName = _lineName(line);
+    var query = '';
+    final selected = await showDialog<InventoryItem>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final needle = _normalizedStockName(query);
+          final matches =
+              inventory.where((item) {
+                if (item.archived) return false;
+                if (needle.isEmpty) return true;
+                return _normalizedStockName(
+                  '${item.name} ${item.typeLabel} ${item.materialName} ${item.brand} ${item.vendor}',
+                ).contains(needle);
+              }).toList()..sort((left, right) {
+                final byScore = _inventoryMatchScore(
+                  right,
+                  targetName,
+                ).compareTo(_inventoryMatchScore(left, targetName));
+                return byScore != 0 ? byScore : left.name.compareTo(right.name);
+              });
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.link_rounded),
+                SizedBox(width: 10),
+                Expanded(child: Text('Match BOM item')),
+              ],
+            ),
+            content: SizedBox(
+              width: 560,
+              height: 520,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    targetName,
+                    key: const Key('bom-match-source-name'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    'Required ${_formatBomQuantity(line.quantity)} · ${line.section}',
+                    style: const TextStyle(color: Color(0xff929aac)),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    key: const Key('bom-match-search'),
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      labelText: 'Search existing inventory',
+                    ),
+                    onChanged: (value) => setDialogState(() => query = value),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    query.trim().isEmpty ? 'SUGGESTED MATCHES' : 'MATCHES',
+                    style: const TextStyle(
+                      color: Color(0xff929aac),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: matches.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No inventory items match this search.',
+                            ),
+                          )
+                        : ListView.builder(
+                            key: const Key('bom-match-results'),
+                            itemCount: matches.length,
+                            itemBuilder: (context, index) {
+                              final item = matches[index];
+                              final directlyLinked =
+                                  item.id == line.productId ||
+                                  item.catalogProductId == line.productId;
+                              return ListTile(
+                                key: Key('bom-match-item-${item.id}'),
+                                leading: Icon(item.icon),
+                                title: Text(item.name),
+                                subtitle: Text(
+                                  '${item.typeLabel}${item.materialName.isEmpty ? '' : ' · ${item.materialName}'} · ${_formatBomQuantity(item.quantity)} available',
+                                ),
+                                trailing: directlyLinked
+                                    ? const Icon(Icons.link_rounded)
+                                    : const Icon(Icons.chevron_right_rounded),
+                                onTap: () =>
+                                    Navigator.of(dialogContext).pop(item),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      kit = widget.onMatchInventory!(kit, lineIndex, selected);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final stock = _stockStatus();
+    final compact = MediaQuery.sizeOf(context).width < 600;
+
+    Widget identity() => Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox.square(
+            dimension: 44,
+            child: kit.imageBytes == null
+                ? ColoredBox(
+                    color: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: .13),
+                    child: Icon(
+                      Icons.inventory_2_outlined,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  )
+                : Image.memory(kit.imageBytes!, fit: BoxFit.cover),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                kit.name,
+                key: const Key('kit-details-title'),
+                style: TextStyle(
+                  fontSize: compact ? 20 : 24,
+                  height: 1.15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '${kit.bom.length} BOM items',
+                style: const TextStyle(color: Color(0xff929aac)),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    Widget buildButton({bool expand = false}) {
+      final button = Tooltip(
+        message: canBuild
+            ? 'Create a new build'
+            : buildDisabledReason ?? 'You cannot create builds.',
+        child: FilledButton.icon(
+          key: const Key('build-kit'),
+          onPressed: canBuild ? () => onBuild(kit) : null,
+          icon: const Icon(Icons.construction_rounded),
+          label: const Text('Build'),
+        ),
+      );
+      return expand ? Expanded(child: button) : button;
+    }
+
+    Widget sourceButton() => IconButton(
+      key: const Key('kit-sources'),
+      tooltip: 'Kit sources',
+      onPressed: () => _showSources(context),
+      icon: const Icon(Icons.link_rounded),
+    );
+
+    Widget deleteButton() => IconButton(
+      key: const Key('delete-kit'),
+      tooltip: 'Delete kit',
+      onPressed: () async {
+        final deleted = await onDelete!(kit);
+        if (deleted && context.mounted) Navigator.of(context).pop();
+      },
+      icon: const Icon(Icons.delete_outline_rounded),
+    );
+
+    Widget closeButton() => IconButton(
+      tooltip: 'Close kit',
+      onPressed: () => Navigator.of(context).pop(),
+      icon: const Icon(Icons.close_rounded),
+    );
+
     return Dialog(
       insetPadding: const EdgeInsets.all(20),
       child: ConstrainedBox(
@@ -4677,52 +14047,48 @@ class KitDetailsDialog extends StatelessWidget {
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 14, 14),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.inventory_2_outlined,
-                    color: Color(0xffa987ff),
-                    size: 30,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              padding: EdgeInsets.fromLTRB(
+                compact ? 16 : 24,
+                compact ? 14 : 20,
+                compact ? 8 : 14,
+                14,
+              ),
+              child: compact
+                  ? Column(
                       children: [
-                        Text(
-                          kit.name,
-                          key: const Key('kit-details-title'),
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                          ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: identity()),
+                            closeButton(),
+                          ],
                         ),
-                        Text(
-                          '${kit.bom.length} BOM items',
-                          style: const TextStyle(color: Color(0xff929aac)),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            buildButton(expand: true),
+                            if (kit.sourceUrls.isNotEmpty) sourceButton(),
+                            if (canDelete && onDelete != null) deleteButton(),
+                          ],
                         ),
                       ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(child: identity()),
+                        buildButton(),
+                        const SizedBox(width: 8),
+                        if (kit.sourceUrls.isNotEmpty) ...[
+                          sourceButton(),
+                          const SizedBox(width: 4),
+                        ],
+                        if (canDelete && onDelete != null) ...[
+                          deleteButton(),
+                          const SizedBox(width: 4),
+                        ],
+                        closeButton(),
+                      ],
                     ),
-                  ),
-                  Tooltip(
-                    message: canBuild
-                        ? 'Create a new build'
-                        : buildDisabledReason ?? 'You cannot create builds.',
-                    child: FilledButton.icon(
-                      key: const Key('build-kit'),
-                      onPressed: canBuild ? () => onBuild(kit) : null,
-                      icon: const Icon(Icons.construction_rounded),
-                      label: const Text('Build'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
             ),
             if (!canBuild)
               Container(
@@ -4774,6 +14140,13 @@ class KitDetailsDialog extends StatelessWidget {
                     final nestedKit = kits
                         .where((candidate) => candidate.id == line.productId)
                         .firstOrNull;
+                    final matchedInventory = inventory
+                        .where(
+                          (candidate) =>
+                              candidate.id == line.productId ||
+                              candidate.catalogProductId == line.productId,
+                        )
+                        .firstOrNull;
                     final duplicate =
                         kit.bom
                             .where(
@@ -4782,6 +14155,119 @@ class KitDetailsDialog extends StatelessWidget {
                             )
                             .length >
                         1;
+                    final leading = Icon(
+                      missing
+                          ? Icons.error_outline_rounded
+                          : nestedKit == null
+                          ? Icons.inventory_2_outlined
+                          : Icons.account_tree_outlined,
+                      color: missing
+                          ? const Color(0xffff7b8e)
+                          : nestedKit == null
+                          ? const Color(0xff929aac)
+                          : Theme.of(context).colorScheme.primary,
+                    );
+                    final title = Text(
+                      _lineName(line),
+                      key: Key('kit-line-title-$index'),
+                    );
+                    final subtitle = nestedKit == null
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (line.section != 'Unassigned')
+                                Text(line.section),
+                              if (matchedInventory != null)
+                                Text(
+                                  'Matched to ${matchedInventory.name}',
+                                  key: Key('kit-match-label-$index'),
+                                  style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              Text(
+                                'Required ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(lineStock?.available ?? 0)}${missing ? ' · Missing ${_formatBomQuantity(lineStock!.missing)}' : ''}',
+                                key: Key('kit-stock-$index'),
+                                style: TextStyle(
+                                  color: missing
+                                      ? const Color(0xffff9cab)
+                                      : const Color(0xff929aac),
+                                  fontWeight: missing
+                                      ? FontWeight.w700
+                                      : FontWeight.w400,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Text('Kit · Open BOM · ${line.section}');
+                    final trailing = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '× ${_formatBomQuantity(line.quantity)}',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (nestedKit == null &&
+                            missing &&
+                            widget.onAddShortage != null) ...[
+                          const SizedBox(width: 6),
+                          IconButton(
+                            key: Key('shop-kit-line-$index'),
+                            tooltip: 'Add shortage to shopping list',
+                            onPressed: () => widget.onAddShortage!(
+                              kit,
+                              line,
+                              lineStock!.missing,
+                            ),
+                            icon: const _ShoppingCartIcon(
+                              key: Key('bom-shopping-cart-glyph'),
+                            ),
+                          ),
+                        ],
+                        if (nestedKit == null &&
+                            missing &&
+                            widget.canMatchInventory &&
+                            widget.onMatchInventory != null) ...[
+                          const SizedBox(width: 6),
+                          IconButton(
+                            key: Key('match-kit-line-$index'),
+                            tooltip: matchedInventory == null
+                                ? 'Match to existing inventory'
+                                : 'Change inventory match',
+                            onPressed: () => _matchBomLine(context, index),
+                            icon: const Icon(Icons.link_rounded),
+                          ),
+                        ],
+                        if (nestedKit != null) ...[
+                          const SizedBox(width: 8),
+                          const Icon(Icons.chevron_right_rounded),
+                        ],
+                      ],
+                    );
+                    final VoidCallback? openNested = nestedKit == null
+                        ? null
+                        : () => showDialog<void>(
+                            context: context,
+                            builder: (_) => KitDetailsDialog(
+                              kit: nestedKit,
+                              kits: kits,
+                              products: products,
+                              inventory: inventory,
+                              availableQuantity: availableQuantity,
+                              onMatchInventory: widget.onMatchInventory,
+                              canMatchInventory: widget.canMatchInventory,
+                              onAddShortage: widget.onAddShortage,
+                              onBuild: onBuild,
+                              canBuild: canBuild,
+                              buildDisabledReason: buildDisabledReason,
+                            ),
+                          );
                     return Card(
                       key: Key(
                         duplicate
@@ -4789,80 +14275,65 @@ class KitDetailsDialog extends StatelessWidget {
                             : 'kit-detail-line-${line.productId}',
                       ),
                       color: missing ? const Color(0xff351a22) : null,
+                      clipBehavior: Clip.antiAlias,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
                         side: BorderSide(
                           color: missing
                               ? const Color(0xffe45f72)
-                              : const Color(0xff30384a),
+                              : Theme.of(context).colorScheme.outlineVariant,
                         ),
                       ),
-                      child: ListTile(
-                        leading: Icon(
-                          missing
-                              ? Icons.error_outline_rounded
-                              : nestedKit == null
-                              ? Icons.inventory_2_outlined
-                              : Icons.account_tree_outlined,
-                          color: missing
-                              ? const Color(0xffff7b8e)
-                              : nestedKit == null
-                              ? const Color(0xff929aac)
-                              : const Color(0xffa987ff),
-                        ),
-                        title: Text(_lineName(line)),
-                        subtitle: nestedKit == null
-                            ? Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (line.section != 'Unassigned')
-                                    Text(line.section),
-                                  Text(
-                                    'Required ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(lineStock?.available ?? 0)}${missing ? ' · Missing ${_formatBomQuantity(lineStock!.missing)}' : ''}',
-                                    key: Key('kit-stock-$index'),
-                                    style: TextStyle(
-                                      color: missing
-                                          ? const Color(0xffff9cab)
-                                          : const Color(0xff929aac),
-                                      fontWeight: missing
-                                          ? FontWeight.w700
-                                          : FontWeight.w400,
+                      child: compact
+                          ? InkWell(
+                              onTap: openNested,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  14,
+                                  12,
+                                  8,
+                                  8,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 2,
+                                          ),
+                                          child: leading,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [title, subtitle],
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ],
-                              )
-                            : Text('Kit · Open BOM · ${line.section}'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '× ${_formatBomQuantity(line.quantity)}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            if (nestedKit != null) ...[
-                              const SizedBox(width: 8),
-                              const Icon(Icons.chevron_right_rounded),
-                            ],
-                          ],
-                        ),
-                        onTap: nestedKit == null
-                            ? null
-                            : () => showDialog<void>(
-                                context: context,
-                                builder: (_) => KitDetailsDialog(
-                                  kit: nestedKit,
-                                  kits: kits,
-                                  products: products,
-                                  availableQuantity: availableQuantity,
-                                  onBuild: onBuild,
-                                  canBuild: canBuild,
-                                  buildDisabledReason: buildDisabledReason,
+                                    const SizedBox(height: 6),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: trailing,
+                                    ),
+                                  ],
                                 ),
                               ),
-                      ),
+                            )
+                          : ListTile(
+                              leading: leading,
+                              title: title,
+                              subtitle: subtitle,
+                              trailing: trailing,
+                              onTap: openNested,
+                            ),
                     );
                   },
                 ),
@@ -4995,99 +14466,124 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
     final completed = widget.build.completedAt != null;
     final stock = _stockStatus();
     final kitStock = _kitStockStatus();
+    final narrow = MediaQuery.sizeOf(context).width < 700;
+    final mobileHeight = math.min(
+      MediaQuery.sizeOf(context).height * .88,
+      math.max(
+        430.0,
+        250.0 + (widget.build.lines.length * 112) + (grouped.length * 58),
+      ),
+    );
+    final queuePanel = Column(
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(narrow ? 16 : 22, 16, 12, 12),
+          child: _buildHeader(allLinesUsed, completed),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.all(narrow ? 12 : 16),
+            children: [
+              ...grouped.entries.map(
+                (section) => _buildSection(section, stock),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final kitPanel = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            children: [
+              if (narrow) ...[
+                IconButton(
+                  key: const Key('return-to-build-queue'),
+                  onPressed: () => setState(() => showKit = false),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: Text(
+                  widget.kit.name,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: widget.kit.bom.length,
+            itemBuilder: (context, index) {
+              final line = widget.kit.bom[index];
+              final name = _kitLineName(line);
+              final lineStock = kitStock[index]!;
+              final available = lineStock.available;
+              final missing = lineStock.missing;
+              return Card(
+                color: missing > 0.0001 ? const Color(0xff351a22) : null,
+                child: ListTile(
+                  dense: true,
+                  leading: missing > 0.0001
+                      ? const Icon(
+                          Icons.error_outline_rounded,
+                          color: Color(0xffff7b8e),
+                        )
+                      : null,
+                  title: Text(name),
+                  subtitle: Text(
+                    '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
+                  ),
+                  trailing: Text('× ${_formatBomQuantity(line.quantity)}'),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: Stack(
         children: [
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 900),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 16, 12, 12),
-                        child: _buildHeader(allLinesUsed, completed),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: ListView(
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            ...grouped.entries.map(
-                              (section) => _buildSection(section, stock),
-                            ),
-                          ],
+            child: SizedBox(
+              height: narrow ? mobileHeight : null,
+              child: Row(
+                children: [
+                  if (!narrow || !showKit) Expanded(child: queuePanel),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    width: showKit
+                        ? narrow
+                              ? MediaQuery.sizeOf(context).width - 32
+                              : 360
+                        : 0,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerLow,
+                      border: Border(
+                        left: BorderSide(
+                          color: Theme.of(context).colorScheme.outlineVariant,
                         ),
                       ),
-                    ],
+                    ),
+                    child: showKit ? kitPanel : const SizedBox.shrink(),
                   ),
-                ),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  width: showKit ? 360 : 0,
-                  decoration: const BoxDecoration(
-                    color: Color(0xff111620),
-                    border: Border(left: BorderSide(color: Color(0xff333b4d))),
-                  ),
-                  child: showKit
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(18),
-                              child: Text(
-                                widget.kit.name,
-                                style: const TextStyle(
-                                  fontSize: 19,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                            const Divider(height: 1),
-                            Expanded(
-                              child: ListView.builder(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
-                                ),
-                                itemCount: widget.kit.bom.length,
-                                itemBuilder: (context, index) {
-                                  final line = widget.kit.bom[index];
-                                  final name = _kitLineName(line);
-                                  final lineStock = kitStock[index]!;
-                                  final available = lineStock.available;
-                                  final missing = lineStock.missing;
-                                  return Card(
-                                    color: missing > 0.0001
-                                        ? const Color(0xff351a22)
-                                        : null,
-                                    child: ListTile(
-                                      dense: true,
-                                      leading: missing > 0.0001
-                                          ? const Icon(
-                                              Icons.error_outline_rounded,
-                                              color: Color(0xffff7b8e),
-                                            )
-                                          : null,
-                                      title: Text(name),
-                                      subtitle: Text(
-                                        '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
-                                      ),
-                                      trailing: Text(
-                                        '× ${_formatBomQuantity(line.quantity)}',
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           Positioned.fill(
@@ -5181,12 +14677,13 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
       );
       if (constraints.maxWidth < 720) {
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.construction_rounded,
-                  color: Color(0xffa987ff),
+                  color: Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 10),
                 Expanded(child: title),
@@ -5194,16 +14691,21 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
               ],
             ),
             const SizedBox(height: 10),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: actions),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: actions.where((widget) => widget is! SizedBox).toList(),
             ),
           ],
         );
       }
       return Row(
         children: [
-          const Icon(Icons.construction_rounded, color: Color(0xffa987ff)),
+          Icon(
+            Icons.construction_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           const SizedBox(width: 10),
           Expanded(child: title),
           ...actions,
@@ -5259,14 +14761,14 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
                       : Icons.account_tree_outlined,
                   color: complete
                       ? const Color(0xff42d8c7)
-                      : const Color(0xffa987ff),
+                      : Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     section.key.toUpperCase(),
-                    style: const TextStyle(
-                      color: Color(0xffc8bbff),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.1,
                     ),
@@ -5310,77 +14812,120 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
           side: BorderSide(
             color: stock.isMissing
                 ? const Color(0xffe45f72)
-                : const Color(0xff30384a),
+                : Theme.of(context).colorScheme.outlineVariant,
           ),
         ),
-        child: ListTile(
-          leading: Icon(
-            complete
-                ? Icons.check_circle_rounded
-                : stock.isMissing
-                ? Icons.error_outline_rounded
-                : Icons.radio_button_unchecked,
-            color: complete
-                ? const Color(0xff42d8c7)
-                : stock.isMissing
-                ? const Color(0xffff7b8e)
-                : null,
-          ),
-          title: Text(line.name),
-          subtitle: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text:
-                      '${_formatBomQuantity(line.usedQuantity)} / ${_formatBomQuantity(line.requiredQuantity)} used · ${_formatBomQuantity(stock.available)} available',
-                ),
-                if (stock.isMissing)
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 560;
+            final statusIcon = Icon(
+              complete
+                  ? Icons.check_circle_rounded
+                  : stock.isMissing
+                  ? Icons.error_outline_rounded
+                  : Icons.radio_button_unchecked,
+              color: complete
+                  ? const Color(0xff42d8c7)
+                  : stock.isMissing
+                  ? const Color(0xffff7b8e)
+                  : null,
+            );
+            final details = Text.rich(
+              TextSpan(
+                children: [
                   TextSpan(
-                    text: ' · ${_formatBomQuantity(stock.missing)} missing',
-                    style: const TextStyle(
-                      color: Color(0xffff9cab),
-                      fontWeight: FontWeight.w700,
-                    ),
+                    text:
+                        '${_formatBomQuantity(line.usedQuantity)} / ${_formatBomQuantity(line.requiredQuantity)} used · ${_formatBomQuantity(stock.available)} available',
                   ),
-              ],
-            ),
-          ),
-          trailing: Wrap(
-            spacing: 6,
-            children: [
-              OutlinedButton(
-                onPressed:
-                    !widget.canUse ||
-                        widget.build.completedAt != null ||
-                        line.usedQuantity <= 0
-                    ? null
-                    : () async {
-                        if (await widget.onAdjust(line.id, false) && mounted) {
-                          setState(() {});
-                        }
-                      },
-                child: const Text('Unuse'),
+                  if (stock.isMissing)
+                    TextSpan(
+                      text: ' · ${_formatBomQuantity(stock.missing)} missing',
+                      style: const TextStyle(
+                        color: Color(0xffff9cab),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                ],
               ),
-              FilledButton(
-                onPressed:
-                    !widget.canUse ||
-                        widget.build.completedAt != null ||
-                        complete ||
-                        stock.available <= 0
-                    ? null
-                    : () async {
-                        final wasFullyUsed = _allBuildLinesUsed;
-                        if (await widget.onAdjust(line.id, true) && mounted) {
-                          setState(() {});
-                          if (!wasFullyUsed && _allBuildLinesUsed) {
-                            _celebrateCompletion();
+            );
+            final actions = Wrap(
+              spacing: 6,
+              children: [
+                OutlinedButton(
+                  onPressed:
+                      !widget.canUse ||
+                          widget.build.completedAt != null ||
+                          line.usedQuantity <= 0
+                      ? null
+                      : () async {
+                          if (await widget.onAdjust(line.id, false) &&
+                              mounted) {
+                            setState(() {});
                           }
-                        }
-                      },
-                child: Text(multiple ? 'Use 1' : 'Use'),
-              ),
-            ],
-          ),
+                        },
+                  child: const Text('Unuse'),
+                ),
+                FilledButton(
+                  onPressed:
+                      !widget.canUse ||
+                          widget.build.completedAt != null ||
+                          complete ||
+                          stock.available <= 0
+                      ? null
+                      : () async {
+                          final wasFullyUsed = _allBuildLinesUsed;
+                          if (await widget.onAdjust(line.id, true) && mounted) {
+                            setState(() {});
+                            if (!wasFullyUsed && _allBuildLinesUsed) {
+                              _celebrateCompletion();
+                            }
+                          }
+                        },
+                  child: Text(multiple ? 'Use 1' : 'Use'),
+                ),
+              ],
+            );
+            if (narrow) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        statusIcon,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                line.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              details,
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Align(alignment: Alignment.centerRight, child: actions),
+                  ],
+                ),
+              );
+            }
+            return ListTile(
+              leading: statusIcon,
+              title: Text(line.name),
+              subtitle: details,
+              trailing: actions,
+            );
+          },
         ),
       ),
     );
@@ -5466,40 +15011,86 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.vendors,
     required this.brands,
     required this.spoolTypes,
+    this.materials = starterMaterials,
     required this.customItemTypes,
+    required this.typeLabelOverrides,
+    required this.typeIconOverrides,
+    required this.typeDepletionSettings,
+    required this.typeStatusSettings,
+    required this.deletedTypeKeys,
+    required this.customTypeUsageCounts,
     required this.products,
+    required this.inventoryItems,
     required this.machineTypes,
     required this.machines,
     required this.kits,
     required this.onVendorAdded,
     required this.onBrandAdded,
     required this.onSpoolTypeAdded,
+    this.onMaterialAdded,
+    this.onMaterialUpdated,
+    this.onMaterialDeleted,
     required this.onCustomItemTypeAdded,
+    required this.onCustomItemTypeUpdated,
+    required this.onCustomItemTypeDeleted,
+    required this.onBuiltInTypeRenamed,
+    required this.onBuiltInTypeIconChanged,
+    required this.onBuiltInTypeDepletionChanged,
+    required this.onBuiltInTypeStatusChanged,
+    required this.onBuiltInTypeDeleted,
+    required this.onBuiltInTypeRestored,
+    required this.canDeleteCustomItemTypes,
     required this.onProductAdded,
     required this.onMachineTypeAdded,
     required this.onMachineAdded,
+    required this.onMachineUpdated,
     required this.onKitAdded,
     required this.onKitUpdated,
+    this.onImportKitPackage,
     this.initialKitId,
+    this.initialKitBom,
   });
   final List<VendorRecord> vendors;
   final List<BrandRecord> brands;
   final List<SpoolTypeRecord> spoolTypes;
+  final List<MaterialRecord> materials;
   final List<CustomItemTypeRecord> customItemTypes;
+  final Map<String, String> typeLabelOverrides;
+  final Map<String, String> typeIconOverrides;
+  final Map<String, bool> typeDepletionSettings;
+  final Map<String, bool> typeStatusSettings;
+  final Set<String> deletedTypeKeys;
+  final Map<String, int> customTypeUsageCounts;
   final List<CatalogProduct> products;
+  final List<InventoryItem> inventoryItems;
   final List<MachineTypeRecord> machineTypes;
   final List<MachineRecord> machines;
   final List<KitRecord> kits;
   final ValueChanged<VendorRecord> onVendorAdded;
   final ValueChanged<BrandRecord> onBrandAdded;
   final ValueChanged<SpoolTypeRecord> onSpoolTypeAdded;
+  final ValueChanged<MaterialRecord>? onMaterialAdded;
+  final ValueChanged<MaterialRecord>? onMaterialUpdated;
+  final ValueChanged<MaterialRecord>? onMaterialDeleted;
   final ValueChanged<CustomItemTypeRecord> onCustomItemTypeAdded;
+  final ValueChanged<CustomItemTypeRecord> onCustomItemTypeUpdated;
+  final ValueChanged<CustomItemTypeRecord> onCustomItemTypeDeleted;
+  final ValueChanged<MapEntry<String, String>> onBuiltInTypeRenamed;
+  final ValueChanged<MapEntry<String, String>> onBuiltInTypeIconChanged;
+  final ValueChanged<MapEntry<String, bool>> onBuiltInTypeDepletionChanged;
+  final ValueChanged<MapEntry<String, bool>> onBuiltInTypeStatusChanged;
+  final ValueChanged<String> onBuiltInTypeDeleted;
+  final ValueChanged<String> onBuiltInTypeRestored;
+  final bool canDeleteCustomItemTypes;
   final ValueChanged<CatalogProduct> onProductAdded;
   final ValueChanged<MachineTypeRecord> onMachineTypeAdded;
   final ValueChanged<MachineRecord> onMachineAdded;
+  final ValueChanged<MachineRecord> onMachineUpdated;
   final ValueChanged<KitRecord> onKitAdded;
   final ValueChanged<KitRecord> onKitUpdated;
+  final Future<bool> Function()? onImportKitPackage;
   final String? initialKitId;
+  final List<KitBomEntry>? initialKitBom;
 
   @override
   State<CatalogManagerDialog> createState() => _CatalogManagerDialogState();
@@ -5510,6 +15101,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   final brandName = TextEditingController();
   final spoolLabel = TextEditingController();
   final spoolWeightGrams = TextEditingController();
+  final materialName = TextEditingController();
   final customTypeName = TextEditingController();
   final customTypeFields = TextEditingController();
   final productName = TextEditingController();
@@ -5523,12 +15115,27 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   final machineModel = TextEditingController();
   final machineAddress = TextEditingController();
   final kitName = TextEditingController();
+  String? kitNameError;
   late final List<VendorRecord> vendors = [...widget.vendors];
   late final List<BrandRecord> brands = [...widget.brands];
   late final List<SpoolTypeRecord> spoolTypes = [...widget.spoolTypes];
+  late final List<MaterialRecord> materials = [...widget.materials];
   late final List<CustomItemTypeRecord> customItemTypes = [
     ...widget.customItemTypes,
   ];
+  late final Map<String, String> typeLabelOverrides = {
+    ...widget.typeLabelOverrides,
+  };
+  late final Map<String, String> typeIconOverrides = {
+    ...widget.typeIconOverrides,
+  };
+  late final Map<String, bool> typeDepletionSettings = {
+    ...widget.typeDepletionSettings,
+  };
+  late final Map<String, bool> typeStatusSettings = {
+    ...widget.typeStatusSettings,
+  };
+  late final Set<String> deletedTypeKeys = {...widget.deletedTypeKeys};
   late final List<CatalogProduct> products = [...widget.products];
   late final List<MachineTypeRecord> machineTypes = [...widget.machineTypes];
   late final List<MachineRecord> machines = [...widget.machines];
@@ -5539,6 +15146,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   String? machineTypeParentId;
   String? selectedMachineTypeId;
   final Set<String> selectedMachineKitIds = {};
+  String? editingMachineId;
   String? brandVendorId;
   String? productBrandId;
   final Set<InventoryType> brandCategories = {};
@@ -5550,14 +15158,109 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   Uint8List? vendorLogo;
   Uint8List? brandLogo;
   Uint8List? productImage;
+  Uint8List? machineImage;
+  Uint8List? kitImage;
+  String customTypeIconKey = 'tune';
+  bool customTypeCanMarkDepleted = false;
+  bool customTypeShowsStatus = false;
+  String customTypeLinkKey = '';
+  String materialTypeKey = 'type:filament';
 
-  bool get kitOnly => widget.initialKitId != null;
+  bool get kitOnly =>
+      widget.initialKitId != null || widget.initialKitBom != null;
+
+  List<({String key, String defaultLabel, IconData icon})>
+  get _allBuiltInCatalogTypes => [
+    for (final type in CatalogViewFilter.values)
+      (
+        key: _catalogViewDefinitionKey(type),
+        defaultLabel: _defaultCatalogViewLabel(type),
+        icon: switch (type) {
+          CatalogViewFilter.kits => Icons.inventory_2_outlined,
+          CatalogViewFilter.builds => Icons.construction_rounded,
+          CatalogViewFilter.machines => Icons.precision_manufacturing_outlined,
+          CatalogViewFilter.printers => Icons.print_outlined,
+          CatalogViewFilter.tools => Icons.handyman_outlined,
+        },
+      ),
+    for (final type in InventoryType.values.where(
+      (type) => type != InventoryType.custom,
+    ))
+      (
+        key: _inventoryTypeDefinitionKey(type),
+        defaultLabel: _typeLabel(type),
+        icon: _typeIcon(type),
+      ),
+  ];
+
+  List<({String key, String defaultLabel, IconData icon})>
+  get _builtInCatalogTypes => _allBuiltInCatalogTypes
+      .where((type) => !deletedTypeKeys.contains(type.key))
+      .toList();
+
+  List<({String key, String defaultLabel, IconData icon})>
+  get _deletedCatalogTypes => _allBuiltInCatalogTypes
+      .where(
+        (type) =>
+            type.key.startsWith('catalog:') &&
+            deletedTypeKeys.contains(type.key),
+      )
+      .toList();
+
+  String _builtInTypeLabel(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) => typeLabelOverrides[type.key] ?? type.defaultLabel;
+
+  String _builtInTypeIconKey(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) => typeIconOverrides[type.key] ?? _iconKeyFor(type.icon);
+
+  String _catalogInventoryTypeLabel(InventoryType type) =>
+      typeLabelOverrides[_inventoryTypeDefinitionKey(type)] ?? _typeLabel(type);
+
+  IconData _catalogInventoryItemIcon(InventoryItem item) {
+    if (item.type != InventoryType.custom) {
+      return _iconFromKey(
+        typeIconOverrides[_inventoryTypeDefinitionKey(item.type)],
+        _typeIcon(item.type),
+      );
+    }
+    final customType = customItemTypes
+        .where((candidate) => candidate.id == item.customTypeId)
+        .firstOrNull;
+    return _iconFromKey(customType?.iconKey, Icons.tune_rounded);
+  }
 
   @override
   void initState() {
     super.initState();
+    if (!kitOnly) draftSections.add('Main component');
     if (kitOnly) {
       kitSectionExpanded = true;
+      if (widget.initialKitBom != null) {
+        draftBom.addAll(
+          widget.initialKitBom!.map(
+            (line) => KitBomEntry(
+              id: line.id,
+              productId: line.productId,
+              quantity: line.quantity,
+              name: line.name,
+              section:
+                  line.section.trim().isEmpty || line.section == 'Unassigned'
+                  ? 'Main component'
+                  : line.section,
+            ),
+          ),
+        );
+        draftSections.addAll(
+          widget.initialKitBom!
+              .map((line) => line.section.trim())
+              .where((section) => section.isNotEmpty)
+              .toSet(),
+        );
+        if (draftSections.isEmpty) draftSections.add('Main component');
+        return;
+      }
       loadingInitialKit = true;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 180));
@@ -5569,7 +15272,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           if (initialKit != null) {
             editingKitId = initialKit.id;
             kitName.text = initialKit.name;
-            draftBom.addAll(initialKit.bom);
+            draftBom.addAll(initialKit.bom.map(_withDefaultKitSection));
             draftSections.addAll(_sectionsForKit(initialKit));
           }
           loadingInitialKit = false;
@@ -5584,6 +15287,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     brandName.dispose();
     spoolLabel.dispose();
     spoolWeightGrams.dispose();
+    materialName.dispose();
     customTypeName.dispose();
     customTypeFields.dispose();
     productName.dispose();
@@ -5599,6 +15303,374 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     kitName.dispose();
     super.dispose();
   }
+
+  Widget _catalogFormCard({
+    required String title,
+    required String description,
+    required IconData icon,
+    required List<Widget> children,
+  }) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    description,
+                    style: const TextStyle(
+                      color: Color(0xff929aac),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        ...children,
+      ],
+    ),
+  );
+
+  Widget _catalogRecordCard({
+    required Uint8List? logo,
+    required IconData fallbackIcon,
+    required String name,
+    required String details,
+    Widget? badge,
+  }) => Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xff171c27),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 42,
+          height: 42,
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: const Color(0xff0d1119),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: logo == null
+              ? Icon(fallbackIcon, color: Theme.of(context).colorScheme.primary)
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: Image.memory(logo, fit: BoxFit.contain),
+                ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(
+                details,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xff929aac), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        if (badge != null) ...[const SizedBox(width: 10), badge],
+      ],
+    ),
+  );
+
+  Widget _vendorCatalogSection() => ExpansionTile(
+    key: const Key('catalog-vendors-section'),
+    leading: const Icon(Icons.storefront_outlined),
+    title: Text('Vendors (${vendors.length})'),
+    subtitle: const Text('Stores and suppliers you purchase from'),
+    childrenPadding: const EdgeInsets.fromLTRB(0, 8, 0, 18),
+    children: [
+      _catalogFormCard(
+        title: 'Add vendor',
+        description: 'Create a store or supplier used when sourcing products.',
+        icon: Icons.add_business_outlined,
+        children: [
+          TextField(
+            key: const Key('new-vendor-name'),
+            controller: vendorName,
+            decoration: const InputDecoration(
+              labelText: 'Vendor name',
+              hintText: 'Printed Solid',
+            ),
+          ),
+          const SizedBox(height: 12),
+          _ImagePickerButton(
+            key: const Key('vendor-logo-picker'),
+            label: 'Vendor logo',
+            bytes: vendorLogo,
+            fallbackIcon: Icons.storefront_outlined,
+            onChanged: (bytes) => setState(() => vendorLogo = bytes),
+          ),
+          const SizedBox(height: 6),
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              key: const Key('vendor-is-brand'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('This vendor also makes products'),
+              subtitle: const Text(
+                'Create a matching brand with the same name and logo.',
+              ),
+              value: vendorAlsoBrand,
+              onChanged: (value) => setState(() {
+                vendorAlsoBrand = value;
+                if (!value) vendorBrandCategories.clear();
+              }),
+            ),
+          ),
+          if (vendorAlsoBrand) ...[
+            const Text(
+              'PRODUCT TYPES · SELECT AT LEAST ONE',
+              style: TextStyle(
+                color: Color(0xff929aac),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .9,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: InventoryType.values
+                  .where((type) => type != InventoryType.custom)
+                  .map(
+                    (category) => FilterChip(
+                      key: Key('vendor-brand-category-${category.name}'),
+                      label: Text(_catalogInventoryTypeLabel(category)),
+                      selected: vendorBrandCategories.contains(category),
+                      onSelected: (selected) => setState(() {
+                        selected
+                            ? vendorBrandCategories.add(category)
+                            : vendorBrandCategories.remove(category);
+                      }),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 14),
+          ],
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              key: const Key('add-vendor'),
+              onPressed: _addVendor,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add vendor'),
+            ),
+          ),
+        ],
+      ),
+      const Divider(height: 28),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'EXISTING VENDORS',
+          style: TextStyle(
+            color: const Color(0xff929aac),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      if (vendors.isEmpty)
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'No vendors yet.',
+            style: TextStyle(color: Color(0xff929aac)),
+          ),
+        )
+      else
+        ...vendors.map(
+          (vendor) => Padding(
+            key: Key('vendor-summary-${vendor.id}'),
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _catalogRecordCard(
+              logo: vendor.logoBytes,
+              fallbackIcon: Icons.storefront_outlined,
+              name: vendor.name,
+              details: vendor.isBrand
+                  ? 'Purchase source · also a product brand'
+                  : 'Purchase source',
+              badge: vendor.isBrand
+                  ? const Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text('Also a brand'),
+                    )
+                  : null,
+            ),
+          ),
+        ),
+    ],
+  );
+
+  Widget _brandCatalogSection() => ExpansionTile(
+    key: const Key('catalog-brands-section'),
+    leading: const Icon(Icons.sell_outlined),
+    title: Text('Brands (${brands.length})'),
+    subtitle: const Text('Product makers and the types they manufacture'),
+    childrenPadding: const EdgeInsets.fromLTRB(0, 8, 0, 18),
+    children: [
+      _catalogFormCard(
+        title: 'Add brand',
+        description:
+            'Create a maker, then connect it to a vendor and product types.',
+        icon: Icons.new_label_outlined,
+        children: [
+          TextField(
+            key: const Key('new-brand-name'),
+            controller: brandName,
+            decoration: const InputDecoration(labelText: 'Brand name'),
+          ),
+          const SizedBox(height: 12),
+          _ImagePickerButton(
+            key: const Key('brand-logo-picker'),
+            label: 'Brand logo',
+            bytes: brandLogo,
+            fallbackIcon: Icons.sell_outlined,
+            onChanged: (bytes) => setState(() => brandLogo = bytes),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            key: const Key('brand-vendor'),
+            initialValue: brandVendorId,
+            decoration: const InputDecoration(
+              labelText: 'Purchased from',
+              helperText: 'Choose the vendor that sells this brand.',
+            ),
+            items: vendors
+                .map(
+                  (vendor) => DropdownMenuItem(
+                    value: vendor.id,
+                    child: Text(vendor.name),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => brandVendorId = value),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'PRODUCT TYPES · SELECT AT LEAST ONE',
+            style: TextStyle(
+              color: Color(0xff929aac),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: .9,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: InventoryType.values
+                .where((type) => type != InventoryType.custom)
+                .map(
+                  (category) => FilterChip(
+                    key: Key('brand-category-${category.name}'),
+                    label: Text(_catalogInventoryTypeLabel(category)),
+                    selected: brandCategories.contains(category),
+                    onSelected: (selected) => setState(() {
+                      selected
+                          ? brandCategories.add(category)
+                          : brandCategories.remove(category);
+                    }),
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 14),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              key: const Key('add-brand'),
+              onPressed: _addBrand,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add brand'),
+            ),
+          ),
+        ],
+      ),
+      const Divider(height: 28),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'EXISTING BRANDS',
+          style: TextStyle(
+            color: const Color(0xff929aac),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      if (brands.isEmpty)
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'No brands yet.',
+            style: TextStyle(color: Color(0xff929aac)),
+          ),
+        )
+      else
+        ...brands.map((brand) {
+          final linkedVendors = vendors
+              .where((vendor) => brand.vendorIds.contains(vendor.id))
+              .map((vendor) => vendor.name)
+              .join(', ');
+          final categoryLabels = brand.categories
+              .map(_catalogInventoryTypeLabel)
+              .join(', ');
+          return Padding(
+            key: Key('brand-summary-${brand.id}'),
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _catalogRecordCard(
+              logo: brand.logoBytes,
+              fallbackIcon: Icons.sell_outlined,
+              name: brand.name,
+              details: [
+                if (linkedVendors.isNotEmpty) 'Sold by $linkedVendors',
+                if (categoryLabels.isNotEmpty) 'Makes $categoryLabels',
+              ].join(' · '),
+            ),
+          );
+        }),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) => Dialog(
@@ -5623,12 +15695,35 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                         ),
                       ),
                       Text(
-                        kitOnly ? 'Edit this kit and its bill of materials' : 'Sources, makers, and reusable product definitions',
+                        kitOnly
+                            ? editingKitId == null
+                                  ? 'Create a kit and define its bill of materials'
+                                  : 'Edit this kit and its bill of materials'
+                            : 'Sources, makers, and reusable product definitions',
                         style: const TextStyle(color: Color(0xff929aac)),
                       ),
                     ],
                   ),
                 ),
+                if (!kitOnly &&
+                    (Platform.isLinux ||
+                        Platform.isWindows ||
+                        Platform.isMacOS)) ...[
+                  OutlinedButton.icon(
+                    key: const Key('import-kit-package'),
+                    onPressed: widget.onImportKitPackage == null
+                        ? null
+                        : () async {
+                            final imported = await widget.onImportKitPackage!();
+                            if (imported && context.mounted) {
+                              Navigator.pop(context);
+                            }
+                          },
+                    icon: const Icon(Icons.file_upload_outlined),
+                    label: const Text('Import kit'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 IconButton(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close_rounded),
@@ -5643,619 +15738,464 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                       ? const _KitBomLoadingState()
                       : _kitOnlyBomList()
                 : ListView(
+                    key: const Key('catalog-list'),
                     padding: const EdgeInsets.all(18),
-                    children: [
-                      ExpansionTile(
-                        key: const Key('catalog-item-types-section'),
-                        leading: const Icon(Icons.tune_rounded),
-                        title: Text(
-                          'Item types (${InventoryType.values.length - 1 + customItemTypes.length})',
-                        ),
-                        subtitle: const Text(
-                          'Built-in behavior and your own contextual fields',
-                        ),
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              for (final type in InventoryType.values.where(
-                                (type) => type != InventoryType.custom,
-                              ))
-                                Chip(
-                                  avatar: Icon(_typeIcon(type), size: 18),
-                                  label: Text(_typeLabel(type)),
-                                ),
-                              for (final type in customItemTypes)
-                                Chip(
-                                  avatar: const Icon(
-                                    Icons.tune_rounded,
-                                    size: 18,
-                                  ),
-                                  label: Text(
-                                    type.contextualFields.isEmpty
-                                        ? type.name
-                                        : '${type.name} · ${type.contextualFields.join(', ')}',
-                                  ),
-                                ),
-                            ],
+                    children: () {
+                      final sections = <String, Widget>{
+                        'types': _itemTypesSection(),
+                        'vendors': _vendorCatalogSection(),
+                        'brands': _brandCatalogSection(),
+                        'spools': ExpansionTile(
+                          key: const Key('catalog-spool-types-section'),
+                          leading: const Icon(Icons.donut_large_rounded),
+                          title: Text('Spool sizes (${spoolTypes.length})'),
+                          subtitle: const Text(
+                            'Reusable filament package weights',
                           ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            key: const Key('new-custom-type-name'),
-                            controller: customTypeName,
-                            decoration: const InputDecoration(
-                              labelText: 'New item type',
-                              hintText: 'Soap batch',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            key: const Key('new-custom-type-fields'),
-                            controller: customTypeFields,
-                            maxLines: 2,
-                            decoration: const InputDecoration(
-                              labelText: 'Contextual fields',
-                              hintText: 'Cure time, Mold, Fragrance',
-                              helperText: 'Separate field names with commas or new lines',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              key: const Key('add-custom-type'),
-                              onPressed: _addCustomItemType,
-                              icon: const Icon(Icons.add_rounded),
-                              label: const Text('Add type'),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-vendors-section'),
-                        initiallyExpanded: true,
-                        leading: const Icon(Icons.storefront_outlined),
-                        title: Text('Vendors (${vendors.length})'),
-                        subtitle: const Text('Where products are purchased'),
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            children: vendors
-                                .map(
-                                  (vendor) => Chip(
-                                    avatar: _LogoAvatar(
-                                      bytes: vendor.logoBytes,
-                                      fallbackIcon: Icons.storefront_outlined,
+                          children: [
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    key: const Key('new-spool-label'),
+                                    controller: spoolLabel,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Button label',
+                                      hintText: '2.5 kg',
                                     ),
-                                    label: Text(vendor.name),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 220,
-                                child: TextField(
-                                  key: const Key('new-vendor-name'),
-                                  controller: vendorName,
-                                  decoration: const InputDecoration(
-                                    labelText: 'New vendor',
-                                    hintText: 'Printed Solid',
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 10),
-                              FilledButton(
-                                key: const Key('add-vendor'),
-                                onPressed: _addVendor,
-                                child: const Text('Add'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          _ImagePickerButton(
-                            key: const Key('vendor-logo-picker'),
-                            label: 'Vendor logo',
-                            bytes: vendorLogo,
-                            fallbackIcon: Icons.storefront_outlined,
-                            onChanged: (bytes) =>
-                                setState(() => vendorLogo = bytes),
-                          ),
-                          SwitchListTile(
-                            key: const Key('vendor-is-brand'),
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('This vendor is also a brand'),
-                            subtitle: const Text(
-                              'Use one identity when the maker also sells directly',
-                            ),
-                            value: vendorAlsoBrand,
-                            onChanged: (value) => setState(() {
-                              vendorAlsoBrand = value;
-                              if (!value) vendorBrandCategories.clear();
-                            }),
-                          ),
-                          if (vendorAlsoBrand)
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: InventoryType.values
-                                  .where((type) => type != InventoryType.custom)
-                                  .map(
-                                    (category) => FilterChip(
-                                      key: Key(
-                                        'vendor-brand-category-${category.name}',
-                                      ),
-                                      label: Text(_typeLabel(category)),
-                                      selected: vendorBrandCategories.contains(
-                                        category,
-                                      ),
-                                      onSelected: (selected) => setState(() {
-                                        selected
-                                            ? vendorBrandCategories.add(
-                                                category,
-                                              )
-                                            : vendorBrandCategories.remove(
-                                                category,
-                                              );
-                                      }),
+                                SizedBox(
+                                  width: 200,
+                                  child: TextField(
+                                    key: const Key('new-spool-weight'),
+                                    controller: spoolWeightGrams,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Filament weight',
+                                      suffixText: 'g',
                                     ),
-                                  )
-                                  .toList(),
-                            ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-brands-section'),
-                        leading: const Icon(Icons.sell_outlined),
-                        title: Text('Brands (${brands.length})'),
-                        subtitle: const Text(
-                          'Link a maker to vendors and categories',
-                        ),
-                        children: [
-                          TextField(
-                            key: const Key('new-brand-name'),
-                            controller: brandName,
-                            decoration: const InputDecoration(
-                              labelText: 'Brand name',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _ImagePickerButton(
-                            key: const Key('brand-logo-picker'),
-                            label: 'Brand logo',
-                            bytes: brandLogo,
-                            fallbackIcon: Icons.sell_outlined,
-                            onChanged: (bytes) =>
-                                setState(() => brandLogo = bytes),
-                          ),
-                          const SizedBox(height: 10),
-                          DropdownButtonFormField<String>(
-                            key: const Key('brand-vendor'),
-                            initialValue: brandVendorId,
-                            decoration: const InputDecoration(
-                              labelText: 'Vendor',
-                            ),
-                            items: vendors
-                                .map(
-                                  (vendor) => DropdownMenuItem(
-                                    value: vendor.id,
-                                    child: Text(vendor.name),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) =>
-                                setState(() => brandVendorId = value),
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: InventoryType.values
-                                .where((type) => type != InventoryType.custom)
-                                .map(
-                                  (category) => FilterChip(
-                                    key: Key('brand-category-${category.name}'),
-                                    label: Text(_typeLabel(category)),
-                                    selected: brandCategories.contains(
-                                      category,
-                                    ),
-                                    onSelected: (selected) => setState(() {
-                                      selected
-                                          ? brandCategories.add(category)
-                                          : brandCategories.remove(category);
-                                    }),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          const SizedBox(height: 12),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              key: const Key('add-brand'),
-                              onPressed: _addBrand,
-                              icon: const Icon(Icons.add_rounded),
-                              label: const Text('Add brand'),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-spool-types-section'),
-                        leading: const Icon(Icons.donut_large_rounded),
-                        title: Text('Spool sizes (${spoolTypes.length})'),
-                        subtitle: const Text(
-                          'Reusable filament package weights',
-                        ),
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: spoolTypes
-                                .map(
-                                  (spool) => Chip(
-                                    avatar: const Icon(
-                                      Icons.scale_outlined,
-                                      size: 18,
-                                    ),
-                                    label: Text(spool.label),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  key: const Key('new-spool-label'),
-                                  controller: spoolLabel,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Button label',
-                                    hintText: '2.5 kg',
                                   ),
                                 ),
-                              ),
-                              SizedBox(
-                                width: 200,
-                                child: TextField(
-                                  key: const Key('new-spool-weight'),
-                                  controller: spoolWeightGrams,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Filament weight',
-                                    suffixText: 'g',
-                                  ),
+                                FilledButton(
+                                  key: const Key('add-spool-type'),
+                                  onPressed: _addSpoolType,
+                                  child: const Text('Add'),
                                 ),
-                              ),
-                              FilledButton(
-                                key: const Key('add-spool-type'),
-                                onPressed: _addSpoolType,
-                                child: const Text('Add'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-machines-section'),
-                        leading: const Icon(
-                          Icons.precision_manufacturing_outlined,
-                        ),
-                        title: Text('Machines (${machines.length})'),
-                        subtitle: const Text(
-                          'Equipment and compatible machine types',
-                        ),
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: machines.map((machine) {
-                              final type = machineTypes
-                                  .where((value) => value.id == machine.typeId)
-                                  .firstOrNull;
-                              final kitNames = kits
-                                  .where(
-                                    (kit) => machine.kitIds.contains(kit.id),
-                                  )
-                                  .map((kit) => kit.name)
-                                  .join(', ');
-                              return Chip(
-                                avatar: const Icon(
-                                  Icons.memory_rounded,
-                                  size: 18,
-                                ),
-                                label: Text(
-                                  '${machine.name} · ${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}',
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            key: const Key('new-machine-type-name'),
-                            controller: machineTypeName,
-                            decoration: const InputDecoration(
-                              labelText: 'New machine type',
-                              hintText: 'Printer, FDM, Heat Insert Press…',
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 10),
-                          DropdownButtonFormField<String?>(
-                            key: const Key('machine-type-parent'),
-                            initialValue: machineTypeParentId,
-                            decoration: const InputDecoration(
-                              labelText: 'Parent type (optional)',
-                            ),
-                            items: [
-                              const DropdownMenuItem<String?>(
-                                value: null,
-                                child: Text('No parent'),
-                              ),
-                              ...machineTypes.map(
-                                (type) => DropdownMenuItem<String?>(
-                                  value: type.id,
-                                  child: Text(type.name),
-                                ),
-                              ),
-                            ],
-                            onChanged: (value) =>
-                                setState(() => machineTypeParentId = value),
-                          ),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton(
-                              key: const Key('add-machine-type'),
-                              onPressed: _addMachineType,
-                              child: const Text('Add type'),
-                            ),
-                          ),
-                          const Divider(),
-                          DropdownButtonFormField<String>(
-                            key: const Key('machine-type'),
-                            initialValue: selectedMachineTypeId,
-                            decoration: const InputDecoration(
-                              labelText: 'Machine type',
-                            ),
-                            items: machineTypes
-                                .map(
-                                  (type) => DropdownMenuItem(
-                                    value: type.id,
-                                    child: Text(type.name),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) =>
-                                setState(() => selectedMachineTypeId = value),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            key: const Key('new-machine-name'),
-                            controller: machineName,
-                            decoration: const InputDecoration(
-                              labelText: 'Name',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: machineModel,
-                            decoration: const InputDecoration(
-                              labelText: 'Model',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: machineAddress,
-                            decoration: const InputDecoration(
-                              labelText: 'Hostname / IP',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              'Associated kits',
-                              style: Theme.of(context).textTheme.labelLarge,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          if (kits.isEmpty)
+                            const Divider(height: 28),
                             const Align(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                'Define a kit below before associating it.',
-                                style: TextStyle(color: Color(0xff929aac)),
+                                'EXISTING SPOOL SIZES',
+                                style: TextStyle(
+                                  color: Color(0xff929aac),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.1,
+                                ),
                               ),
-                            )
-                          else
+                            ),
+                            const SizedBox(height: 8),
                             Wrap(
                               spacing: 8,
                               runSpacing: 8,
-                              children: kits
+                              children: spoolTypes
                                   .map(
-                                    (kit) => FilterChip(
-                                      key: Key('machine-kit-${kit.id}'),
-                                      label: Text(kit.name),
-                                      selected: selectedMachineKitIds.contains(
-                                        kit.id,
+                                    (spool) => Chip(
+                                      key: Key('spool-summary-${spool.id}'),
+                                      avatar: const Icon(
+                                        Icons.scale_outlined,
+                                        size: 18,
                                       ),
-                                      onSelected: (selected) => setState(() {
-                                        selected
-                                            ? selectedMachineKitIds.add(kit.id)
-                                            : selectedMachineKitIds.remove(
-                                                kit.id,
-                                              );
-                                      }),
+                                      label: Text(spool.label),
                                     ),
                                   )
                                   .toList(),
                             ),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              key: const Key('add-machine'),
-                              onPressed: _addMachine,
-                              icon: const Icon(Icons.add_rounded),
-                              label: const Text('Add machine'),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-products-section'),
-                        leading: const Icon(Icons.category_outlined),
-                        title: Text('Products and types (${products.length})'),
-                        subtitle: const Text(
-                          'Reusable defaults such as PLA or Tough Resin',
-                        ),
-                        children: [
-                          DropdownButtonFormField<String>(
-                            key: const Key('product-brand'),
-                            initialValue: productBrandId,
-                            decoration: const InputDecoration(
-                              labelText: 'Brand',
-                            ),
-                            items: brands
-                                .map(
-                                  (brand) => DropdownMenuItem(
-                                    value: brand.id,
-                                    child: Text(brand.name),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) => setState(() {
-                              productBrandId = value;
-                              productCategory = null;
-                            }),
-                          ),
-                          if (_productBrand != null) ...[
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 8,
-                              children: _productBrand!.categories
-                                  .map(
-                                    (category) => ChoiceChip(
-                                      key: Key(
-                                        'product-category-${category.name}',
-                                      ),
-                                      label: Text(_typeLabel(category)),
-                                      selected: productCategory == category,
-                                      onSelected: (_) => setState(
-                                        () => productCategory = category,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
+                            const SizedBox(height: 16),
                           ],
-                          const SizedBox(height: 12),
-                          TextField(
-                            key: const Key('new-product-name'),
-                            controller: productName,
-                            decoration: const InputDecoration(
-                              labelText: 'Product / type name',
-                              hintText: 'PolyLite PLA Pro',
-                            ),
+                        ),
+                        'machines': ExpansionTile(
+                          key: const Key('catalog-machines-section'),
+                          leading: const Icon(
+                            Icons.precision_manufacturing_outlined,
                           ),
-                          const SizedBox(height: 10),
-                          _ImagePickerButton(
-                            key: const Key('product-image-picker'),
-                            label: 'Product icon / image',
-                            bytes: productImage,
-                            fallbackIcon: Icons.inventory_2_outlined,
-                            onChanged: (bytes) =>
-                                setState(() => productImage = bytes),
+                          title: Text('Machines (${machines.length})'),
+                          subtitle: const Text(
+                            'Equipment and compatible machine types',
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: productCost,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                        decimal: true,
-                                      ),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Default cost',
-                                    prefixText: r'$ ',
-                                  ),
-                                ),
+                          children: [
+                            const SizedBox(height: 12),
+                            TextField(
+                              key: const Key('new-machine-type-name'),
+                              controller: machineTypeName,
+                              decoration: const InputDecoration(
+                                labelText: 'New machine type',
+                                hintText: 'Printer, FDM, Heat Insert Press…',
                               ),
-                              if (productCategory?.supportsDrying == true) ...[
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: TextField(
-                                    controller: productDrying,
-                                    keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Drying duration',
-                                      suffixText: 'min',
-                                    ),
+                            ),
+                            const SizedBox(height: 10),
+                            DropdownButtonFormField<String?>(
+                              key: const Key('machine-type-parent'),
+                              initialValue: machineTypeParentId,
+                              decoration: const InputDecoration(
+                                labelText: 'Parent type (optional)',
+                              ),
+                              items: [
+                                const DropdownMenuItem<String?>(
+                                  value: null,
+                                  child: Text('No parent'),
+                                ),
+                                ...machineTypes.map(
+                                  (type) => DropdownMenuItem<String?>(
+                                    value: type.id,
+                                    child: Text(type.name),
                                   ),
                                 ),
                               ],
+                              onChanged: (value) =>
+                                  setState(() => machineTypeParentId = value),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: FilledButton(
+                                key: const Key('add-machine-type'),
+                                onPressed: _addMachineType,
+                                child: const Text('Add type'),
+                              ),
+                            ),
+                            const Divider(),
+                            DropdownButtonFormField<String>(
+                              key: const Key('machine-type'),
+                              initialValue: selectedMachineTypeId,
+                              decoration: const InputDecoration(
+                                labelText: 'Machine type',
+                              ),
+                              items: machineTypes
+                                  .map(
+                                    (type) => DropdownMenuItem(
+                                      value: type.id,
+                                      child: Text(type.name),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) =>
+                                  setState(() => selectedMachineTypeId = value),
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              key: const Key('new-machine-name'),
+                              controller: machineName,
+                              decoration: const InputDecoration(
+                                labelText: 'Name',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: machineModel,
+                              decoration: const InputDecoration(
+                                labelText: 'Model',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: machineAddress,
+                              decoration: const InputDecoration(
+                                labelText: 'Hostname / IP',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            _ImagePickerButton(
+                              key: const Key('machine-image-picker'),
+                              label: 'Machine image',
+                              bytes: machineImage,
+                              fallbackIcon:
+                                  Icons.precision_manufacturing_outlined,
+                              onChanged: (bytes) =>
+                                  setState(() => machineImage = bytes),
+                            ),
+                            const SizedBox(height: 10),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Associated kits',
+                                style: Theme.of(context).textTheme.labelLarge,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            if (kits.isEmpty)
+                              const Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Define a kit below before associating it.',
+                                  style: TextStyle(color: Color(0xff929aac)),
+                                ),
+                              )
+                            else
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: kits
+                                    .map(
+                                      (kit) => FilterChip(
+                                        key: Key('machine-kit-${kit.id}'),
+                                        label: Text(kit.name),
+                                        selected: selectedMachineKitIds
+                                            .contains(kit.id),
+                                        onSelected: (selected) => setState(() {
+                                          selected
+                                              ? selectedMachineKitIds.add(
+                                                  kit.id,
+                                                )
+                                              : selectedMachineKitIds.remove(
+                                                  kit.id,
+                                                );
+                                        }),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Wrap(
+                                spacing: 8,
+                                children: [
+                                  if (editingMachineId != null)
+                                    TextButton(
+                                      key: const Key('cancel-machine-edit'),
+                                      onPressed: _clearMachineEditor,
+                                      child: const Text('Cancel'),
+                                    ),
+                                  FilledButton.icon(
+                                    key: const Key('add-machine'),
+                                    onPressed: _addMachine,
+                                    icon: Icon(
+                                      editingMachineId == null
+                                          ? Icons.add_rounded
+                                          : Icons.save_outlined,
+                                    ),
+                                    label: Text(
+                                      editingMachineId == null
+                                          ? 'Add machine'
+                                          : 'Update machine',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 28),
+                            const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'EXISTING MACHINES',
+                                style: TextStyle(
+                                  color: Color(0xff929aac),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.1,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Column(
+                              children: machines.map((machine) {
+                                final type = machineTypes
+                                    .where(
+                                      (value) => value.id == machine.typeId,
+                                    )
+                                    .firstOrNull;
+                                final kitNames = kits
+                                    .where(
+                                      (kit) => machine.kitIds.contains(kit.id),
+                                    )
+                                    .map((kit) => kit.name)
+                                    .join(', ');
+                                return ListTile(
+                                  key: Key('machine-summary-${machine.id}'),
+                                  leading: _LogoAvatar(
+                                    bytes: machine.imageBytes,
+                                    fallbackIcon: Icons.memory_rounded,
+                                  ),
+                                  title: Text(machine.name),
+                                  subtitle: Text(
+                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}',
+                                  ),
+                                  trailing: IconButton(
+                                    key: Key('edit-machine-${machine.id}'),
+                                    tooltip: 'Edit machine',
+                                    onPressed: () =>
+                                        _startEditingMachine(machine),
+                                    icon: const Icon(Icons.edit_outlined),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                        ),
+                        'products': ExpansionTile(
+                          key: const Key('catalog-products-section'),
+                          leading: const Icon(Icons.category_outlined),
+                          title: Text('Product templates (${products.length})'),
+                          subtitle: const Text(
+                            'Named products and reusable defaults; these are not filters',
+                          ),
+                          children: [
+                            DropdownButtonFormField<String>(
+                              key: const Key('product-brand'),
+                              initialValue: productBrandId,
+                              decoration: const InputDecoration(
+                                labelText: 'Brand',
+                              ),
+                              items: brands
+                                  .map(
+                                    (brand) => DropdownMenuItem(
+                                      value: brand.id,
+                                      child: Text(brand.name),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) => setState(() {
+                                productBrandId = value;
+                                productCategory = null;
+                              }),
+                            ),
+                            if (_productBrand != null) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                children: _productBrand!.categories
+                                    .map(
+                                      (category) => ChoiceChip(
+                                        key: Key(
+                                          'product-category-${category.name}',
+                                        ),
+                                        label: Text(
+                                          _catalogInventoryTypeLabel(category),
+                                        ),
+                                        selected: productCategory == category,
+                                        onSelected: (_) => setState(
+                                          () => productCategory = category,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
                             ],
-                          ),
-                          if (productCategory?.supportsPrinting == true) ...[
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             TextField(
-                              controller: printing,
+                              key: const Key('new-product-name'),
+                              controller: productName,
                               decoration: const InputDecoration(
-                                labelText: 'Printing instructions',
+                                labelText: 'Product name',
+                                hintText: 'PolyLite PLA Pro',
                               ),
                             ),
-                          ],
-                          if (productCategory?.supportsDrying == true) ...[
+                            const SizedBox(height: 10),
+                            _ImagePickerButton(
+                              key: const Key('product-image-picker'),
+                              label: 'Product icon / image',
+                              bytes: productImage,
+                              fallbackIcon: Icons.inventory_2_outlined,
+                              onChanged: (bytes) =>
+                                  setState(() => productImage = bytes),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: productCost,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Default cost',
+                                      prefixText: r'$ ',
+                                    ),
+                                  ),
+                                ),
+                                if (productCategory?.supportsDrying ==
+                                    true) ...[
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: productDrying,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Drying duration',
+                                        suffixText: 'min',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            if (productCategory?.supportsPrinting == true) ...[
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: printing,
+                                decoration: const InputDecoration(
+                                  labelText: 'Printing instructions',
+                                ),
+                              ),
+                            ],
+                            if (productCategory?.supportsDrying == true) ...[
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: drying,
+                                decoration: const InputDecoration(
+                                  labelText: 'Drying instructions',
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 10),
                             TextField(
-                              controller: drying,
+                              controller: storage,
                               decoration: const InputDecoration(
-                                labelText: 'Drying instructions',
+                                labelText: 'Storage instructions',
                               ),
                             ),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: FilledButton.icon(
+                                key: const Key('add-product'),
+                                onPressed: _addProduct,
+                                icon: const Icon(Icons.add_rounded),
+                                label: const Text('Add product'),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
                           ],
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: storage,
-                            decoration: const InputDecoration(
-                              labelText: 'Storage instructions',
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              key: const Key('add-product'),
-                              onPressed: _addProduct,
-                              icon: const Icon(Icons.add_rounded),
-                              label: const Text('Add product type'),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                        ],
-                      ),
-                      ExpansionTile(
-                        key: const Key('catalog-kits-section'),
-                        onExpansionChanged: (expanded) =>
-                            setState(() => kitSectionExpanded = expanded),
-                        leading: const Icon(Icons.inventory_2_outlined),
-                        title: Text('Kits (${kits.length})'),
-                        subtitle: const Text('Reusable bills of materials'),
-                        children: _kitEditorWidgets(includeKitList: true),
-                      ),
-                    ],
+                        ),
+                        'kits': ExpansionTile(
+                          key: const Key('catalog-kits-section'),
+                          onExpansionChanged: (expanded) =>
+                              setState(() => kitSectionExpanded = expanded),
+                          leading: const Icon(Icons.inventory_2_outlined),
+                          title: Text('Kits (${kits.length})'),
+                          subtitle: const Text('Reusable bills of materials'),
+                          children: _kitEditorWidgets(includeKitList: true),
+                        ),
+                        'materials': _materialsSection(),
+                      };
+                      const order = [
+                        'types',
+                        'materials',
+                        'machines',
+                        'kits',
+                        'spools',
+                        'vendors',
+                        'brands',
+                        'products',
+                      ];
+                      return order.map((key) => sections[key]!).toList();
+                    }(),
                   ),
           ),
           if (kitSectionExpanded && !loadingInitialKit)
@@ -6296,7 +16236,11 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     onPressed: _saveKit,
                     icon: const Icon(Icons.save_outlined),
                     label: Text(
-                      editingKitId == null ? 'Save kit' : 'Update kit',
+                      editingKitId == null && kitOnly
+                          ? 'Create Kit'
+                          : editingKitId == null
+                          ? 'Save kit'
+                          : 'Update kit',
                     ),
                   ),
                 ],
@@ -6314,8 +16258,16 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       TextField(
         key: const Key('new-kit-name'),
         controller: kitName,
-        decoration: const InputDecoration(labelText: 'Kit name'),
+        decoration: InputDecoration(
+          labelText: 'Kit name',
+          errorText: kitNameError,
+        ),
+        onChanged: (_) {
+          if (kitNameError != null) setState(() => kitNameError = null);
+        },
       ),
+      const SizedBox(height: 12),
+      _kitImagePicker(),
       const SizedBox(height: 18),
       _kitSectionsEditor(),
       const SizedBox(height: 4),
@@ -6329,6 +16281,327 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         ),
       ),
       const SizedBox(height: 18),
+    ],
+  );
+
+  Widget _itemTypesSection() => ExpansionTile(
+    key: const Key('catalog-item-types-section'),
+    leading: const Icon(Icons.tune_rounded),
+    title: Text(
+      'Item types (${_builtInCatalogTypes.length + customItemTypes.length})',
+    ),
+    subtitle: const Text('Editable inventory and catalog types'),
+    children: [
+      _newCustomTypeForm(),
+      const Divider(height: 28),
+      for (final type in _builtInCatalogTypes)
+        ListTile(
+          key: Key('built-in-type-row-${type.key}'),
+          contentPadding: EdgeInsets.zero,
+          leading: _typeIconVisual(
+            _builtInTypeIconKey(type),
+            type.icon,
+            size: 24,
+          ),
+          title: Text(_builtInTypeLabel(type)),
+          subtitle: Text(
+            [
+              'Item type',
+              if (_typeShowsStatus(type.key, typeStatusSettings))
+                'Shows status',
+              if (type.key.startsWith('item:') &&
+                  _typeCanMarkDepleted(type.key, typeDepletionSettings))
+                'Can be marked depleted',
+            ].join(' · '),
+          ),
+          trailing: Wrap(
+            spacing: 2,
+            children: [
+              IconButton(
+                key: Key('edit-built-in-type-${type.key}'),
+                tooltip: 'Rename ${_builtInTypeLabel(type)}',
+                onPressed: () => _editBuiltInType(type),
+                icon: const Icon(Icons.edit_outlined),
+              ),
+              IconButton(
+                key: Key('delete-built-in-type-${type.key}'),
+                tooltip: widget.canDeleteCustomItemTypes
+                    ? 'Delete ${_builtInTypeLabel(type)}'
+                    : 'Only the database owner can delete types',
+                onPressed: widget.canDeleteCustomItemTypes
+                    ? () => _deleteBuiltInType(type)
+                    : null,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
+          ),
+        ),
+      for (final type in customItemTypes)
+        ListTile(
+          key: Key('custom-type-row-${type.id}'),
+          contentPadding: EdgeInsets.zero,
+          leading: _typeIconVisual(type.iconKey, Icons.tune_rounded, size: 24),
+          title: Text(type.name),
+          subtitle: Text(
+            [
+              'Item type',
+              if (type.contextualFields.isNotEmpty)
+                type.contextualFields.join(', '),
+              if (type.canMarkDepleted) 'Can be marked depleted',
+              if (type.showsStatus) 'Shows status',
+              '${widget.customTypeUsageCounts[type.id] ?? 0} inventory items',
+            ].join(' · '),
+          ),
+          trailing: Wrap(
+            spacing: 2,
+            children: [
+              IconButton(
+                key: Key('edit-custom-type-${type.id}'),
+                tooltip: 'Edit ${type.name}',
+                onPressed: () => _editCustomItemType(type),
+                icon: const Icon(Icons.edit_outlined),
+              ),
+              IconButton(
+                key: Key('delete-custom-type-${type.id}'),
+                tooltip: widget.canDeleteCustomItemTypes
+                    ? 'Delete ${type.name}'
+                    : 'Only the database owner can delete types',
+                onPressed: widget.canDeleteCustomItemTypes
+                    ? () => _deleteCustomItemType(type)
+                    : null,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
+          ),
+        ),
+      const SizedBox(height: 16),
+    ],
+  );
+
+  List<({String key, String label})> get _materialTypeChoices => [
+    (key: 'component:spool', label: 'Filament spool'),
+    (key: 'component:master-spool', label: 'Master spool'),
+    for (final type in InventoryType.values.where(
+      (type) =>
+          type != InventoryType.custom &&
+          !deletedTypeKeys.contains(_inventoryTypeDefinitionKey(type)),
+    ))
+      (key: 'type:${type.name}', label: _catalogInventoryTypeLabel(type)),
+    for (final type in customItemTypes)
+      (key: 'custom:${type.id}', label: type.name),
+  ];
+
+  String _materialTypeLabel(String key) =>
+      _materialTypeChoices
+          .where((choice) => choice.key == key)
+          .map((choice) => choice.label)
+          .firstOrNull ??
+      'Unavailable type';
+
+  Widget _materialsSection() => ExpansionTile(
+    key: const Key('catalog-materials-section'),
+    leading: const Icon(Icons.layers_outlined),
+    title: Text('Materials (${materials.length})'),
+    subtitle: const Text('Type-specific item subtypes'),
+    children: [
+      const SizedBox(height: 12),
+      DropdownButtonFormField<String>(
+        key: const Key('new-material-type'),
+        initialValue: materialTypeKey,
+        decoration: const InputDecoration(labelText: 'Item type'),
+        items: _materialTypeChoices
+            .map(
+              (choice) => DropdownMenuItem(
+                value: choice.key,
+                child: Text(choice.label),
+              ),
+            )
+            .toList(),
+        onChanged: (value) {
+          if (value != null) setState(() => materialTypeKey = value);
+        },
+      ),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('new-material-name'),
+              controller: materialName,
+              decoration: const InputDecoration(
+                labelText: 'New material',
+                hintText: 'PLA, Brass, Cardboard…',
+              ),
+              onSubmitted: (_) => _addMaterial(),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            key: const Key('add-material'),
+            onPressed: _addMaterial,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add'),
+          ),
+        ],
+      ),
+      const SizedBox(height: 14),
+      for (final material
+          in ([...materials]..sort((a, b) {
+            final typeOrder = _materialTypeLabel(a.typeKey)
+                .compareTo(_materialTypeLabel(b.typeKey));
+            return typeOrder != 0 ? typeOrder : a.name.compareTo(b.name);
+          })))
+        ListTile(
+          key: Key('material-row-${material.id}'),
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.layers_outlined),
+          title: Text(material.name),
+          subtitle: Text(
+            '${_materialTypeLabel(material.typeKey)} · ${_materialUsageCount(material)} items',
+          ),
+          trailing: Wrap(
+            spacing: 2,
+            children: [
+              IconButton(
+                key: Key('edit-material-${material.id}'),
+                tooltip: 'Edit ${material.name}',
+                onPressed: () => _editMaterial(material),
+                icon: const Icon(Icons.edit_outlined),
+              ),
+              IconButton(
+                key: Key('delete-material-${material.id}'),
+                tooltip: widget.canDeleteCustomItemTypes
+                    ? 'Delete ${material.name}'
+                    : 'Only the database owner can delete materials',
+                onPressed: widget.canDeleteCustomItemTypes
+                    ? () => _deleteMaterial(material)
+                    : null,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
+          ),
+        ),
+      const SizedBox(height: 16),
+    ],
+  );
+
+  int _materialUsageCount(MaterialRecord material) => widget.inventoryItems
+      .where(
+        (item) =>
+            item.materialId == material.id ||
+            item.spoolMaterialId == material.id ||
+            item.masterSpoolMaterialId == material.id,
+      )
+      .length;
+
+  Widget _newCustomTypeForm() => Column(
+    children: [
+      const SizedBox(height: 12),
+      if (_deletedCatalogTypes.isNotEmpty) ...[
+        DropdownButtonFormField<String>(
+          key: const Key('new-type-record-link'),
+          initialValue: customTypeLinkKey,
+          decoration: const InputDecoration(
+            labelText: 'Existing records',
+            helperText: 'Link this type to an existing catalog record family, or create an independent item type.',
+          ),
+          items: [
+            const DropdownMenuItem(
+              value: '',
+              child: Text('New independent item type'),
+            ),
+            for (final type in _deletedCatalogTypes)
+              DropdownMenuItem(
+                value: type.key,
+                child: Text('Reconnect ${type.defaultLabel}'),
+              ),
+          ],
+          onChanged: (value) {
+            final next = value ?? '';
+            setState(() {
+              customTypeLinkKey = next;
+              if (next.isNotEmpty) {
+                final linked = _deletedCatalogTypes.firstWhere(
+                  (type) => type.key == next,
+                );
+                customTypeName.text = linked.defaultLabel;
+                customTypeIconKey = _iconKeyFor(linked.icon);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 10),
+      ],
+      TextField(
+        key: const Key('new-custom-type-name'),
+        controller: customTypeName,
+        decoration: InputDecoration(
+          labelText: customTypeLinkKey.isEmpty
+              ? 'New item type'
+              : 'Recreated type name',
+          hintText: customTypeLinkKey.isEmpty ? 'Soap batch' : null,
+        ),
+      ),
+      if (customTypeLinkKey.isEmpty) ...[
+        const SizedBox(height: 10),
+        TextField(
+          key: const Key('new-custom-type-fields'),
+          controller: customTypeFields,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            labelText: 'Contextual fields',
+            hintText: 'Cure time, Mold, Fragrance',
+            helperText: 'Separate field names with commas or new lines',
+          ),
+        ),
+      ],
+      const SizedBox(height: 10),
+      _TypeIconSelector(
+        key: const Key('new-custom-type-icon'),
+        value: customTypeIconKey,
+        onChanged: (value) => setState(() => customTypeIconKey = value),
+      ),
+      const SizedBox(height: 10),
+      if (customTypeLinkKey.isEmpty) ...[
+        SwitchListTile.adaptive(
+          key: const Key('new-custom-type-can-mark-depleted'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Allow “Mark depleted”'),
+          subtitle: const Text(
+            'Use for consumable item types that are exhausted rather than destroyed.',
+          ),
+          value: customTypeCanMarkDepleted,
+          onChanged: (value) =>
+              setState(() => customTypeCanMarkDepleted = value),
+        ),
+        const SizedBox(height: 10),
+        SwitchListTile.adaptive(
+          key: const Key('new-custom-type-shows-status'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Show item status'),
+          subtitle: const Text(
+            'Show Ready or Deployed status for items of this type.',
+          ),
+          value: customTypeShowsStatus,
+          onChanged: (value) => setState(() => customTypeShowsStatus = value),
+        ),
+        const SizedBox(height: 10),
+      ],
+      Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton.icon(
+          key: const Key('add-custom-type'),
+          onPressed: _addCustomItemType,
+          icon: Icon(
+            customTypeLinkKey.isEmpty ? Icons.add_rounded : Icons.link_rounded,
+          ),
+          label: Text(
+            customTypeLinkKey.isEmpty
+                ? 'Add item type'
+                : 'Create and reconnect',
+          ),
+        ),
+      ),
     ],
   );
 
@@ -6368,9 +16641,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.account_tree_outlined,
-                  color: Color(0xffa987ff),
+                  color: Theme.of(context).colorScheme.primary,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
@@ -6512,30 +16785,19 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   }
 
   List<Widget> _kitEditorWidgets({required bool includeKitList}) => [
-    if (includeKitList) ...[
-      ...kits.map(
-        (kit) => ListTile(
-          key: Key('kit-summary-${kit.id}'),
-          leading: const Icon(Icons.inventory_2_outlined),
-          title: Text(kit.name),
-          subtitle: Text('${kit.bom.length} BOM lines'),
-          trailing: IconButton(
-            key: Key('edit-kit-${kit.id}'),
-            tooltip: 'Edit kit',
-            onPressed: () => _startEditingKit(kit),
-            icon: const Icon(Icons.edit_outlined),
-          ),
-        ),
-      ),
-      const Divider(height: 24),
-    ],
     TextField(
       key: const Key('new-kit-name'),
       controller: kitName,
       decoration: InputDecoration(
         labelText: editingKitId == null ? 'Kit name' : 'Editing kit name',
+        errorText: kitNameError,
       ),
+      onChanged: (_) {
+        if (kitNameError != null) setState(() => kitNameError = null);
+      },
     ),
+    const SizedBox(height: 12),
+    _kitImagePicker(),
     const SizedBox(height: 12),
     _kitSectionsEditor(),
     Align(
@@ -6548,7 +16810,49 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       ),
     ),
     const SizedBox(height: 16),
+    if (includeKitList) ...[
+      const Divider(height: 24),
+      const Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'EXISTING KITS',
+          style: TextStyle(
+            color: Color(0xff929aac),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      ...kits.map(
+        (kit) => ListTile(
+          key: Key('kit-summary-${kit.id}'),
+          leading: _LogoAvatar(
+            bytes: kit.imageBytes,
+            fallbackIcon: Icons.inventory_2_outlined,
+          ),
+          title: Text(kit.name),
+          subtitle: Text('${kit.bom.length} BOM lines'),
+          trailing: IconButton(
+            key: Key('edit-kit-${kit.id}'),
+            tooltip: 'Edit kit',
+            onPressed: () => _startEditingKit(kit),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+    ],
   ];
+
+  Widget _kitImagePicker() => _ImagePickerButton(
+    key: const Key('kit-image-picker'),
+    label: 'Kit image',
+    bytes: kitImage,
+    fallbackIcon: Icons.inventory_2_outlined,
+    onChanged: (bytes) => setState(() => kitImage = bytes),
+  );
 
   BrandRecord? get _productBrand =>
       brands.where((brand) => brand.id == productBrandId).firstOrNull;
@@ -6623,12 +16927,316 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     widget.onSpoolTypeAdded(spool);
   }
 
+  void _addMaterial() {
+    final name = materialName.text.trim();
+    if (name.isEmpty ||
+        materials.any(
+          (material) =>
+              material.typeKey == materialTypeKey &&
+              material.name.toLowerCase() == name.toLowerCase(),
+        )) {
+      return;
+    }
+    final material = MaterialRecord(
+      id: _newCatalogId('MAT'),
+      name: name,
+      typeKey: materialTypeKey,
+    );
+    setState(() {
+      materials.add(material);
+      materialName.clear();
+    });
+    widget.onMaterialAdded?.call(material);
+  }
+
+  Future<void> _editMaterial(MaterialRecord material) async {
+    final name = TextEditingController(text: material.name);
+    var typeKey = material.typeKey;
+    final updated = await showDialog<MaterialRecord>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit material'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                key: const Key('edit-material-type'),
+                initialValue: typeKey,
+                decoration: const InputDecoration(labelText: 'Item type'),
+                items: _materialTypeChoices
+                    .map(
+                      (choice) => DropdownMenuItem(
+                        value: choice.key,
+                        child: Text(choice.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => typeKey = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('edit-material-name'),
+                controller: name,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Material name'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('save-material'),
+              onPressed: () {
+                final cleanName = name.text.trim();
+                if (cleanName.isEmpty) return;
+                Navigator.pop(
+                  dialogContext,
+                  MaterialRecord(
+                    id: material.id,
+                    name: cleanName,
+                    typeKey: typeKey,
+                  ),
+                );
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    name.dispose();
+    if (updated == null || !mounted) return;
+    setState(() {
+      final index = materials.indexWhere(
+        (candidate) => candidate.id == updated.id,
+      );
+      if (index >= 0) materials[index] = updated;
+    });
+    widget.onMaterialUpdated?.call(updated);
+  }
+
+  Future<void> _deleteMaterial(MaterialRecord material) async {
+    final usageCount = _materialUsageCount(material);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${material.name}?'),
+        content: Text(
+          usageCount == 0
+              ? 'This removes the material from the Catalog.'
+              : '$usageCount inventory ${usageCount == 1 ? 'item uses' : 'items use'} this material. The material will be cleared from ${usageCount == 1 ? 'that item' : 'those items'}.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('confirm-delete-material'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete material'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(
+      () => materials.removeWhere((candidate) => candidate.id == material.id),
+    );
+    widget.onMaterialDeleted?.call(material);
+  }
+
+  Future<void> _editCustomItemType(CustomItemTypeRecord type) async {
+    final updated = await showDialog<CustomItemTypeRecord>(
+      context: context,
+      builder: (_) => _CustomItemTypeEditorDialog(
+        type: type,
+        existingNames: customItemTypes
+            .where((candidate) => candidate.id != type.id)
+            .map((candidate) => candidate.name)
+            .toSet(),
+      ),
+    );
+    if (updated == null || !mounted) return;
+    setState(() {
+      final index = customItemTypes.indexWhere(
+        (candidate) => candidate.id == updated.id,
+      );
+      if (index >= 0) customItemTypes[index] = updated;
+      customItemTypes.sort((a, b) => a.name.compareTo(b.name));
+    });
+    widget.onCustomItemTypeUpdated(updated);
+  }
+
+  Future<void> _editBuiltInType(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) async {
+    final currentLabel = _builtInTypeLabel(type);
+    final existingNames = <String>{
+      for (final candidate in _builtInCatalogTypes)
+        if (candidate.key != type.key) _builtInTypeLabel(candidate),
+      ...customItemTypes.map((candidate) => candidate.name),
+    };
+    final updated =
+        await showDialog<
+          ({
+            String name,
+            String iconKey,
+            bool canMarkDepleted,
+            bool showsStatus,
+          })
+        >(
+          context: context,
+          builder: (_) => _TypeNameEditorDialog(
+            initialName: currentLabel,
+            initialIconKey: _builtInTypeIconKey(type),
+            initialCanMarkDepleted: _typeCanMarkDepleted(
+              type.key,
+              typeDepletionSettings,
+            ),
+            initialShowsStatus: _typeShowsStatus(type.key, typeStatusSettings),
+            showDepletionSetting: type.key.startsWith('item:'),
+            showStatusSetting: type.key.startsWith('item:'),
+            existingNames: existingNames,
+          ),
+        );
+    if (updated == null || !mounted) return;
+    setState(() {
+      typeLabelOverrides[type.key] = updated.name;
+      typeIconOverrides[type.key] = updated.iconKey;
+      if (type.key.startsWith('item:')) {
+        typeDepletionSettings[type.key] = updated.canMarkDepleted;
+        typeStatusSettings[type.key] = updated.showsStatus;
+      }
+    });
+    widget.onBuiltInTypeRenamed(MapEntry(type.key, updated.name));
+    widget.onBuiltInTypeIconChanged(MapEntry(type.key, updated.iconKey));
+    if (type.key.startsWith('item:')) {
+      widget.onBuiltInTypeDepletionChanged(
+        MapEntry(type.key, updated.canMarkDepleted),
+      );
+      widget.onBuiltInTypeStatusChanged(
+        MapEntry(type.key, updated.showsStatus),
+      );
+    }
+  }
+
+  Future<void> _deleteBuiltInType(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) async {
+    final label = _builtInTypeLabel(type);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete $label?'),
+        content: Text(
+          type.key.startsWith('catalog:')
+              ? 'This removes the type and its filter, but keeps every existing record under Everything. You can recreate and reconnect the type later from the New Type form.'
+              : 'This removes the item type and its filter. Existing inventory remains visible under Everything and is moved to Other when needed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('confirm-delete-built-in-type'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete type'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      deletedTypeKeys.add(type.key);
+      typeLabelOverrides.remove(type.key);
+      typeIconOverrides.remove(type.key);
+    });
+    widget.onBuiltInTypeDeleted(type.key);
+  }
+
+  Future<void> _deleteCustomItemType(CustomItemTypeRecord type) async {
+    final usageCount = widget.customTypeUsageCounts[type.id] ?? 0;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${type.name}?'),
+        content: Text(
+          usageCount == 0
+              ? 'This removes the item type from the Catalog.'
+              : '$usageCount inventory ${usageCount == 1 ? 'item uses' : 'items use'} this type. ${usageCount == 1 ? 'It' : 'They'} will be changed to Other and the custom field values will be removed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('confirm-delete-custom-type'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete type'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(
+      () => customItemTypes.removeWhere((candidate) => candidate.id == type.id),
+    );
+    widget.onCustomItemTypeDeleted(type);
+  }
+
   void _addCustomItemType() {
     final name = customTypeName.text.trim();
-    if (name.isEmpty ||
-        customItemTypes.any(
-          (type) => type.name.toLowerCase() == name.toLowerCase(),
-        )) {
+    if (name.isEmpty) return;
+    if (customTypeLinkKey.isNotEmpty) {
+      final linked = _deletedCatalogTypes
+          .where((type) => type.key == customTypeLinkKey)
+          .firstOrNull;
+      if (linked == null) return;
+      final key = linked.key;
+      final iconKey = customTypeIconKey;
+      setState(() {
+        deletedTypeKeys.remove(key);
+        typeLabelOverrides[key] = name;
+        typeIconOverrides[key] = iconKey;
+        customTypeName.clear();
+        customTypeFields.clear();
+        customTypeIconKey = 'tune';
+        customTypeCanMarkDepleted = false;
+        customTypeShowsStatus = false;
+        customTypeLinkKey = '';
+      });
+      widget.onBuiltInTypeRenamed(MapEntry(key, name));
+      widget.onBuiltInTypeIconChanged(MapEntry(key, iconKey));
+      widget.onBuiltInTypeRestored(key);
+      return;
+    }
+    if (customItemTypes.any(
+      (type) => type.name.toLowerCase() == name.toLowerCase(),
+    )) {
       return;
     }
     final fields = customTypeFields.text
@@ -6641,12 +17249,18 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       id: _newCatalogId('TYPE'),
       name: name,
       contextualFields: fields,
+      iconKey: customTypeIconKey,
+      canMarkDepleted: customTypeCanMarkDepleted,
+      showsStatus: customTypeShowsStatus,
     );
     setState(() {
       customItemTypes.add(customType);
       customItemTypes.sort((a, b) => a.name.compareTo(b.name));
       customTypeName.clear();
       customTypeFields.clear();
+      customTypeIconKey = 'tune';
+      customTypeCanMarkDepleted = false;
+      customTypeShowsStatus = false;
     });
     widget.onCustomItemTypeAdded(customType);
   }
@@ -6707,23 +17321,64 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   void _addMachine() {
     final name = machineName.text.trim();
     if (name.isEmpty || selectedMachineTypeId == null) return;
+    final wasEditing = editingMachineId != null;
     final machine = MachineRecord(
-      id: _newCatalogId('MCH'),
+      id: editingMachineId ?? _newCatalogId('MCH'),
       name: name,
       model: machineModel.text.trim(),
       address: machineAddress.text.trim(),
       typeId: selectedMachineTypeId!,
       kitIds: {...selectedMachineKitIds},
+      sourceUrls:
+          machines
+              .where((candidate) => candidate.id == editingMachineId)
+              .firstOrNull
+              ?.sourceUrls ??
+          const [],
+      imageBytes: machineImage,
     );
     setState(() {
-      machines.add(machine);
-      machineName.clear();
-      machineModel.clear();
-      machineAddress.clear();
-      selectedMachineKitIds.clear();
+      final index = machines.indexWhere(
+        (candidate) => candidate.id == editingMachineId,
+      );
+      if (index >= 0) {
+        machines[index] = machine;
+      } else {
+        machines.add(machine);
+      }
+      _resetMachineEditor();
     });
-    widget.onMachineAdded(machine);
+    if (wasEditing) {
+      widget.onMachineUpdated(machine);
+    } else {
+      widget.onMachineAdded(machine);
+    }
   }
+
+  void _startEditingMachine(MachineRecord machine) {
+    setState(() {
+      editingMachineId = machine.id;
+      machineName.text = machine.name;
+      machineModel.text = machine.model;
+      machineAddress.text = machine.address;
+      selectedMachineTypeId = machine.typeId;
+      selectedMachineKitIds
+        ..clear()
+        ..addAll(machine.kitIds);
+      machineImage = machine.imageBytes;
+    });
+  }
+
+  void _resetMachineEditor() {
+    editingMachineId = null;
+    machineName.clear();
+    machineModel.clear();
+    machineAddress.clear();
+    selectedMachineKitIds.clear();
+    machineImage = null;
+  }
+
+  void _clearMachineEditor() => setState(_resetMachineEditor);
 
   String _bomEntryName(KitBomEntry line) =>
       line.name ??
@@ -6748,6 +17403,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   Future<void> _chooseKitProduct({String? section}) async {
     const createProduct = '__create_product__';
+    const inventoryPrefix = '__inventory__:';
     var query = '';
     final productId = await showDialog<String>(
       context: context,
@@ -6768,6 +17424,13 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     kit.name.toLowerCase().contains(query.toLowerCase()),
               )
               .toList();
+          final inventoryMatches = widget.inventoryItems
+              .where(
+                (item) =>
+                    !item.archived &&
+                    item.name.toLowerCase().contains(query.toLowerCase()),
+              )
+              .toList();
           return AlertDialog(
             title: const Text('Add BOM item'),
             content: SizedBox(
@@ -6780,7 +17443,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     autofocus: true,
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search_rounded),
-                      labelText: 'Search products or kits',
+                      labelText: 'Search inventory, products, or kits',
                     ),
                     onChanged: (value) => setDialogState(() => query = value),
                   ),
@@ -6794,10 +17457,28 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                   const Divider(height: 1),
                   Expanded(
                     child: ListView.builder(
-                      itemCount: kitMatches.length + matches.length,
+                      itemCount:
+                          inventoryMatches.length +
+                          kitMatches.length +
+                          matches.length,
                       itemBuilder: (context, index) {
-                        if (index < kitMatches.length) {
-                          final kit = kitMatches[index];
+                        if (index < inventoryMatches.length) {
+                          final item = inventoryMatches[index];
+                          return ListTile(
+                            key: Key('kit-inventory-item-${item.id}'),
+                            leading: Icon(_catalogInventoryItemIcon(item)),
+                            title: Text(item.name),
+                            subtitle: Text(
+                              '${_typeLabel(item.type)} · ${_formatBomQuantity(item.quantity)} in inventory',
+                            ),
+                            onTap: () =>
+                                Navigator.of(dialogContext)
+                                    .pop('$inventoryPrefix${item.id}'),
+                          );
+                        }
+                        final catalogIndex = index - inventoryMatches.length;
+                        if (catalogIndex < kitMatches.length) {
+                          final kit = kitMatches[catalogIndex];
                           return ListTile(
                             leading: const Icon(Icons.account_tree_outlined),
                             title: Text(kit.name),
@@ -6806,7 +17487,8 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                                 Navigator.of(dialogContext).pop(kit.id),
                           );
                         }
-                        final product = matches[index - kitMatches.length];
+                        final product =
+                            matches[catalogIndex - kitMatches.length];
                         return ListTile(
                           title: Text(product.name),
                           subtitle: Text(_typeLabel(product.category)),
@@ -6826,6 +17508,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     if (productId == null || !mounted) return;
 
     String? selectedId;
+    String? selectedName;
     if (productId == createProduct) {
       final product = await showDialog<CatalogProduct>(
         context: context,
@@ -6835,6 +17518,15 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       setState(() => products.add(product));
       widget.onProductAdded(product);
       selectedId = product.id;
+    } else if (productId.startsWith(inventoryPrefix)) {
+      final inventoryId = productId.substring(inventoryPrefix.length);
+      final item = widget.inventoryItems
+          .where((candidate) => candidate.id == inventoryId)
+          .firstOrNull;
+      if (item != null) {
+        selectedId = item.catalogProductId ?? item.id;
+        selectedName = item.name;
+      }
     } else {
       final exists =
           products.any((product) => product.id == productId) ||
@@ -6843,7 +17535,8 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     }
     if (selectedId == null || !mounted) return;
 
-    final targetSection = section ?? draftSections.firstOrNull ?? 'Unassigned';
+    final targetSection =
+        section ?? draftSections.firstOrNull ?? 'Main component';
     setState(() {
       if (!draftSections.contains(targetSection)) {
         draftSections.add(targetSection);
@@ -6853,6 +17546,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           id: 'BOM-${DateTime.now().microsecondsSinceEpoch}',
           productId: selectedId!,
           quantity: 1,
+          name: selectedName,
           section: targetSection,
         ),
       );
@@ -6919,11 +17613,24 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       ...kit.sections,
       ...kit.bom.map((line) => line.section),
     ]) {
-      final cleaned = section.trim().isEmpty ? 'Unassigned' : section.trim();
+      final cleaned = section.trim().isEmpty || section == 'Unassigned'
+          ? 'Main component'
+          : section.trim();
       if (!result.contains(cleaned)) result.add(cleaned);
     }
+    if (result.isEmpty) result.add('Main component');
     return result;
   }
+
+  KitBomEntry _withDefaultKitSection(KitBomEntry line) => KitBomEntry(
+    id: line.id,
+    productId: line.productId,
+    quantity: line.quantity,
+    name: line.name,
+    section: line.section.trim().isEmpty || line.section == 'Unassigned'
+        ? 'Main component'
+        : line.section,
+  );
 
   Future<String?> _promptKitSectionName({
     required String title,
@@ -7009,9 +17716,11 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     setState(() {
       editingKitId = kit.id;
       kitName.text = kit.name;
+      kitImage = kit.imageBytes;
+      kitNameError = null;
       draftBom
         ..clear()
-        ..addAll(kit.bom);
+        ..addAll(kit.bom.map(_withDefaultKitSection));
       draftSections
         ..clear()
         ..addAll(_sectionsForKit(kit));
@@ -7022,20 +17731,34 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     setState(() {
       editingKitId = null;
       kitName.clear();
+      kitImage = null;
+      kitNameError = null;
       draftBom.clear();
-      draftSections.clear();
+      draftSections
+        ..clear()
+        ..add('Main component');
     });
   }
 
   void _saveKit() {
     final name = kitName.text.trim();
-    if (name.isEmpty) return;
+    if (name.isEmpty) {
+      setState(() => kitNameError = 'Enter a kit name.');
+      return;
+    }
     final editedKitId = editingKitId;
     final kit = KitRecord(
       id: editedKitId ?? _newCatalogId('KIT'),
       name: name,
       bom: List.unmodifiable(draftBom),
       sections: List.unmodifiable(draftSections),
+      sourceUrls:
+          kits
+              .where((candidate) => candidate.id == editedKitId)
+              .firstOrNull
+              ?.sourceUrls ??
+          const [],
+      imageBytes: kitImage,
     );
     setState(() {
       if (editedKitId == null) {
@@ -7048,8 +17771,12 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       }
       editingKitId = null;
       kitName.clear();
+      kitImage = null;
+      kitNameError = null;
       draftBom.clear();
-      draftSections.clear();
+      draftSections
+        ..clear()
+        ..add('Main component');
     });
     if (editedKitId == null) {
       widget.onKitAdded(kit);
@@ -7068,34 +17795,38 @@ class _KitBomLoadingState extends StatelessWidget {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 86,
-          height: 86,
-          padding: const EdgeInsets.all(13),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: const Color(0xffa987ff).withValues(alpha: .1),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x553f24a8),
-                blurRadius: 30,
-                spreadRadius: 4,
-              ),
-            ],
-          ),
-          child: const Stack(
-            alignment: Alignment.center,
-            children: [
-              CircularProgressIndicator(
-                color: Color(0xffa987ff),
-                strokeWidth: 4,
-              ),
-              Icon(
-                Icons.inventory_2_outlined,
-                color: Color(0xffd2c3ff),
-                size: 25,
-              ),
-            ],
+        Builder(
+          builder: (context) => Container(
+            width: 86,
+            height: 86,
+            padding: const EdgeInsets.all(13),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .1),
+              boxShadow: [
+                BoxShadow(
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: .32),
+                  blurRadius: 30,
+                  spreadRadius: 4,
+                ),
+              ],
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CircularProgressIndicator(
+                  color: Theme.of(context).colorScheme.primary,
+                  strokeWidth: 4,
+                ),
+                const Icon(
+                  Icons.inventory_2_outlined,
+                  color: Color(0xffd2c3ff),
+                  size: 25,
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 18),
@@ -7110,6 +17841,545 @@ class _KitBomLoadingState extends StatelessWidget {
         ),
       ],
     ),
+  );
+}
+
+class _TypeIconSelector extends StatefulWidget {
+  const _TypeIconSelector({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_TypeIconSelector> createState() => _TypeIconSelectorState();
+}
+
+class _TypeIconSelectorState extends State<_TypeIconSelector> {
+  Future<void> _chooseLibraryIcon() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) => _TypeIconLibraryDialog(selectedKey: widget.value),
+    );
+    if (selected != null) widget.onChanged(selected);
+  }
+
+  Future<void> _uploadIcon() async {
+    final bytes = await _pickImageBytes();
+    if (bytes == null || !mounted) return;
+    try {
+      widget.onChanged(_customTypeIconKeyFromBytes(bytes));
+    } on FormatException catch (error) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message.toString())));
+    }
+  }
+
+  Future<void> _pasteBase64() async {
+    var pastedValue = '';
+    final source = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Paste Base64 icon'),
+        content: SizedBox(
+          width: 520,
+          child: TextField(
+            key: const Key('type-icon-base64-input'),
+            minLines: 5,
+            maxLines: 10,
+            decoration: const InputDecoration(
+              labelText: 'Base64 image data',
+              hintText: 'data:image/png;base64,...',
+              helperText: 'PNG, JPEG, WebP, or animated GIF · 5 MB maximum',
+            ),
+            onChanged: (value) => pastedValue = value,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const Key('apply-type-icon-base64'),
+            onPressed: () => Navigator.pop(dialogContext, pastedValue),
+            icon: const Icon(Icons.content_paste_rounded),
+            label: const Text('Use icon'),
+          ),
+        ],
+      ),
+    );
+    if (source == null || !mounted) return;
+    try {
+      widget.onChanged(_customTypeIconKeyFromBase64(source));
+    } on FormatException catch (error) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message.toString())));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      InputDecorator(
+        decoration: const InputDecoration(labelText: 'Icon'),
+        child: Row(
+          children: [
+            _typeIconVisual(widget.value, Icons.inventory_2_outlined, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '${_typeIconLibraryName(widget.value)} · ${_typeIconDisplayName(widget.value)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton.icon(
+              key: const Key('choose-type-icon'),
+              onPressed: _chooseLibraryIcon,
+              icon: const Icon(Icons.search_rounded),
+              label: const Text('Browse'),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            key: const Key('upload-type-icon'),
+            onPressed: _uploadIcon,
+            icon: const Icon(Icons.upload_file_rounded),
+            label: const Text('Upload image'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('paste-type-icon-base64'),
+            onPressed: _pasteBase64,
+            icon: const Icon(Icons.content_paste_rounded),
+            label: const Text('Paste Base64'),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _TypeIconLibraryDialog extends StatefulWidget {
+  const _TypeIconLibraryDialog({required this.selectedKey});
+
+  final String selectedKey;
+
+  @override
+  State<_TypeIconLibraryDialog> createState() => _TypeIconLibraryDialogState();
+}
+
+class _TypeIconLibraryDialogState extends State<_TypeIconLibraryDialog> {
+  String query = '';
+  late String library = widget.selectedKey.startsWith('lucide:')
+      ? 'lucide'
+      : 'material';
+  final searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final availableHeight = MediaQuery.sizeOf(context).height;
+    final entries =
+        typeIconChoices.entries.where((entry) {
+          final inLibrary = library == 'lucide'
+              ? entry.key.startsWith('lucide:')
+              : !entry.key.startsWith('lucide:');
+          final needle = query.trim().toLowerCase();
+          return inLibrary &&
+              (needle.isEmpty ||
+                  _typeIconDisplayName(entry.key)
+                      .toLowerCase()
+                      .contains(needle) ||
+                  entry.key.toLowerCase().contains(needle));
+        }).toList()..sort(
+          (a, b) =>
+              _typeIconDisplayName(a.key)
+                  .compareTo(_typeIconDisplayName(b.key)),
+        );
+    return AlertDialog(
+      title: const Text('Choose an icon'),
+      content: SizedBox(
+        width: 560,
+        height: (availableHeight - 180).clamp(280.0, 560.0),
+        child: Column(
+          children: [
+            SegmentedButton<String>(
+              key: const Key('type-icon-library-selector'),
+              segments: const [
+                ButtonSegment(
+                  value: 'material',
+                  label: Text('Material'),
+                  icon: Icon(Icons.widgets_outlined),
+                ),
+                ButtonSegment(
+                  value: 'lucide',
+                  label: Text('Lucide'),
+                  icon: Icon(Icons.edit_outlined),
+                ),
+              ],
+              selected: {library},
+              onSelectionChanged: (selection) => setState(() {
+                library = selection.single;
+                query = '';
+                searchController.clear();
+              }),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Material Icons · Apache 2.0   •   Lucide · ISC',
+              style: TextStyle(fontSize: 11, color: Color(0xff929aac)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('type-icon-search'),
+              autofocus: true,
+              controller: searchController,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search_rounded),
+                hintText:
+                    'Search ${library == 'lucide' ? 'Lucide' : 'Material'} icons',
+              ),
+              onChanged: (value) => setState(() => query = value),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: GridView.builder(
+                itemCount: entries.length,
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 130,
+                  mainAxisExtent: 94,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                ),
+                itemBuilder: (context, index) {
+                  final entry = entries[index];
+                  final selected = entry.key == widget.selectedKey;
+                  return InkWell(
+                    key: Key('type-icon-option-${entry.key}'),
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => Navigator.pop(context, entry.key),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                                  .withValues(alpha: .2)
+                            : Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(entry.value, size: 28),
+                            const SizedBox(height: 7),
+                            Text(
+                              _typeIconDisplayName(entry.key),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _TypeNameEditorDialog extends StatefulWidget {
+  const _TypeNameEditorDialog({
+    required this.initialName,
+    required this.initialIconKey,
+    required this.initialCanMarkDepleted,
+    required this.initialShowsStatus,
+    required this.showDepletionSetting,
+    required this.showStatusSetting,
+    required this.existingNames,
+  });
+
+  final String initialName;
+  final String initialIconKey;
+  final bool initialCanMarkDepleted;
+  final bool initialShowsStatus;
+  final bool showDepletionSetting;
+  final bool showStatusSetting;
+  final Set<String> existingNames;
+
+  @override
+  State<_TypeNameEditorDialog> createState() => _TypeNameEditorDialogState();
+}
+
+class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
+  final formKey = GlobalKey<FormState>();
+  late final TextEditingController name = TextEditingController(
+    text: widget.initialName,
+  );
+  late String iconKey = widget.initialIconKey;
+  late bool canMarkDepleted = widget.initialCanMarkDepleted;
+  late bool showsStatus = widget.initialShowsStatus;
+
+  @override
+  void dispose() {
+    name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Rename type'),
+    content: SizedBox(
+      width: 440,
+      child: Form(
+        key: formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              key: const Key('edit-built-in-type-name'),
+              controller: name,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Type name'),
+              validator: (value) {
+                final candidate = value?.trim() ?? '';
+                if (candidate.isEmpty) return 'Enter a type name';
+                final duplicate = widget.existingNames.any(
+                  (existing) =>
+                      existing.toLowerCase() == candidate.toLowerCase(),
+                );
+                return duplicate ? 'That type already exists' : null;
+              },
+            ),
+            const SizedBox(height: 12),
+            _TypeIconSelector(
+              key: const Key('edit-built-in-type-icon'),
+              value: iconKey,
+              onChanged: (value) => setState(() => iconKey = value),
+            ),
+            if (widget.showDepletionSetting) ...[
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-built-in-type-can-mark-depleted'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Allow “Mark depleted”'),
+                subtitle: const Text(
+                  'Use for consumables that are exhausted rather than destroyed.',
+                ),
+                value: canMarkDepleted,
+                onChanged: (value) => setState(() => canMarkDepleted = value),
+              ),
+            ],
+            if (widget.showStatusSetting) ...[
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-built-in-type-shows-status'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Show item status'),
+                subtitle: Text(
+                  widget.initialName.toLowerCase() == 'filament'
+                      ? 'Show Ready, Deployed, Drying, or Wet status on item cards.'
+                      : 'Show Ready or Deployed status on item cards.',
+                ),
+                value: showsStatus,
+                onChanged: (value) => setState(() => showsStatus = value),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        key: const Key('save-built-in-type-name'),
+        onPressed: () {
+          if (formKey.currentState?.validate() != true) return;
+          Navigator.pop(context, (
+            name: name.text.trim(),
+            iconKey: iconKey,
+            canMarkDepleted: canMarkDepleted,
+            showsStatus: showsStatus,
+          ));
+        },
+        icon: const Icon(Icons.save_outlined),
+        label: const Text('Save'),
+      ),
+    ],
+  );
+}
+
+class _CustomItemTypeEditorDialog extends StatefulWidget {
+  const _CustomItemTypeEditorDialog({
+    required this.type,
+    required this.existingNames,
+  });
+
+  final CustomItemTypeRecord type;
+  final Set<String> existingNames;
+
+  @override
+  State<_CustomItemTypeEditorDialog> createState() =>
+      _CustomItemTypeEditorDialogState();
+}
+
+class _CustomItemTypeEditorDialogState
+    extends State<_CustomItemTypeEditorDialog> {
+  final formKey = GlobalKey<FormState>();
+  late final TextEditingController name = TextEditingController(
+    text: widget.type.name,
+  );
+  late final TextEditingController fields = TextEditingController(
+    text: widget.type.contextualFields.join(', '),
+  );
+  late String iconKey = widget.type.iconKey;
+  late bool canMarkDepleted = widget.type.canMarkDepleted;
+  late bool showsStatus = widget.type.showsStatus;
+
+  @override
+  void dispose() {
+    name.dispose();
+    fields.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Edit item type'),
+    content: SizedBox(
+      width: 480,
+      child: SingleChildScrollView(
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                key: const Key('edit-custom-type-name'),
+                controller: name,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Type name'),
+                validator: (value) {
+                  final candidate = value?.trim() ?? '';
+                  if (candidate.isEmpty) return 'Enter a type name';
+                  final duplicate = widget.existingNames.any(
+                    (existing) =>
+                        existing.toLowerCase() == candidate.toLowerCase(),
+                  );
+                  return duplicate ? 'That type already exists' : null;
+                },
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-custom-type-can-mark-depleted'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Allow “Mark depleted”'),
+                subtitle: const Text(
+                  'Use for consumables that are exhausted rather than destroyed.',
+                ),
+                value: canMarkDepleted,
+                onChanged: (value) => setState(() => canMarkDepleted = value),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-custom-type-shows-status'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Show item status'),
+                subtitle: const Text(
+                  'Show Ready or Deployed status for items of this type.',
+                ),
+                value: showsStatus,
+                onChanged: (value) => setState(() => showsStatus = value),
+              ),
+              const SizedBox(height: 12),
+              _TypeIconSelector(
+                key: const Key('edit-custom-type-icon'),
+                value: iconKey,
+                onChanged: (value) => setState(() => iconKey = value),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('edit-custom-type-fields'),
+                controller: fields,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Contextual fields',
+                  helperText: 'Separate field names with commas or new lines',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        key: const Key('save-custom-type-edit'),
+        onPressed: () {
+          if (formKey.currentState?.validate() != true) return;
+          final contextualFields = fields.text
+              .split(RegExp(r'[,\n]'))
+              .map((value) => value.trim())
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .toList();
+          Navigator.pop(
+            context,
+            CustomItemTypeRecord(
+              id: widget.type.id,
+              name: name.text.trim(),
+              contextualFields: contextualFields,
+              iconKey: iconKey,
+              canMarkDepleted: canMarkDepleted,
+              showsStatus: showsStatus,
+            ),
+          );
+        },
+        icon: const Icon(Icons.save_outlined),
+        label: const Text('Save'),
+      ),
+    ],
   );
 }
 
@@ -7218,7 +18488,14 @@ class _QuickCatalogProductDialogState extends State<QuickCatalogProductDialog> {
 }
 
 class RapidizerDialog extends StatefulWidget {
-  const RapidizerDialog({super.key});
+  const RapidizerDialog({
+    super.key,
+    this.typeAliases = const {},
+    this.materials = starterMaterials,
+  });
+
+  final Map<InventoryType, String> typeAliases;
+  final List<MaterialRecord> materials;
 
   @override
   State<RapidizerDialog> createState() => _RapidizerDialogState();
@@ -7286,9 +18563,9 @@ class _RapidizerDialogState extends State<RapidizerDialog> {
                 style: const TextStyle(fontFamily: 'monospace', height: 1.55),
                 decoration: const InputDecoration(
                   alignLabelWithHint: true,
-                  labelText: 'Name  Type  Quantity  Price',
-                  hintText: 'Blue PLA Filament 2 19.99\nM3x10 socket screw Fastener 25 0.08\nE3D V6 heat break HeatBreak 1 14.95',
-                  helperText: 'Names may contain spaces. Type is detected immediately before quantity and price.',
+                  labelText: 'Name / Color  Material  Type  Quantity?  Price',
+                  hintText: 'Blue PLA Filament 22.85\nM3x10 socket screw Fastener 25 0.08\nBrass Nozzle 4 14.95',
+                  helperText: 'Material and quantity are optional. Omitted quantity defaults to 1.',
                 ),
                 onChanged: (_) {
                   if (errors.isNotEmpty) setState(() => errors = const []);
@@ -7311,7 +18588,7 @@ class _RapidizerDialogState extends State<RapidizerDialog> {
               children: [
                 const Expanded(
                   child: Text(
-                    'FORMAT: Name Type Quantity Price',
+                    'FORMAT: Name/Color  Material?  Type  Quantity?  Price',
                     style: TextStyle(
                       color: Color(0xff929aac),
                       fontWeight: FontWeight.w700,
@@ -7338,7 +18615,11 @@ class _RapidizerDialogState extends State<RapidizerDialog> {
   );
 
   void _rapidize() {
-    final result = parseRapidizerText(input.text);
+    final result = parseRapidizerText(
+      input.text,
+      typeAliases: widget.typeAliases,
+      materials: widget.materials,
+    );
     if (!result.isValid) {
       setState(
         () => errors = result.errors.isEmpty
@@ -7351,76 +18632,336 @@ class _RapidizerDialogState extends State<RapidizerDialog> {
   }
 }
 
-class AnimationControlsDialog extends StatefulWidget {
-  const AnimationControlsDialog({
+class PersonalizationSettingsDialog extends StatefulWidget {
+  const PersonalizationSettingsDialog({
     super.key,
     required this.animationDurationPercent,
     required this.animationRecurrenceSeconds,
+    required this.photoCardsEnabled,
+    required this.customIconAnimationMode,
+    required this.colorTheme,
+    required this.brightnessMode,
+    required this.customThemeColor,
     required this.onSettingsChanged,
+    required this.onColorThemeChanged,
+    required this.onBrightnessModeChanged,
+    required this.onCustomThemeColorChanged,
+    required this.onPhotoCardsChanged,
+    required this.onCustomIconAnimationModeChanged,
   });
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
+  final bool photoCardsEnabled;
+  final CustomIconAnimationMode customIconAnimationMode;
+  final AppColorTheme colorTheme;
+  final AppBrightnessMode brightnessMode;
+  final Color customThemeColor;
   final void Function(int durationPercent, int recurrenceSeconds)
   onSettingsChanged;
+  final ValueChanged<AppColorTheme> onColorThemeChanged;
+  final ValueChanged<AppBrightnessMode> onBrightnessModeChanged;
+  final ValueChanged<Color> onCustomThemeColorChanged;
+  final ValueChanged<bool> onPhotoCardsChanged;
+  final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
   @override
-  State<AnimationControlsDialog> createState() =>
-      _AnimationControlsDialogState();
+  State<PersonalizationSettingsDialog> createState() =>
+      _PersonalizationSettingsDialogState();
 }
 
-class _AnimationControlsDialogState extends State<AnimationControlsDialog> {
+class _PersonalizationSettingsDialogState
+    extends State<PersonalizationSettingsDialog> {
   late int durationPercent = widget.animationDurationPercent;
   late int recurrenceSeconds = widget.animationRecurrenceSeconds;
+  late bool photoCardsEnabled = widget.photoCardsEnabled;
+  late CustomIconAnimationMode customIconAnimationMode =
+      widget.customIconAnimationMode;
+  late AppColorTheme colorTheme = widget.colorTheme;
+  late AppBrightnessMode brightnessMode = widget.brightnessMode;
+  late Color customThemeColor = widget.customThemeColor;
+
+  Future<void> _pickCustomThemeColor() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) => ItemColorPickerDialog(
+        initialValue: _colorHex(customThemeColor),
+        title: 'Choose theme color',
+        allowClear: false,
+      ),
+    );
+    if (!mounted || selected == null) return;
+    final parsed = _hexColor(selected);
+    if (parsed == null) return;
+    setState(() {
+      customThemeColor = parsed;
+      colorTheme = AppColorTheme.custom;
+    });
+    widget.onCustomThemeColorChanged(parsed);
+  }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: const Row(
       children: [
-        Icon(Icons.animation_rounded),
+        Icon(Icons.palette_outlined),
         SizedBox(width: 10),
-        Text('Animation controls'),
+        Expanded(
+          child: Text(
+            'Personalization settings',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
     ),
     content: SizedBox(
       width: 460,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Animation duration · $durationPercent%'),
-          Slider(
-            key: const Key('animation-duration'),
-            value: durationPercent.toDouble(),
-            min: 25,
-            max: 200,
-            divisions: 7,
-            label: '$durationPercent%',
-            onChanged: (value) {
-              setState(() => durationPercent = value.round());
-              widget.onSettingsChanged(durationPercent, recurrenceSeconds);
-            },
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<int>(
-            key: const Key('animation-recurrence'),
-            initialValue: recurrenceSeconds,
-            decoration: const InputDecoration(
-              labelText: 'Repeat alerts while visible',
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Appearance',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
             ),
-            items: const [
-              DropdownMenuItem(value: 0, child: Text('Never')),
-              DropdownMenuItem(value: 3, child: Text('Every 3 seconds')),
-              DropdownMenuItem(value: 5, child: Text('Every 5 seconds')),
-              DropdownMenuItem(value: 10, child: Text('Every 10 seconds')),
-              DropdownMenuItem(value: 30, child: Text('Every 30 seconds')),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => recurrenceSeconds = value);
-              widget.onSettingsChanged(durationPercent, recurrenceSeconds);
-            },
-          ),
-        ],
+            const SizedBox(height: 10),
+            SegmentedButton<AppBrightnessMode>(
+              key: const Key('appearance-mode'),
+              segments: const [
+                ButtonSegment(
+                  value: AppBrightnessMode.dark,
+                  icon: Icon(Icons.dark_mode_outlined),
+                  label: Text('Dark', key: Key('appearance-dark')),
+                ),
+                ButtonSegment(
+                  value: AppBrightnessMode.light,
+                  icon: Icon(Icons.light_mode_outlined),
+                  label: Text('Light', key: Key('appearance-light')),
+                ),
+              ],
+              selected: {brightnessMode},
+              onSelectionChanged: (selection) {
+                final value = selection.single;
+                setState(() => brightnessMode = value);
+                widget.onBrightnessModeChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Color',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final tileWidth = math.max(
+                  104.0,
+                  (constraints.maxWidth - 8) / 2,
+                );
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final option in AppColorTheme.values)
+                      SizedBox(
+                        width: tileWidth,
+                        height: 52,
+                        child: OutlinedButton(
+                          key: Key('color-theme-${option.name}'),
+                          onPressed: () {
+                            if (option == AppColorTheme.custom) {
+                              _pickCustomThemeColor();
+                              return;
+                            }
+                            setState(() => colorTheme = option);
+                            widget.onColorThemeChanged(option);
+                          },
+                          style: ButtonStyle(
+                            side: WidgetStatePropertyAll(
+                              BorderSide(
+                                color: colorTheme == option
+                                    ? InventorinatorColors.forTheme(
+                                        option,
+                                        customColor: customThemeColor,
+                                        brightness: brightnessMode,
+                                      ).accent
+                                    : Colors.transparent,
+                                width: colorTheme == option ? 2 : 1,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: option == AppColorTheme.custom
+                                      ? customThemeColor
+                                      : InventorinatorColors.forTheme(
+                                          option,
+                                          brightness: brightnessMode,
+                                        ).base,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: InventorinatorColors.forTheme(
+                                      option,
+                                      customColor: customThemeColor,
+                                      brightness: brightnessMode,
+                                    ).accent,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Text(
+                                  option.label,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              if (colorTheme == option)
+                                const Icon(Icons.check_rounded, size: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            const Divider(height: 28),
+            SwitchListTile(
+              key: const Key('photo-cards-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Photo cards'),
+              subtitle: const Text(
+                'Use product photos as card backgrounds with readable overlays.',
+              ),
+              value: photoCardsEnabled,
+              onChanged: (value) {
+                setState(() => photoCardsEnabled = value);
+                widget.onPhotoCardsChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Performance',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<CustomIconAnimationMode>(
+              key: const Key('custom-icon-animation-mode'),
+              initialValue: customIconAnimationMode,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Custom type icon animation',
+                helperText: 'Interaction-only reduces idle CPU use.',
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: CustomIconAnimationMode.interaction,
+                  child: Text('On hover or touch · Recommended'),
+                ),
+                DropdownMenuItem(
+                  value: CustomIconAnimationMode.always,
+                  child: Text('Always animate'),
+                ),
+                DropdownMenuItem(
+                  value: CustomIconAnimationMode.off,
+                  child: Text('Still image'),
+                ),
+              ],
+              selectedItemBuilder: (context) => const [
+                Text(
+                  'On hover or touch · Recommended',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Always animate',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Still image',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => customIconAnimationMode = value);
+                widget.onCustomIconAnimationModeChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Alert animations',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            Text('Animation duration · $durationPercent%'),
+            Slider(
+              key: const Key('animation-duration'),
+              value: durationPercent.toDouble(),
+              min: 25,
+              max: 200,
+              divisions: 7,
+              label: '$durationPercent%',
+              onChanged: (value) {
+                setState(() => durationPercent = value.round());
+                widget.onSettingsChanged(durationPercent, recurrenceSeconds);
+              },
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<int>(
+              key: const Key('animation-recurrence'),
+              initialValue: recurrenceSeconds,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Repeat alerts while visible',
+              ),
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('Never')),
+                DropdownMenuItem(value: 3, child: Text('Every 3 seconds')),
+                DropdownMenuItem(value: 5, child: Text('Every 5 seconds')),
+                DropdownMenuItem(value: 10, child: Text('Every 10 seconds')),
+                DropdownMenuItem(value: 30, child: Text('Every 30 seconds')),
+              ],
+              selectedItemBuilder: (context) => const [
+                Text('Never', maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(
+                  'Every 3 seconds',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Every 5 seconds',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Every 10 seconds',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Every 30 seconds',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => recurrenceSeconds = value);
+                widget.onSettingsChanged(durationPercent, recurrenceSeconds);
+              },
+            ),
+          ],
+        ),
       ),
     ),
     actions: [
@@ -7537,8 +19078,20 @@ String _formatBomQuantity(double value) => value == value.roundToDouble()
     ? value.toInt().toString()
     : value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '');
 
+String _optionalNumber(double? value) =>
+    value == null ? '' : _formatBomQuantity(value);
+
 String _newCatalogId(String prefix) =>
     '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+String _kitPackageStableId(String prefix, String packageId, [String? itemId]) {
+  String clean(String value) => value
+      .toUpperCase()
+      .replaceAll(RegExp(r'[^A-Z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  final suffix = itemId == null ? '' : '-${clean(itemId)}';
+  return '$prefix-PKG-${clean(packageId)}$suffix';
+}
 
 class _ImagePickerButton extends StatelessWidget {
   const _ImagePickerButton({
@@ -7957,25 +19510,39 @@ class AddItemDialog extends StatefulWidget {
     this.vendors = const [],
     this.brands = const [],
     this.spoolTypes = starterSpoolTypes,
+    this.materials = starterMaterials,
     this.customItemTypes = const [],
+    this.typeLabelOverrides = const {},
+    this.typeIconOverrides = const {},
     this.products = const [],
     this.machineTypes = const [],
     this.machines = const [],
+    this.locations = const [],
     this.initialBarcode = '',
     this.productTemplate,
     this.labelDraft,
+    this.initialFilamentColor,
+    this.database,
+    this.filamentColorsClient,
   });
   final InventoryItem? initialItem;
   final List<VendorRecord> vendors;
   final List<BrandRecord> brands;
   final List<SpoolTypeRecord> spoolTypes;
+  final List<MaterialRecord> materials;
   final List<CustomItemTypeRecord> customItemTypes;
+  final Map<String, String> typeLabelOverrides;
+  final Map<String, String> typeIconOverrides;
   final List<CatalogProduct> products;
   final List<MachineTypeRecord> machineTypes;
   final List<MachineRecord> machines;
+  final List<StockLocationRecord> locations;
   final String initialBarcode;
   final InventoryItem? productTemplate;
   final LabelOcrDraft? labelDraft;
+  final FilamentColorSwatch? initialFilamentColor;
+  final LocalDatabase? database;
+  final FilamentColorsClient? filamentColorsClient;
 
   @override
   State<AddItemDialog> createState() => _AddItemDialogState();
@@ -7998,6 +19565,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   late final TextEditingController vendorController;
   late final TextEditingController brandController;
   late final TextEditingController storageLocationController;
+  String? storageLocationId;
   late final TextEditingController deploymentLocationController;
   late final TextEditingController printingController;
   late final TextEditingController dryingInstructionsController;
@@ -8005,6 +19573,13 @@ class _AddItemDialogState extends State<AddItemDialog> {
   late final TextEditingController barcodeController;
   late final TextEditingController productUrlController;
   late final TextEditingController customSearchController;
+  late final TextEditingController spoolTareWeightController;
+  late final TextEditingController spoolOuterDiameterController;
+  late final TextEditingController spoolWidthController;
+  late final TextEditingController spoolHoleDiameterController;
+  late final TextEditingController masterSpoolController;
+  late final TextEditingController itemColorController;
+  late final TextEditingController itemColorLabelController;
   late InventoryType type;
   late bool deployed;
   late bool drying;
@@ -8015,18 +19590,32 @@ class _AddItemDialogState extends State<AddItemDialog> {
   String? productId;
   late String spoolTypeId;
   late bool amsCompatible;
+  late bool refill;
   Uint8List? itemImage;
   Uint8List? labelImage;
   bool importingProductPage = false;
   bool processingLabel = false;
+  String? saveError;
   ProductSearchProvider searchProvider = ProductSearchProvider.google;
   late final Set<String> compatibleMachineIds;
   String? customTypeId;
+  String? materialId;
+  String? spoolMaterialId;
+  String? masterSpoolMaterialId;
   final Map<String, TextEditingController> customFieldControllers = {};
+  late final FilamentColorsClient _filamentColorsClient;
+  late final bool _ownsFilamentColorsClient;
 
   @override
   void initState() {
     super.initState();
+    _ownsFilamentColorsClient = widget.filamentColorsClient == null;
+    _filamentColorsClient =
+        widget.filamentColorsClient ??
+        FilamentColorsClient(
+          cacheRead: widget.database?.loadApiCache,
+          cacheWrite: widget.database?.saveApiCache,
+        );
     final item = widget.initialItem ?? widget.productTemplate;
     final label = widget.labelDraft;
     moistureTimeUnit = item?.moistureTimeUnit ?? MoistureTimeUnit.days;
@@ -8073,6 +19662,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     storageLocationController = TextEditingController(
       text: widget.initialItem?.storageLocation,
     );
+    storageLocationId = widget.initialItem?.storageLocationId;
     deploymentLocationController = TextEditingController(
       text: widget.initialItem?.deploymentLocation,
     );
@@ -8094,6 +19684,29 @@ class _AddItemDialogState extends State<AddItemDialog> {
     customSearchController = TextEditingController(
       text: 'https://www.google.com/search?q={query}',
     );
+    spoolTareWeightController = TextEditingController(
+      text: _optionalNumber(item?.spoolTareWeightGrams),
+    );
+    spoolOuterDiameterController = TextEditingController(
+      text: _optionalNumber(item?.spoolOuterDiameterMm),
+    );
+    spoolWidthController = TextEditingController(
+      text: _optionalNumber(item?.spoolWidthMm),
+    );
+    spoolHoleDiameterController = TextEditingController(
+      text: _optionalNumber(item?.spoolHoleDiameterMm),
+    );
+    masterSpoolController = TextEditingController(text: item?.masterSpool);
+    itemColorController = TextEditingController(
+      text: _itemColorHex(item?.itemColorName ?? ''),
+    );
+    itemColorLabelController = TextEditingController(
+      text: item?.itemColorLabel.isNotEmpty == true
+          ? item!.itemColorLabel
+          : item?.itemColorName.startsWith('#') == false
+          ? item?.itemColorName
+          : '',
+    );
     // Recover older URL imports that were saved as Other despite an explicit
     // filament family in their product data.
     final inferredFilament = detectFilamentTemplate(
@@ -8110,6 +19723,33 @@ class _AddItemDialogState extends State<AddItemDialog> {
                   : InventoryType.other);
     customTypeId = item?.customTypeId.isNotEmpty == true
         ? item!.customTypeId
+        : null;
+    final inferredMaterial = _inferStarterMaterial(
+      type,
+      item?.name ?? label?.name ?? '',
+      item?.compatibility ?? const [],
+    );
+    materialId = item?.materialId.isNotEmpty == true
+        ? item!.materialId
+        : widget.materials
+              .where(
+                (material) =>
+                    material.typeKey == _selectedTypeChoice &&
+                    material.name.toLowerCase() ==
+                        (item?.materialName.isNotEmpty == true
+                                ? item!.materialName
+                                : label?.material ??
+                                      inferredMaterial?.name ??
+                                      '')
+                            .toLowerCase(),
+              )
+              .firstOrNull
+              ?.id;
+    spoolMaterialId = item?.spoolMaterialId.isNotEmpty == true
+        ? item!.spoolMaterialId
+        : null;
+    masterSpoolMaterialId = item?.masterSpoolMaterialId.isNotEmpty == true
+        ? item!.masterSpoolMaterialId
         : null;
     _configureCustomFields(item?.customFieldValues ?? const {});
     deployed = widget.initialItem?.deployed ?? false;
@@ -8134,6 +19774,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
       spoolTypeId = widget.spoolTypes.firstOrNull?.id ?? defaultSpoolTypeId;
     }
     amsCompatible = item?.amsCompatible ?? false;
+    refill = item?.refill ?? false;
     itemImage = item?.imageBytes;
     labelImage = item?.labelImageBytes ?? label?.imageBytes;
     compatibleMachineIds = {...?item?.compatibleMachineIds};
@@ -8146,6 +19787,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
         printingController.text = inferredFilament.printing;
       }
       storageController.text = inferredFilament.storage;
+    }
+    if (widget.initialFilamentColor case final swatch?) {
+      _applyFilamentColor(swatch, notify: false);
     }
   }
 
@@ -8170,9 +19814,17 @@ class _AddItemDialogState extends State<AddItemDialog> {
     barcodeController.dispose();
     productUrlController.dispose();
     customSearchController.dispose();
+    spoolTareWeightController.dispose();
+    spoolOuterDiameterController.dispose();
+    spoolWidthController.dispose();
+    spoolHoleDiameterController.dispose();
+    masterSpoolController.dispose();
+    itemColorController.dispose();
+    itemColorLabelController.dispose();
     for (final controller in customFieldControllers.values) {
       controller.dispose();
     }
+    if (_ownsFilamentColorsClient) _filamentColorsClient.close();
     super.dispose();
   }
 
@@ -8191,9 +19843,155 @@ class _AddItemDialogState extends State<AddItemDialog> {
           ],
         );
 
+  String? _validateOptionalPositiveNumber(String? value) {
+    final text = value?.trim() ?? '';
+    if (text.isEmpty) return null;
+    final parsed = double.tryParse(text);
+    return parsed == null || parsed <= 0 ? 'Enter a positive number' : null;
+  }
+
+  Future<void> _pickItemColor() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          ItemColorPickerDialog(initialValue: itemColorController.text),
+    );
+    if (!mounted || selected == null) return;
+    setState(() => itemColorController.text = selected);
+  }
+
+  Future<void> _searchFilamentColors() async {
+    final material =
+        _selectedMaterial?.name ??
+        detectFilamentTemplate(nameController.text)?.label ??
+        '';
+    final selected = await showDialog<FilamentColorSwatch>(
+      context: context,
+      builder: (_) => FilamentColorsSearchDialog(
+        client: _filamentColorsClient,
+        initialBrand: brandController.text,
+        initialMaterial: material,
+        initialQuery: itemColorLabelController.text,
+      ),
+    );
+    if (!mounted || selected == null) return;
+    _applyFilamentColor(selected);
+  }
+
+  void _applyFilamentColor(FilamentColorSwatch selected, {bool notify = true}) {
+    final selectedMaterial = selected.material.isNotEmpty
+        ? selected.material
+        : selected.filamentType;
+    final template = detectFilamentTemplate(selectedMaterial);
+    final compatibility = compatibilityController.text
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final apiPrinting = _filamentColorsPrintingInstructions(selected);
+    final itemName = _filamentColorsItemName(selected);
+    void apply() {
+      if (itemName.isNotEmpty) nameController.text = itemName;
+      type = InventoryType.filament;
+      materialId = widget.materials
+          .where(
+            (material) =>
+                material.typeKey == 'type:filament' &&
+                material.name.toLowerCase() == selectedMaterial.toLowerCase(),
+          )
+          .firstOrNull
+          ?.id;
+      compatibilityController.text = compatibility.join(', ');
+      itemColorLabelController.text = selected.name;
+      itemColorController.text = selected.hex;
+      if (selected.manufacturer.isNotEmpty) {
+        brandController.text = selected.manufacturer;
+        brandId = widget.brands
+            .where(
+              (brand) =>
+                  brand.name.toLowerCase() ==
+                  selected.manufacturer.toLowerCase(),
+            )
+            .firstOrNull
+            ?.id;
+      }
+      productId = null;
+      productUrlController.text = selected.purchaseUrl.isNotEmpty
+          ? selected.purchaseUrl
+          : selected.sourceUrl;
+      if (apiPrinting.isNotEmpty) {
+        printingController.text = apiPrinting;
+      } else if (template != null) {
+        printingController.text = template.printing;
+      }
+      if (template != null) {
+        final drying = parseDryingSettings(template.drying);
+        if (dryingTemperatureController.text.trim().isEmpty) {
+          dryingTemperatureController.text =
+              drying.temperatureC?.toString() ?? '';
+        }
+        if (dryingController.text.trim().isEmpty) {
+          dryingController.text = drying.durationMinutes?.toString() ?? '';
+        }
+        if (storageController.text.trim().isEmpty) {
+          storageController.text = template.storage;
+        }
+      }
+    }
+
+    if (notify) {
+      setState(apply);
+    } else {
+      apply();
+    }
+  }
+
+  String _filamentColorsItemName(FilamentColorSwatch swatch) {
+    final parts = <String>[];
+    void add(String value) {
+      final cleaned = value.trim();
+      if (cleaned.isEmpty) return;
+      final normalized = _normalizedStockName(cleaned);
+      if (parts.any(
+        (part) => _normalizedStockName(part).contains(normalized),
+      )) {
+        return;
+      }
+      parts.add(cleaned);
+    }
+
+    add(swatch.manufacturer);
+    add(swatch.filamentType);
+    if (!swatch.filamentType.toLowerCase().contains(
+      swatch.material.toLowerCase(),
+    )) {
+      add(swatch.material);
+    }
+    add(swatch.name);
+    return parts.join(' ');
+  }
+
+  String _filamentColorsPrintingInstructions(FilamentColorSwatch swatch) {
+    String temperature(String value) {
+      final cleaned = value.trim();
+      if (cleaned.isEmpty) return '';
+      return RegExp(r'\b[CF]\b|\u00b0', caseSensitive: false).hasMatch(cleaned)
+          ? cleaned
+          : '$cleaned°C';
+    }
+
+    final nozzle = temperature(swatch.hotEndTemperature);
+    final bed = temperature(swatch.bedTemperature);
+    return [
+      if (nozzle.isNotEmpty) 'Nozzle $nozzle',
+      if (bed.isNotEmpty) 'Bed $bed',
+    ].join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final selectedItemColor = _itemColorSwatch(itemColorController.text);
     return Dialog(
       insetPadding: EdgeInsets.all(compact ? 8 : 20),
       child: ConstrainedBox(
@@ -8231,6 +20029,15 @@ class _AddItemDialogState extends State<AddItemDialog> {
                               'Give the workshop something new to track.',
                               style: TextStyle(color: Color(0xff929aac)),
                             ),
+                            if (saveError != null)
+                              Text(
+                                saveError!,
+                                key: const Key('item-save-error'),
+                                style: const TextStyle(
+                                  color: Color(0xffffcf4d),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -8257,6 +20064,21 @@ class _AddItemDialogState extends State<AddItemDialog> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        TextFormField(
+                          key: const Key('item-name'),
+                          controller: nameController,
+                          autofocus: true,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'Item name',
+                            hintText: 'Hardened steel 0.4 mm',
+                          ),
+                          validator: (value) =>
+                              value == null || value.trim().isEmpty
+                              ? 'Enter an item name'
+                              : null,
+                        ),
+                        const SizedBox(height: 16),
                         _responsiveFieldPair(
                           compact,
                           TextFormField(
@@ -8266,16 +20088,19 @@ class _AddItemDialogState extends State<AddItemDialog> {
                               decimal: true,
                             ),
                             textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'Quantity',
                               prefixText: '× ',
                               hintText: '1',
+                              helperText:
+                                  'Use 0 to define an item before stocking it',
                             ),
                             validator: (value) {
                               final quantity = double.tryParse(value ?? '');
-                              return quantity == null || quantity <= 0
-                                  ? 'Enter a quantity'
-                                  : null;
+                              if (quantity == null || quantity < 0) {
+                                return 'Enter a non-negative quantity';
+                              }
+                              return null;
                             },
                           ),
                           TextFormField(
@@ -8301,6 +20126,67 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             },
                           ),
                         ),
+                        const SizedBox(height: 14),
+                        if (widget.locations.isEmpty ||
+                            ((storageLocationId == null ||
+                                    storageLocationId!.isEmpty) &&
+                                storageLocationController.text
+                                    .trim()
+                                    .isNotEmpty))
+                          TextFormField(
+                            key: const Key('storage-location'),
+                            controller: storageLocationController,
+                            decoration: const InputDecoration(
+                              labelText: 'Storage location',
+                              helperText:
+                                  'Add structured locations in Stockroom',
+                            ),
+                          )
+                        else
+                          DropdownButtonFormField<String?>(
+                            key: const Key('storage-location'),
+                            initialValue:
+                                widget.locations.any(
+                                  (location) =>
+                                      location.id == storageLocationId,
+                                )
+                                ? storageLocationId
+                                : null,
+                            decoration: const InputDecoration(
+                              labelText: 'Storage location',
+                            ),
+                            items: [
+                              const DropdownMenuItem(
+                                value: null,
+                                child: Text('Not assigned'),
+                              ),
+                              for (final location in widget.locations)
+                                DropdownMenuItem(
+                                  value: location.id,
+                                  child: Text(
+                                    _locationPathForEditor(location.id),
+                                  ),
+                                ),
+                            ],
+                            onChanged: (value) => setState(() {
+                              storageLocationId = value;
+                              storageLocationController.text = value == null
+                                  ? ''
+                                  : _locationPathForEditor(value);
+                            }),
+                          ),
+                        if (type == InventoryType.filament) ...[
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              key: const Key('search-filament-colors'),
+                              onPressed: _searchFilamentColors,
+                              icon: const Icon(Icons.travel_explore_rounded),
+                              label: const Text('Search FilamentColors.xyz'),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 16),
                         if (widget.productTemplate != null) ...[
                           Container(
@@ -8328,51 +20214,48 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           ),
                           const SizedBox(height: 16),
                         ],
-                        DropdownButtonFormField<InventoryType>(
-                          key: const Key('item-type'),
-                          initialValue: type,
-                          decoration: const InputDecoration(labelText: 'Type'),
-                          items: InventoryType.values
-                              .where(
-                                (value) =>
-                                    value != InventoryType.custom ||
-                                    widget.customItemTypes.isNotEmpty,
-                              )
-                              .map(
-                                (value) => DropdownMenuItem(
-                                  value: value,
-                                  child: Text(_typeLabel(value)),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value != null) _setType(value);
-                          },
-                        ),
-                        if (type == InventoryType.custom) ...[
-                          const SizedBox(height: 16),
+                        _responsiveFieldPair(
+                          compact,
                           DropdownButtonFormField<String>(
-                            key: const Key('custom-item-type'),
-                            initialValue: customTypeId,
+                            key: const Key('item-type'),
+                            isExpanded: true,
+                            initialValue: _selectedTypeChoice,
                             decoration: const InputDecoration(
-                              labelText: 'Custom type',
+                              labelText: 'Type',
                             ),
-                            items: widget.customItemTypes
+                            items: _typeChoices,
+                            onChanged: (value) {
+                              if (value != null) _setTypeChoice(value);
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: ValueKey(
+                              'item-material-$_selectedTypeChoice-$materialId',
+                            ),
+                            isExpanded: true,
+                            initialValue:
+                                _availableMaterials.any(
+                                  (material) => material.id == materialId,
+                                )
+                                ? materialId
+                                : null,
+                            decoration: const InputDecoration(
+                              labelText: 'Material',
+                              helperText: 'Optional subtype',
+                            ),
+                            items: _availableMaterials
                                 .map(
-                                  (customType) => DropdownMenuItem(
-                                    value: customType.id,
-                                    child: Text(customType.name),
+                                  (material) => DropdownMenuItem(
+                                    value: material.id,
+                                    child: Text(material.name),
                                   ),
                                 )
                                 .toList(),
-                            validator: (value) => value == null
-                                ? 'Choose a custom item type'
-                                : null,
-                            onChanged: (value) => setState(() {
-                              customTypeId = value;
-                              _configureCustomFields();
-                            }),
+                            onChanged: (value) =>
+                                setState(() => materialId = value),
                           ),
+                        ),
+                        if (type == InventoryType.custom) ...[
                           for (final field
                               in _selectedCustomType?.contextualFields ??
                                   const <String>[]) ...[
@@ -8386,6 +20269,70 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             ),
                           ],
                         ],
+                        const SizedBox(height: 16),
+                        _responsiveFieldPair(
+                          compact,
+                          TextFormField(
+                            key: const Key('item-color-name'),
+                            controller: itemColorLabelController,
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              labelText: 'Color name',
+                              hintText: 'Galaxy Red',
+                              helperText: 'Optional display name',
+                            ),
+                          ),
+                          TextFormField(
+                            key: const Key('item-color'),
+                            controller: itemColorController,
+                            textInputAction: TextInputAction.next,
+                            autocorrect: false,
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: InputDecoration(
+                              labelText: 'Color value',
+                              hintText: '#8E75FF',
+                              helperText: 'Hex value or color picker',
+                              suffixIcon: IconButton(
+                                key: const Key('open-item-color-picker'),
+                                tooltip: 'Choose color',
+                                onPressed: _pickItemColor,
+                                icon: Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color:
+                                        selectedItemColor ??
+                                        const Color(0xff252a36),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: const Color(0xff687185),
+                                    ),
+                                  ),
+                                  child: selectedItemColor == null
+                                      ? const Icon(
+                                          Icons.palette_outlined,
+                                          size: 16,
+                                        )
+                                      : null,
+                                ),
+                              ),
+                            ),
+                            validator: (value) {
+                              final text = value?.trim() ?? '';
+                              if (text.isEmpty &&
+                                  itemColorLabelController.text
+                                      .trim()
+                                      .isNotEmpty) {
+                                return 'Choose the color for this name';
+                              }
+                              if (text.isNotEmpty && _hexColor(text) == null) {
+                                return 'Use #RGB, #RRGGBB, or #AARRGGBB';
+                              }
+                              return null;
+                            },
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
                         const SizedBox(height: 16),
                         if (widget.brands.isNotEmpty) ...[
                           const Text(
@@ -8523,9 +20470,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
                                               children: [
                                                 _LogoAvatar(
                                                   bytes: product.imageBytes,
-                                                  fallbackIcon: _typeIcon(
-                                                    product.category,
-                                                  ),
+                                                  fallbackIcon:
+                                                      _displayTypeIcon(
+                                                        product.category,
+                                                      ),
                                                 ),
                                                 const SizedBox(width: 8),
                                                 Expanded(
@@ -8557,7 +20505,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                                         key: Key('product-${product.id}'),
                                         avatar: _LogoAvatar(
                                           bytes: product.imageBytes,
-                                          fallbackIcon: _typeIcon(
+                                          fallbackIcon: _displayTypeIcon(
                                             product.category,
                                           ),
                                         ),
@@ -8572,21 +20520,6 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           ],
                           const SizedBox(height: 20),
                         ],
-                        TextFormField(
-                          key: const Key('item-name'),
-                          controller: nameController,
-                          autofocus: true,
-                          textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            labelText: 'Item name',
-                            hintText: 'Hardened steel 0.4 mm',
-                          ),
-                          validator: (value) =>
-                              value == null || value.trim().isEmpty
-                              ? 'Enter an item name'
-                              : null,
-                        ),
-                        const SizedBox(height: 14),
                         TextFormField(
                           key: const Key('item-barcode'),
                           controller: barcodeController,
@@ -8730,7 +20663,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           key: const Key('item-image-picker'),
                           label: 'Item icon / image',
                           bytes: itemImage,
-                          fallbackIcon: _typeIcon(type),
+                          fallbackIcon: _displayTypeIcon(type),
                           onChanged: (bytes) =>
                               setState(() => itemImage = bytes),
                         ),
@@ -8769,36 +20702,178 @@ class _AddItemDialogState extends State<AddItemDialog> {
                         const SizedBox(height: 14),
                         if (type == InventoryType.filament) ...[
                           const SizedBox(height: 14),
-                          const Text(
-                            'Spool size',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: widget.spoolTypes
-                                .map(
-                                  (spool) => ChoiceChip(
-                                    key: Key('spool-size-${spool.id}'),
-                                    label: Text(spool.label),
-                                    selected: spoolTypeId == spool.id,
-                                    onSelected: (_) =>
-                                        setState(() => spoolTypeId = spool.id),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          SwitchListTile(
-                            key: const Key('ams-compatible'),
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('AMS compatible'),
-                            subtitle: const Text(
-                              'Spool dimensions and material can be used in an automatic material system.',
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Filament spool',
+                              contentPadding: EdgeInsets.fromLTRB(
+                                16,
+                                16,
+                                16,
+                                12,
+                              ),
                             ),
-                            value: amsCompatible,
-                            onChanged: (value) =>
-                                setState(() => amsCompatible = value),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: widget.spoolTypes
+                                      .map(
+                                        (spool) => ChoiceChip(
+                                          key: Key('spool-size-${spool.id}'),
+                                          label: Text(spool.label),
+                                          selected: spoolTypeId == spool.id,
+                                          onSelected: (_) => setState(
+                                            () => spoolTypeId = spool.id,
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
+                                const SizedBox(height: 14),
+                                DropdownButtonFormField<String>(
+                                  key: const Key('spool-material'),
+                                  initialValue: _materialById(
+                                    spoolMaterialId,
+                                    'component:spool',
+                                  )?.id,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Spool material',
+                                    helperText: 'Optional',
+                                  ),
+                                  items: _materialsFor('component:spool')
+                                      .map(
+                                        (material) => DropdownMenuItem(
+                                          value: material.id,
+                                          child: Text(material.name),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (value) =>
+                                      setState(() => spoolMaterialId = value),
+                                ),
+                                const SizedBox(height: 14),
+                                _responsiveFieldPair(
+                                  compact,
+                                  TextFormField(
+                                    key: const Key('spool-tare-weight'),
+                                    controller: spoolTareWeightController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Empty spool weight',
+                                      suffixText: 'g',
+                                      helperText: 'Tare weight',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                  ),
+                                  TextFormField(
+                                    key: const Key('spool-outer-diameter'),
+                                    controller: spoolOuterDiameterController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Outer diameter',
+                                      suffixText: 'mm',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                _responsiveFieldPair(
+                                  compact,
+                                  TextFormField(
+                                    key: const Key('spool-width'),
+                                    controller: spoolWidthController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Spool width',
+                                      suffixText: 'mm',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                  ),
+                                  TextFormField(
+                                    key: const Key('spool-hole-diameter'),
+                                    controller: spoolHoleDiameterController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Center-hole ID',
+                                      suffixText: 'mm',
+                                      helperText: 'Inner diameter',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                  ),
+                                ),
+                                SwitchListTile(
+                                  key: const Key('filament-refill'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: const Text('Refill / reload'),
+                                  subtitle: const Text(
+                                    'This filament requires a reusable master spool.',
+                                  ),
+                                  value: refill,
+                                  onChanged: (value) =>
+                                      setState(() => refill = value),
+                                ),
+                                if (refill) ...[
+                                  TextFormField(
+                                    key: const Key('master-spool'),
+                                    controller: masterSpoolController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Master spool / reload system',
+                                      hintText: 'Polymaker MasterSpool',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  DropdownButtonFormField<String>(
+                                    key: const Key('master-spool-material'),
+                                    initialValue: _materialById(
+                                      masterSpoolMaterialId,
+                                      'component:master-spool',
+                                    )?.id,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Master-spool material',
+                                      helperText: 'Optional',
+                                    ),
+                                    items:
+                                        _materialsFor('component:master-spool')
+                                            .map(
+                                              (material) => DropdownMenuItem(
+                                                value: material.id,
+                                                child: Text(material.name),
+                                              ),
+                                            )
+                                            .toList(),
+                                    onChanged: (value) => setState(
+                                      () => masterSpoolMaterialId = value,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                ],
+                                SwitchListTile(
+                                  key: const Key('ams-compatible'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: const Text('AMS compatible'),
+                                  subtitle: const Text(
+                                    'The loaded spool dimensions and material work in an automatic material system.',
+                                  ),
+                                  value: amsCompatible,
+                                  onChanged: (value) =>
+                                      setState(() => amsCompatible = value),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                         if (widget.machines.isNotEmpty) ...[
@@ -8927,21 +21002,11 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             ),
                           ],
                           const SizedBox(height: 14),
-                          _responsiveFieldPair(
-                            compact,
-                            TextFormField(
-                              key: const Key('storage-location'),
-                              controller: storageLocationController,
-                              decoration: const InputDecoration(
-                                labelText: 'Storage location',
-                              ),
-                            ),
-                            TextFormField(
-                              key: const Key('deployment-location'),
-                              controller: deploymentLocationController,
-                              decoration: const InputDecoration(
-                                labelText: 'Deployment location',
-                              ),
+                          TextFormField(
+                            key: const Key('deployment-location'),
+                            controller: deploymentLocationController,
+                            decoration: const InputDecoration(
+                              labelText: 'Deployment location',
                             ),
                           ),
                         ],
@@ -8988,7 +21053,13 @@ class _AddItemDialogState extends State<AddItemDialog> {
                               helperText: 'Time from dry to too wet to print',
                             ),
                             validator: (value) {
-                              final amount = double.tryParse(value ?? '');
+                              final text = value?.trim() ?? '';
+                              if (text.isEmpty) {
+                                return moistureAlertEnabled
+                                    ? 'Required for moisture alerts'
+                                    : null;
+                              }
+                              final amount = double.tryParse(text);
                               return amount == null || amount <= 0
                                   ? 'Enter a lifespan'
                                   : null;
@@ -9102,7 +21173,13 @@ class _AddItemDialogState extends State<AddItemDialog> {
   }
 
   void _save() {
-    if (!formKey.currentState!.validate()) return;
+    if (!formKey.currentState!.validate()) {
+      setState(() {
+        saveError = 'Some fields need attention. Check the form below.';
+      });
+      return;
+    }
+    saveError = null;
     final compatibility = compatibilityController.text
         .split(',')
         .map((value) => value.trim())
@@ -9122,6 +21199,8 @@ class _AddItemDialogState extends State<AddItemDialog> {
           quantityAlertThresholdController.text,
         ),
         color: _typeColor(type),
+        itemColorName: _normalizeItemColorValue(itemColorController.text),
+        itemColorLabel: itemColorLabelController.text.trim(),
         dryingMinutes: type == InventoryType.filament
             ? int.tryParse(dryingController.text)
             : null,
@@ -9168,6 +21247,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
             widget.initialItem?.filamentStatus ?? FilamentStatus.ready,
         brand: brandController.text.trim(),
         storageLocation: storageLocationController.text.trim(),
+        storageLocationId: storageLocationId ?? '',
         deploymentLocation: deploymentLocationController.text.trim(),
         lastDriedAt:
             widget.initialItem?.lastDriedAt ??
@@ -9181,6 +21261,22 @@ class _AddItemDialogState extends State<AddItemDialog> {
             ? spoolTypeId
             : defaultSpoolTypeId,
         amsCompatible: type == InventoryType.filament && amsCompatible,
+        spoolTareWeightGrams: type == InventoryType.filament
+            ? double.tryParse(spoolTareWeightController.text.trim())
+            : null,
+        spoolOuterDiameterMm: type == InventoryType.filament
+            ? double.tryParse(spoolOuterDiameterController.text.trim())
+            : null,
+        spoolWidthMm: type == InventoryType.filament
+            ? double.tryParse(spoolWidthController.text.trim())
+            : null,
+        spoolHoleDiameterMm: type == InventoryType.filament
+            ? double.tryParse(spoolHoleDiameterController.text.trim())
+            : null,
+        refill: type == InventoryType.filament && refill,
+        masterSpool: type == InventoryType.filament && refill
+            ? masterSpoolController.text.trim()
+            : '',
         catalogProductId: productId,
         customTypeId: type == InventoryType.custom ? customTypeId ?? '' : '',
         customTypeName: type == InventoryType.custom
@@ -9192,6 +21288,24 @@ class _AddItemDialogState extends State<AddItemDialog> {
                   entry.key: entry.value.text.trim(),
               }
             : const {},
+        materialId: materialId ?? '',
+        materialName: _selectedMaterial?.name ?? '',
+        spoolMaterialId: type == InventoryType.filament
+            ? spoolMaterialId ?? ''
+            : '',
+        spoolMaterialName: type == InventoryType.filament
+            ? _materialById(spoolMaterialId, 'component:spool')?.name ?? ''
+            : '',
+        masterSpoolMaterialId: type == InventoryType.filament && refill
+            ? masterSpoolMaterialId ?? ''
+            : '',
+        masterSpoolMaterialName: type == InventoryType.filament && refill
+            ? _materialById(
+                    masterSpoolMaterialId,
+                    'component:master-spool',
+                  )?.name ??
+                  ''
+            : '',
       ),
     );
   }
@@ -9233,6 +21347,14 @@ class _AddItemDialogState extends State<AddItemDialog> {
         }
         if (template != null || draft.filamentEvidence) {
           type = InventoryType.filament;
+          materialId = widget.materials
+              .where(
+                (material) =>
+                    material.typeKey == 'type:filament' &&
+                    material.name.toLowerCase() == draft.material.toLowerCase(),
+              )
+              .firstOrNull
+              ?.id;
         }
         if (template != null) {
           final settings = parseDryingSettings(template.drying);
@@ -9489,12 +21611,98 @@ class _AddItemDialogState extends State<AddItemDialog> {
       .where((vendor) => _selectedBrand?.vendorIds.contains(vendor.id) ?? false)
       .toList();
 
+  String _locationPathForEditor(String id, [Set<String>? visited]) {
+    final seen = visited ?? <String>{};
+    if (!seen.add(id)) return '';
+    final location = widget.locations
+        .where((value) => value.id == id)
+        .firstOrNull;
+    if (location == null) return '';
+    if (location.parentId == null) return location.name;
+    final parent = _locationPathForEditor(location.parentId!, seen);
+    return parent.isEmpty ? location.name : '$parent / ${location.name}';
+  }
+
   List<BrandRecord> get _availableBrands =>
       widget.brands.where((brand) => brand.categories.contains(type)).toList();
 
   CustomItemTypeRecord? get _selectedCustomType => widget.customItemTypes
       .where((customType) => customType.id == customTypeId)
       .firstOrNull;
+
+  String _displayTypeLabel(InventoryType value) =>
+      widget.typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
+      _typeLabel(value);
+
+  String get _selectedTypeChoice => type == InventoryType.custom
+      ? 'custom:${customTypeId ?? ''}'
+      : 'type:${type.name}';
+
+  List<DropdownMenuItem<String>> get _typeChoices => [
+    for (final value in InventoryType.values.where(
+      (value) => value != InventoryType.custom,
+    ))
+      DropdownMenuItem(
+        value: 'type:${value.name}',
+        child: Row(
+          children: [
+            _typeIconVisual(
+              widget.typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+              _typeIcon(value),
+              size: 19,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _displayTypeLabel(value),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    for (final customType in widget.customItemTypes)
+      DropdownMenuItem(
+        value: 'custom:${customType.id}',
+        child: Row(
+          children: [
+            _typeIconVisual(customType.iconKey, Icons.tune_rounded, size: 19),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(customType.name, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+      ),
+    if (type == InventoryType.custom &&
+        customTypeId != null &&
+        !widget.customItemTypes.any((entry) => entry.id == customTypeId))
+      DropdownMenuItem(
+        value: 'custom:$customTypeId',
+        child: Row(
+          children: [
+            const Icon(Icons.help_outline_rounded, size: 19),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                widget.initialItem?.customTypeName.isNotEmpty == true
+                    ? widget.initialItem!.customTypeName
+                    : 'Unavailable type',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+  ];
+
+  IconData _displayTypeIcon(InventoryType value) =>
+      value == InventoryType.custom
+      ? _iconFromKey(_selectedCustomType?.iconKey, Icons.tune_rounded)
+      : _iconFromKey(
+          widget.typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+          _typeIcon(value),
+        );
 
   void _configureCustomFields([Map<String, String> values = const {}]) {
     for (final controller in customFieldControllers.values) {
@@ -9518,16 +21726,50 @@ class _AddItemDialogState extends State<AddItemDialog> {
       )
       .toList();
 
-  void _setType(InventoryType next) {
+  List<MaterialRecord> get _availableMaterials =>
+      widget.materials
+          .where((material) => material.typeKey == _selectedTypeChoice)
+          .toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+
+  MaterialRecord? get _selectedMaterial => widget.materials
+      .where((material) => material.id == materialId)
+      .firstOrNull;
+
+  List<MaterialRecord> _materialsFor(String typeKey) =>
+      widget.materials.where((material) => material.typeKey == typeKey).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+
+  MaterialRecord? _materialById(String? id, String typeKey) => widget.materials
+      .where((material) => material.id == id && material.typeKey == typeKey)
+      .firstOrNull;
+
+  MaterialRecord? _materialMatchingText(String value) {
+    final source = value.toLowerCase();
+    final candidates = [..._availableMaterials]
+      ..sort((a, b) => b.name.length.compareTo(a.name.length));
+    return candidates.where((material) {
+      final escaped = RegExp.escape(material.name.toLowerCase());
+      return RegExp('(?:^|[^a-z0-9])$escaped(?:[^a-z0-9]|\$)').hasMatch(source);
+    }).firstOrNull;
+  }
+
+  void _setTypeChoice(String choice) {
+    final customId = choice.startsWith('custom:')
+        ? choice.substring('custom:'.length)
+        : null;
+    final next = customId == null
+        ? InventoryType.values.byName(choice.substring('type:'.length))
+        : InventoryType.custom;
     setState(() {
       type = next;
-      if (next != InventoryType.custom) {
-        customTypeId = null;
-        _configureCustomFields();
-      } else if (customTypeId == null && widget.customItemTypes.length == 1) {
-        customTypeId = widget.customItemTypes.single.id;
-        _configureCustomFields();
+      customTypeId = customId;
+      if (!widget.materials.any(
+        (material) => material.id == materialId && material.typeKey == choice,
+      )) {
+        materialId = null;
       }
+      _configureCustomFields();
       productId = null;
       if (_selectedBrand?.categories.contains(next) != true) {
         brandId = null;
@@ -9542,6 +21784,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     setState(() {
       productId = product.id;
       type = product.category;
+      materialId = _materialMatchingText(product.name)?.id;
       nameController.text = product.name;
       costController.text = product.defaultCost.toStringAsFixed(2);
       dryingController.text = product.dryingMinutes?.toString() ?? '';
@@ -9572,7 +21815,23 @@ String _typeLabel(InventoryType type) => switch (type) {
   InventoryType.custom => 'Custom',
 };
 
-InventoryType? smartMatchInventoryType(String input) {
+String _inventoryTypeDefinitionKey(InventoryType type) => 'item:${type.name}';
+
+String _catalogViewDefinitionKey(CatalogViewFilter type) =>
+    'catalog:${type.name}';
+
+String _defaultCatalogViewLabel(CatalogViewFilter type) => switch (type) {
+  CatalogViewFilter.kits => 'Kits',
+  CatalogViewFilter.builds => 'Builds',
+  CatalogViewFilter.machines => 'Machines',
+  CatalogViewFilter.printers => 'Printers',
+  CatalogViewFilter.tools => 'Tools',
+};
+
+InventoryType? smartMatchInventoryType(
+  String input, {
+  Map<InventoryType, String> typeAliases = const {},
+}) {
   final needle = _normalizeTypeName(input);
   if (needle.isEmpty) return null;
   const aliases = <InventoryType, List<String>>{
@@ -9613,7 +21872,15 @@ InventoryType? smartMatchInventoryType(String input) {
     InventoryType.heatBlock: ['heat block', 'heatblock', 'heater block'],
     InventoryType.sock: ['silicone sock', 'sock', 'socks'],
   };
-  for (final entry in aliases.entries) {
+  final effectiveAliases = {
+    for (final entry in aliases.entries)
+      entry.key: [
+        ...entry.value,
+        if (typeAliases[entry.key]?.trim().isNotEmpty == true)
+          typeAliases[entry.key]!,
+      ],
+  };
+  for (final entry in effectiveAliases.entries) {
     if (entry.value.any((alias) => _normalizeTypeName(alias) == needle)) {
       return entry.key;
     }
@@ -9621,7 +21888,7 @@ InventoryType? smartMatchInventoryType(String input) {
   InventoryType? bestType;
   var bestDistance = 1 << 20;
   var tied = false;
-  for (final entry in aliases.entries) {
+  for (final entry in effectiveAliases.entries) {
     for (final alias in entry.value) {
       final normalizedAlias = _normalizeTypeName(alias);
       final distance = _levenshteinDistance(needle, normalizedAlias);
@@ -9642,7 +21909,347 @@ InventoryType? smartMatchInventoryType(String input) {
   return !tied && bestDistance <= allowedDistance ? bestType : null;
 }
 
-RapidizerParseResult parseRapidizerText(String input) {
+InventoryJsonParseResult parseInventoryJson(String source) {
+  Object? decoded;
+  try {
+    decoded = jsonDecode(source);
+  } on FormatException catch (error) {
+    return InventoryJsonParseResult(
+      items: const [],
+      errors: ['Invalid JSON: ${error.message}'],
+    );
+  }
+  List<Object?> rows;
+  if (decoded is List) {
+    rows = decoded;
+  } else if (decoded is Map) {
+    final normalizedRoot = <String, Object?>{
+      for (final entry in decoded.entries)
+        _normalizeJsonColumn(entry.key.toString()): entry.value,
+    };
+    final collection =
+        normalizedRoot['items'] ??
+        normalizedRoot['inventory'] ??
+        normalizedRoot['rows'] ??
+        normalizedRoot['data'];
+    if (collection is List) {
+      rows = collection;
+    } else if (_jsonRowValue(normalizedRoot, const ['name', 'itemname']) !=
+        null) {
+      rows = [decoded];
+    } else {
+      return const InventoryJsonParseResult(
+        items: [],
+        errors: [
+          'Expected a JSON array or an object containing an items array.',
+        ],
+      );
+    }
+  } else {
+    return const InventoryJsonParseResult(
+      items: [],
+      errors: ['Expected a JSON array of inventory items.'],
+    );
+  }
+  if (rows.isEmpty) {
+    return const InventoryJsonParseResult(
+      items: [],
+      errors: ['The JSON file contains no inventory items.'],
+    );
+  }
+
+  final items = <InventoryJsonDraft>[];
+  final errors = <String>[];
+  for (var index = 0; index < rows.length; index++) {
+    final rowNumber = index + 1;
+    final raw = rows[index];
+    if (raw is! Map) {
+      errors.add('Row $rowNumber: expected an object.');
+      continue;
+    }
+    final row = <String, Object?>{
+      for (final entry in raw.entries)
+        _normalizeJsonColumn(entry.key.toString()): entry.value,
+    };
+    final name = _jsonText(
+      _jsonRowValue(row, const [
+        'name',
+        'itemname',
+        'productname',
+        'item',
+        'title',
+        'description',
+      ]),
+    );
+    if (name.isEmpty) {
+      errors.add('Row $rowNumber: Item Name is required.');
+      continue;
+    }
+    final quantity = _jsonNumber(
+      _jsonRowValue(row, const ['quantity', 'qty', 'count', 'stock']),
+      fallback: 1,
+    );
+    if (quantity == null || quantity < 0) {
+      errors.add('Row $rowNumber: Quantity must be zero or greater.');
+      continue;
+    }
+    final cost = _jsonNumber(
+      _jsonRowValue(row, const ['cost', 'price', 'unitcost', 'unitprice']),
+      fallback: 0,
+    );
+    if (cost == null || cost < 0) {
+      errors.add('Row $rowNumber: Cost must be zero or greater.');
+      continue;
+    }
+    final imageUrl = _jsonText(
+      _jsonRowValue(row, const [
+        'imageurl',
+        'productimageurl',
+        'photourl',
+        'image',
+        'productimage',
+        'photo',
+      ]),
+    );
+    if (imageUrl.isNotEmpty) {
+      final uri = Uri.tryParse(imageUrl);
+      if (uri == null ||
+          !uri.hasAuthority ||
+          !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
+        errors.add(
+          'Row $rowNumber: Image URL must be a valid HTTP or HTTPS URL.',
+        );
+        continue;
+      }
+    }
+    items.add(
+      InventoryJsonDraft(
+        rowNumber: rowNumber,
+        name: name,
+        typeName: _jsonText(
+          _jsonRowValue(row, const ['type', 'itemtype', 'category']),
+        ),
+        quantity: quantity,
+        cost: cost,
+        material: _jsonText(
+          _jsonRowValue(row, const ['material', 'materialtype']),
+        ),
+        color: _jsonText(
+          _jsonRowValue(row, const [
+            'color',
+            'colour',
+            'hex',
+            'colorhex',
+            'colourhex',
+          ]),
+        ),
+        colorLabel: _jsonText(
+          _jsonRowValue(row, const [
+            'colorname',
+            'colourname',
+            'colorlabel',
+            'colourlabel',
+          ]),
+        ),
+        brand: _jsonText(
+          _jsonRowValue(row, const ['brand', 'maker', 'manufacturer']),
+        ),
+        vendor: _jsonText(
+          _jsonRowValue(row, const ['vendor', 'supplier', 'store']),
+        ),
+        storageLocation: _jsonText(
+          _jsonRowValue(row, const [
+            'storagelocation',
+            'location',
+            'bin',
+            'shelf',
+          ]),
+        ),
+        barcode: _jsonText(
+          _jsonRowValue(row, const ['barcode', 'upc', 'ean', 'sku']),
+        ),
+        productUrl: _jsonText(
+          _jsonRowValue(row, const [
+            'producturl',
+            'url',
+            'sourceurl',
+            'source',
+          ]),
+        ),
+        imageUrl: imageUrl,
+        compatibility: _jsonStringList(
+          _jsonRowValue(row, const [
+            'compatibility',
+            'compatiblewith',
+            'compatiblemachines',
+          ]),
+        ),
+        amsCompatible: _jsonBool(
+          _jsonRowValue(row, const [
+            'amscompatible',
+            'amscompatibility',
+            'ams',
+          ]),
+        ),
+      ),
+    );
+  }
+  return InventoryJsonParseResult(items: items, errors: errors);
+}
+
+class InventoryJsonImageImportResult {
+  const InventoryJsonImageImportResult({
+    required this.items,
+    required this.imported,
+    required this.failed,
+  });
+
+  final List<InventoryItem> items;
+  final int imported;
+  final int failed;
+}
+
+const _maximumInventoryJsonImageBytes = 12 * 1024 * 1024;
+
+Future<InventoryJsonImageImportResult> downloadInventoryJsonImages(
+  List<InventoryItem> items,
+  List<InventoryJsonDraft> drafts, {
+  http.Client? client,
+  void Function(int completed, int total)? onProgress,
+}) async {
+  assert(items.length == drafts.length);
+  final imageIndexes = <int>[
+    for (var index = 0; index < drafts.length; index++)
+      if (drafts[index].imageUrl.isNotEmpty) index,
+  ];
+  if (imageIndexes.isEmpty) {
+    return InventoryJsonImageImportResult(
+      items: List<InventoryItem>.of(items),
+      imported: 0,
+      failed: 0,
+    );
+  }
+
+  final ownsClient = client == null;
+  final httpClient = client ?? http.Client();
+  final hydrated = List<InventoryItem>.of(items);
+  var next = 0;
+  var imported = 0;
+  var failed = 0;
+  var completed = 0;
+
+  Future<void> worker() async {
+    while (next < imageIndexes.length) {
+      final itemIndex = imageIndexes[next++];
+      final uri = Uri.parse(drafts[itemIndex].imageUrl);
+      try {
+        final request = http.Request('GET', uri)
+          ..headers.addAll(const {
+            'User-Agent': 'Inventorinator/1.1 (+https://github.com/DavidThePurple/Inventorinator)',
+            'Accept':
+                'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
+          });
+        final response = await httpClient
+            .send(request)
+            .timeout(const Duration(seconds: 20));
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw HttpException('HTTP ${response.statusCode}', uri: uri);
+        }
+        final bytes = BytesBuilder(copy: false);
+        await for (final chunk in response.stream.timeout(
+          const Duration(seconds: 20),
+        )) {
+          if (bytes.length + chunk.length > _maximumInventoryJsonImageBytes) {
+            throw const FormatException('Image is larger than 12 MB.');
+          }
+          bytes.add(chunk);
+        }
+        final imageBytes = bytes.takeBytes();
+        if (!_looksLikeRasterImage(imageBytes) ||
+            img.decodeImage(imageBytes) == null) {
+          throw const FormatException('Response is not a supported image.');
+        }
+        hydrated[itemIndex] = hydrated[itemIndex].copyWith(
+          imageBytes: imageBytes,
+        );
+        imported++;
+      } catch (_) {
+        failed++;
+      } finally {
+        completed++;
+        onProgress?.call(completed, imageIndexes.length);
+      }
+    }
+  }
+
+  try {
+    await Future.wait(
+      List.generate(math.min(4, imageIndexes.length), (_) => worker()),
+    );
+  } finally {
+    if (ownsClient) httpClient.close();
+  }
+  return InventoryJsonImageImportResult(
+    items: hydrated,
+    imported: imported,
+    failed: failed,
+  );
+}
+
+String _normalizeJsonColumn(String value) =>
+    value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+Object? _jsonRowValue(Map<String, Object?> row, List<String> names) {
+  for (final name in names) {
+    if (row.containsKey(name)) return row[name];
+  }
+  return null;
+}
+
+String _jsonText(Object? value) => value == null ? '' : value.toString().trim();
+
+double? _jsonNumber(Object? value, {required double fallback}) {
+  if (value == null || value.toString().trim().isEmpty) return fallback;
+  if (value is num) return value.toDouble();
+  final cleaned = value
+      .toString()
+      .trim()
+      .replaceAll(',', '')
+      .replaceAll(RegExp(r'^[\$\u00a3\u20ac]'), '');
+  return double.tryParse(cleaned);
+}
+
+bool _jsonBool(Object? value) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  return const {
+    'true',
+    'yes',
+    'y',
+    '1',
+    'compatible',
+  }.contains(value?.toString().trim().toLowerCase());
+}
+
+List<String> _jsonStringList(Object? value) {
+  if (value is List) {
+    return value
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList();
+  }
+  return _jsonText(value)
+      .split(RegExp(r'[,;|]'))
+      .map((entry) => entry.trim())
+      .where((entry) => entry.isNotEmpty)
+      .toList();
+}
+
+RapidizerParseResult parseRapidizerText(
+  String input, {
+  Map<InventoryType, String> typeAliases = const {},
+  List<MaterialRecord> materials = starterMaterials,
+}) {
   final items = <RapidItemDraft>[];
   final errors = <String>[];
   final lines = input.split(RegExp(r'\r?\n'));
@@ -9650,31 +22257,38 @@ RapidizerParseResult parseRapidizerText(String input) {
     final rawLine = lines[index].trim();
     if (rawLine.isEmpty) continue;
     final tokens = rawLine.split(RegExp(r'\s+'));
-    if (tokens.length < 4) {
-      errors.add('Line ${index + 1}: use Name Type Quantity Price.');
+    if (tokens.length < 3) {
+      errors.add('Line ${index + 1}: use Name Type Price.');
       continue;
     }
-    final quantity = double.tryParse(
-      _rapidNumberToken(tokens[tokens.length - 2]),
-    );
     final price = double.tryParse(_rapidNumberToken(tokens.last));
-    if (quantity == null || quantity <= 0) {
+    if (price == null || price < 0) {
+      errors.add('Line ${index + 1}: invalid price “${tokens.last}”.');
+      continue;
+    }
+    final explicitQuantity = tokens.length >= 4
+        ? double.tryParse(_rapidNumberToken(tokens[tokens.length - 2]))
+        : null;
+    final quantity = explicitQuantity ?? 1;
+    if (quantity < 0) {
       errors.add(
         'Line ${index + 1}: invalid quantity “${tokens[tokens.length - 2]}”.',
       );
       continue;
     }
-    if (price == null || price < 0) {
-      errors.add('Line ${index + 1}: invalid price “${tokens.last}”.');
-      continue;
-    }
-    final body = tokens.sublist(0, tokens.length - 2);
+    final body = tokens.sublist(
+      0,
+      tokens.length - (explicitQuantity == null ? 1 : 2),
+    );
     InventoryType? type;
     var typeWordCount = 0;
     final maximumTypeWords = body.length > 3 ? 3 : body.length - 1;
     for (var count = 1; count <= maximumTypeWords; count++) {
       final candidate = body.sublist(body.length - count).join(' ');
-      final match = smartMatchInventoryType(candidate);
+      final match = smartMatchInventoryType(
+        candidate,
+        typeAliases: typeAliases,
+      );
       if (match != null) {
         type = match;
         typeWordCount = count;
@@ -9683,7 +22297,7 @@ RapidizerParseResult parseRapidizerText(String input) {
     }
     if (type == null) {
       errors.add(
-        'Line ${index + 1}: could not recognize the type before quantity.',
+        'Line ${index + 1}: could not recognize the type before quantity or price.',
       );
       continue;
     }
@@ -9697,11 +22311,72 @@ RapidizerParseResult parseRapidizerText(String input) {
       errors.add('Line ${index + 1}: item name is missing.');
       continue;
     }
+    final material = _rapidMaterialFor(name, type, materials);
+    final color = _rapidColorFor(name);
     items.add(
-      RapidItemDraft(name: name, type: type, quantity: quantity, price: price),
+      RapidItemDraft(
+        name: name,
+        type: type,
+        quantity: quantity,
+        price: price,
+        materialId: material?.id ?? '',
+        materialName: material?.name ?? '',
+        itemColorName: color == null ? '' : _colorHex(color.value),
+        itemColorLabel: color?.key ?? '',
+      ),
     );
   }
   return RapidizerParseResult(items: items, errors: errors);
+}
+
+MaterialRecord? _rapidMaterialFor(
+  String name,
+  InventoryType type,
+  List<MaterialRecord> materials,
+) {
+  final nameWords = _rapidWords(name);
+  final matches =
+      materials
+          .where(
+            (material) =>
+                material.typeKey == 'type:${type.name}' &&
+                _containsWordSequence(nameWords, _rapidWords(material.name)),
+          )
+          .toList()
+        ..sort((a, b) => b.name.length.compareTo(a.name.length));
+  return matches.firstOrNull;
+}
+
+List<String> _rapidWords(String value) => value
+    .toLowerCase()
+    .split(RegExp(r'[^a-z0-9]+'))
+    .where((word) => word.isNotEmpty)
+    .toList();
+
+bool _containsWordSequence(List<String> words, List<String> sequence) {
+  if (sequence.isEmpty || sequence.length > words.length) return false;
+  for (var start = 0; start <= words.length - sequence.length; start++) {
+    var matches = true;
+    for (var offset = 0; offset < sequence.length; offset++) {
+      if (words[start + offset] != sequence[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+MapEntry<String, Color>? _rapidColorFor(String name) {
+  final normalizedName = name.toLowerCase();
+  return itemColorPalette.entries
+      .where(
+        (entry) =>
+            RegExp('\\b${RegExp.escape(entry.key.toLowerCase())}\\b')
+                .hasMatch(normalizedName),
+      )
+      .firstOrNull;
 }
 
 String _rapidNumberToken(String value) => value
@@ -9762,22 +22437,85 @@ Color _typeColor(InventoryType type) => switch (type) {
 };
 
 class _ItemVisual extends StatelessWidget {
-  const _ItemVisual({required this.item, required this.size});
+  const _ItemVisual({
+    required this.item,
+    required this.size,
+    this.typeIcon,
+    this.typeIconImageBytes,
+  });
   final InventoryItem item;
+  final double size;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final typeColor = _typeColor(item.type);
+    final colorSwatch = _itemColorSwatch(item.itemColorName);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * .3),
+      child: SizedBox.square(
+        dimension: size,
+        child: item.imageBytes != null
+            ? Image.memory(
+                item.imageBytes!,
+                key: Key('item-product-image-${item.id}'),
+                fit: BoxFit.cover,
+                cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
+                    .round()
+                    .clamp(96, 512),
+              )
+            : item.itemColorName.isNotEmpty
+            ? Center(
+                child: Container(
+                  key: Key('item-color-swatch-${item.id}'),
+                  width: size * .62,
+                  height: size * .62,
+                  decoration: BoxDecoration(
+                    color: colorSwatch ?? const Color(0xff8c929f),
+                    borderRadius: BorderRadius.circular(size * .18),
+                  ),
+                ),
+              )
+            : ColoredBox(
+                key: Key('item-type-fallback-${item.id}'),
+                color: typeColor.withValues(alpha: .16),
+                child: typeIconImageBytes == null
+                    ? Icon(typeIcon ?? item.icon, color: typeColor)
+                    : Padding(
+                        padding: EdgeInsets.all(size * .16),
+                        child: _CustomTypeImage(
+                          bytes: typeIconImageBytes!,
+                          imageKey: Key('item-type-image-${item.id}'),
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) =>
+                              Icon(typeIcon ?? item.icon, color: typeColor),
+                        ),
+                      ),
+              ),
+      ),
+    );
+  }
+}
+
+class _TypeBadgeIcon extends StatelessWidget {
+  const _TypeBadgeIcon({this.icon, this.imageBytes, this.size = 16});
+
+  final IconData? icon;
+  final Uint8List? imageBytes;
   final double size;
 
   @override
-  Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(size * .3),
-    child: SizedBox.square(
-      dimension: size,
-      child: item.imageBytes == null
-          ? ColoredBox(
-              color: item.color.withValues(alpha: .16),
-              child: Icon(item.icon, color: item.color),
-            )
-          : Image.memory(item.imageBytes!, fit: BoxFit.cover),
-    ),
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: imageBytes == null
+        ? Icon(icon ?? Icons.inventory_2_outlined, size: size)
+        : _CustomTypeImage(
+            bytes: imageBytes!,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) =>
+                Icon(icon ?? Icons.inventory_2_outlined, size: size),
+          ),
   );
 }
 
@@ -9823,53 +22561,567 @@ class ItemDetailsPanel extends StatefulWidget {
     required this.machines,
     required this.machineTypes,
     required this.spoolTypes,
+    this.onEdit,
+    this.onSplitOne,
+    this.typeLabel,
+    this.typeIcon,
+    this.typeIconImageBytes,
+    this.initialWidth = 520,
+    this.onWidthChanged,
     this.canEdit = true,
     this.canArchive = true,
+    this.canMarkDepleted = true,
+    this.showStatus = true,
+    this.onStorageLocationTap,
   });
   final InventoryItem item;
   final ValueChanged<InventoryItem> onChanged;
   final List<MachineRecord> machines;
   final List<MachineTypeRecord> machineTypes;
   final List<SpoolTypeRecord> spoolTypes;
+  final Future<void> Function(InventoryItem item)? onEdit;
+  final Future<void> Function(InventoryItem item)? onSplitOne;
+  final String? typeLabel;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
+  final double initialWidth;
+  final ValueChanged<double>? onWidthChanged;
   final bool canEdit;
   final bool canArchive;
+  final bool canMarkDepleted;
+  final bool showStatus;
+  final Future<void> Function()? onStorageLocationTap;
 
   @override
   State<ItemDetailsPanel> createState() => _ItemDetailsPanelState();
 }
 
+enum _FilamentSidebarTab { instructions, spool, brand }
+
 class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   bool useFahrenheit = false;
+  _FilamentSidebarTab filamentSidebarTab = _FilamentSidebarTab.instructions;
   late InventoryItem item;
+  late double panelWidth;
+
+  Future<void> _closeThen(
+    Future<void> Function(InventoryItem item) action,
+  ) async {
+    Navigator.of(context).pop();
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    await action(item);
+  }
+
+  Future<void> _openStorageLocation() async {
+    final openLocation = widget.onStorageLocationTap;
+    if (openLocation == null) return;
+    Navigator.of(context).pop();
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    await openLocation();
+  }
 
   @override
   void initState() {
     super.initState();
     item = widget.item;
+    panelWidth = widget.initialWidth;
+  }
+
+  Widget _sidebarStatusSelector() => Column(
+    key: const Key('sidebar-status-selector'),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (widget.showStatus) ...[
+        const Text('Status', style: TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+      ],
+      if (widget.showStatus && item.type == InventoryType.filament)
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _statusChip(
+              FilamentStatus.ready,
+              'Ready',
+              Icons.check_rounded,
+              const Color(0xff45d2bd),
+            ),
+            _statusChip(
+              FilamentStatus.deployed,
+              'Deployed',
+              Icons.lock_outline_rounded,
+              const Color(0xff55a8ff),
+            ),
+            _statusChip(
+              FilamentStatus.drying,
+              'Drying',
+              Icons.water_drop_outlined,
+              const Color(0xff9c83ff),
+            ),
+            _statusChip(
+              FilamentStatus.queuedForDrying,
+              'Wet',
+              Icons.water_drop_rounded,
+              const Color(0xffffa552),
+            ),
+          ],
+        )
+      else if (widget.showStatus)
+        FilterChip(
+          key: const Key('item-deployed'),
+          avatar: const Icon(Icons.lock_outline_rounded, size: 18),
+          label: const Text('Deployed'),
+          selected: item.deployed,
+          selectedColor: const Color(0xff55a8ff).withValues(alpha: .28),
+          onSelected: widget.canEdit ? _setDeployed : null,
+        ),
+      if (_isLowStock(item)) ...[
+        const SizedBox(height: 10),
+        Chip(
+          key: const Key('low-stock-status'),
+          avatar: const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xffffa552),
+            size: 18,
+          ),
+          label: Text(
+            'Low stock · ${_formatBomQuantity(item.quantity)} remaining',
+          ),
+          side: const BorderSide(color: Color(0xffffa552)),
+        ),
+      ],
+    ],
+  );
+
+  Widget _sidebarColorCard({required bool overlay}) {
+    final card = ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(
+          sigmaX: overlay ? 12 : 0,
+          sigmaY: overlay ? 12 : 0,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _themeCanvas(context).withValues(alpha: overlay ? .82 : .7),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: overlay ? .2 : .1),
+            ),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            mainAxisSize: overlay ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              Container(
+                key: const Key('sidebar-color-swatch'),
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color:
+                      _itemColorSwatch(item.itemColorName) ??
+                      const Color(0xff8c929f),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+              ),
+              const SizedBox(width: 11),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.itemColorLabel.isEmpty
+                          ? 'Color'
+                          : item.itemColorLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      _itemColorHex(item.itemColorName),
+                      style: const TextStyle(
+                        color: Color(0xffc5c9d4),
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return KeyedSubtree(
+      key: const Key('sidebar-color-detail'),
+      child: overlay
+          ? SizedBox(key: const Key('sidebar-color-lower-third'), child: card)
+          : card,
+    );
+  }
+
+  Widget _sidebarImageTitleCard() => ClipRRect(
+    key: const Key('sidebar-item-title-overlay'),
+    borderRadius: BorderRadius.circular(14),
+    child: BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: _themeCanvas(context).withValues(alpha: .82),
+          border: Border.all(color: Colors.white.withValues(alpha: .2)),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                item.name,
+                key: const Key('sidebar-item-name'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
+                  height: 1.12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            KeyedSubtree(
+              key: const Key('sidebar-item-quantity'),
+              child: _QuantityBadge(item: item),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _sidebarTypeHeader() => Column(
+    key: const Key('sidebar-type-indicator'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          _TypeBadgeIcon(
+            icon: widget.typeIcon,
+            imageBytes: widget.typeIconImageBytes,
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              (widget.typeLabel ?? item.typeLabel).toUpperCase(),
+              style: TextStyle(
+                color: _itemCardChromeColor,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Close',
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              key: const Key('split-one-item'),
+              onPressed: item.quantity > 1 && widget.onSplitOne != null
+                  ? () => _closeThen(widget.onSplitOne!)
+                  : null,
+              icon: const Icon(Icons.call_split_rounded),
+              label: const Text('Split one'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: FilledButton.icon(
+              key: const Key('edit-item-top'),
+              onPressed: widget.onEdit == null
+                  ? null
+                  : () => _closeThen(widget.onEdit!),
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit'),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  Widget _filamentTabButton(
+    _FilamentSidebarTab tab,
+    String label,
+    IconData icon,
+  ) {
+    final selected = filamentSidebarTab == tab;
+    return Expanded(
+      child: InkWell(
+        key: Key('filament-details-tab-${tab.name}'),
+        borderRadius: BorderRadius.circular(11),
+        onTap: () => setState(() => filamentSidebarTab = tab),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+          decoration: BoxDecoration(
+            color: selected
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: .28)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 17,
+                color: selected
+                    ? Theme.of(context).colorScheme.primary
+                    : const Color(0xff929aac),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: selected
+                        ? const Color(0xfff1edff)
+                        : const Color(0xffa2a9b9),
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _filamentDetailsTabs({
+    required String printingInstructions,
+    required String dryingInstructions,
+    required String storageInstructions,
+    required DryingSettings dryingSettings,
+    required int? dryingDuration,
+  }) {
+    final spoolDimensions = [
+      if (item.spoolOuterDiameterMm != null)
+        'OD ${_optionalNumber(item.spoolOuterDiameterMm)} mm',
+      if (item.spoolWidthMm != null)
+        'width ${_optionalNumber(item.spoolWidthMm)} mm',
+      if (item.spoolHoleDiameterMm != null)
+        'hole ID ${_optionalNumber(item.spoolHoleDiameterMm)} mm',
+    ].join(' · ');
+    final content = switch (filamentSidebarTab) {
+      _FilamentSidebarTab.instructions => <Widget>[
+        _DetailSection(
+          icon: Icons.print_outlined,
+          title: 'Printing instructions',
+          text: printingInstructions,
+        ),
+        _DetailSection(
+          icon: Icons.air_rounded,
+          title: 'Drying instructions',
+          text: dryingInstructions,
+        ),
+        Row(
+          children: [
+            const Text(
+              'Drying profile',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const Spacer(),
+            SegmentedButton<bool>(
+              key: const Key('temperature-unit-toggle'),
+              segments: const [
+                ButtonSegment(value: false, label: Text('°C')),
+                ButtonSegment(value: true, label: Text('°F')),
+              ],
+              selected: {useFahrenheit},
+              showSelectedIcon: false,
+              onSelectionChanged: (selection) =>
+                  setState(() => useFahrenheit = selection.first),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _DetailSection(
+          icon: Icons.thermostat_rounded,
+          title: 'Drying temperature',
+          text: dryingSettings.temperatureC == null
+              ? 'Not configured'
+              : _dryingTemperatureLabel(
+                  dryingSettings.temperatureC!,
+                  useFahrenheit,
+                ),
+        ),
+        _DetailSection(
+          icon: Icons.timer_outlined,
+          title: 'Drying duration',
+          text: dryingDuration == null
+              ? 'Not configured'
+              : _dryingDurationLabel(dryingDuration),
+        ),
+        _DetailSection(
+          icon: Icons.inventory_2_outlined,
+          title: 'Storage',
+          text: storageInstructions,
+        ),
+      ],
+      _FilamentSidebarTab.spool => <Widget>[
+        _DetailSection(
+          icon: Icons.scale_outlined,
+          title: 'Filament weight',
+          text:
+              widget.spoolTypes
+                  .where((spool) => spool.id == item.spoolTypeId)
+                  .firstOrNull
+                  ?.label ??
+              '1 kg',
+        ),
+        if (item.spoolTareWeightGrams != null)
+          _DetailSection(
+            icon: Icons.monitor_weight_outlined,
+            title: 'Empty spool weight',
+            text: '${_optionalNumber(item.spoolTareWeightGrams)} g tare',
+          ),
+        _DetailSection(
+          icon: Icons.straighten_rounded,
+          title: 'Spool dimensions',
+          text: spoolDimensions.isEmpty ? 'Not configured' : spoolDimensions,
+        ),
+        _DetailSection(
+          icon: item.refill
+              ? Icons.recycling_rounded
+              : Icons.donut_large_rounded,
+          title: 'Spool format',
+          text: item.refill
+              ? 'Refill / reload${item.masterSpool.isEmpty ? '' : ' · ${item.masterSpool}'}'
+              : 'Factory spool',
+        ),
+        _DetailSection(
+          icon: item.amsCompatible
+              ? Icons.check_circle_outline_rounded
+              : Icons.block_rounded,
+          title: 'AMS compatibility',
+          text: item.amsCompatible ? 'Compatible' : 'Not marked compatible',
+        ),
+      ],
+      _FilamentSidebarTab.brand => <Widget>[
+        _DetailSection(
+          icon: Icons.storefront_outlined,
+          title: 'Vendor',
+          text: item.vendor,
+        ),
+        _DetailSection(
+          icon: Icons.sell_outlined,
+          title: 'Brand',
+          text: item.brand,
+        ),
+      ],
+    };
+    return Column(
+      key: const Key('filament-details-tabs'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: _themeCanvas(context).withValues(alpha: .55),
+            border: Border.all(color: const Color(0xff34394a)),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              _filamentTabButton(
+                _FilamentSidebarTab.instructions,
+                'Instructions',
+                Icons.menu_book_outlined,
+              ),
+              _filamentTabButton(
+                _FilamentSidebarTab.spool,
+                'Spool / AMS',
+                Icons.donut_large_rounded,
+              ),
+              _filamentTabButton(
+                _FilamentSidebarTab.brand,
+                'Brand',
+                Icons.sell_outlined,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 22),
+        AnimatedSwitcher(
+          key: const Key('filament-details-tab-content'),
+          duration: const Duration(milliseconds: 180),
+          child: Column(
+            key: ValueKey(filamentSidebarTab),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: content,
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final effectivePrinting = _effectivePrintingInstructions(item);
     final effectiveDrying = _effectiveDryingInstructions(item);
+    final effectiveStorage = _effectiveStorageInstructions(item);
     final dryingSettings = parseDryingSettings(effectiveDrying);
     final dryingDuration = item.dryingMinutes ?? dryingSettings.durationMinutes;
+    final desktopResizable = Platform.isLinux || Platform.isWindows;
+    final availableWidth = MediaQuery.sizeOf(context).width;
+    final minimumWidth = math.min(380.0, availableWidth);
+    final maximumWidth = desktopResizable
+        ? math.max(minimumWidth, availableWidth - 48)
+        : availableWidth;
+    final effectivePanelWidth = desktopResizable
+        ? panelWidth.clamp(minimumWidth, maximumWidth).toDouble()
+        : availableWidth;
     return Material(
       color: Colors.transparent,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
+          gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xff191d29), Color(0xff10141d)],
+            colors: [
+              Theme.of(context).colorScheme.surface,
+              Theme.of(context).colorScheme.surfaceContainerLow,
+            ],
           ),
           border: Border(
             left: BorderSide(
-              color: const Color(0xff8e75ff).withValues(alpha: .55),
+              color: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .55),
             ),
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xff6f54ff).withValues(alpha: .22),
+              color: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .22),
               blurRadius: 36,
               spreadRadius: 2,
             ),
@@ -9877,452 +23129,477 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         ),
         child: SafeArea(
           child: SizedBox(
-            width: 520,
+            width: effectivePanelWidth,
             height: double.infinity,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (item.imageBytes != null)
-                    Stack(
-                      children: [
+            child: Stack(
+              children: [
+                SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    desktopResizable ? 34 : 28,
+                    28,
+                    28,
+                    28,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _sidebarTypeHeader(),
+                      const SizedBox(height: 14),
+                      if (item.imageBytes != null)
+                        Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: Image.memory(
+                                item.imageBytes!,
+                                key: const Key('sidebar-product-image'),
+                                width: double.infinity,
+                                fit: BoxFit.fitWidth,
+                                filterQuality: FilterQuality.high,
+                              ),
+                            ),
+                            if (item.itemColorName.isNotEmpty)
+                              Positioned(
+                                left: 12,
+                                right: 12,
+                                bottom: 12,
+                                child: _sidebarColorCard(overlay: true),
+                              ),
+                            Positioned(
+                              top: 12,
+                              left: 12,
+                              right: widget.showStatus && item.quantity > 0
+                                  ? 82
+                                  : 12,
+                              child: _sidebarImageTitleCard(),
+                            ),
+                            if (widget.showStatus && item.quantity > 0)
+                              Positioned(
+                                top: 12,
+                                right: 12,
+                                child: Container(
+                                  key: const Key('sidebar-photo-status'),
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: _themeCanvas(context)
+                                        .withValues(alpha: .8),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: CountdownRing(
+                                    key: Key('sidebar-photo-timer-${item.id}'),
+                                    item: item,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      SizedBox(height: item.imageBytes == null ? 10 : 24),
+                      if (widget.showStatus || _isLowStock(item))
+                        _sidebarStatusSelector(),
+                      if (item.imageBytes == null) ...[
+                        const SizedBox(height: 22),
+                        Row(
+                          key: const Key('sidebar-item-heading'),
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                item.name,
+                                key: const Key('sidebar-item-name'),
+                                style: const TextStyle(
+                                  fontSize: 30,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            KeyedSubtree(
+                              key: const Key('sidebar-item-quantity'),
+                              child: _QuantityBadge(item: item),
+                            ),
+                          ],
+                        ),
+                      ],
+                      SizedBox(height: item.imageBytes == null ? 8 : 14),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '\$${item.cost.toStringAsFixed(2)}',
+                            key: const Key('sidebar-item-cost'),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (item.type == InventoryType.filament &&
+                              (item.filamentStatus == FilamentStatus.ready ||
+                                  item.filamentStatus ==
+                                      FilamentStatus.deployed)) ...[
+                            const Spacer(),
+                            Column(
+                              key: const Key('sidebar-item-dried'),
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                const Text(
+                                  'Dried',
+                                  style: TextStyle(
+                                    color: Color(0xff929aac),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _timeSinceDried(item.lastDriedAt),
+                                  style: const TextStyle(
+                                    color: Color(0xffd6d2df),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        item.compatibility.join('  •  '),
+                        style: const TextStyle(color: Color(0xff929aac)),
+                      ),
+                      if (item.compatibleMachineIds.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Compatible machines',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: widget.machines
+                              .where(
+                                (machine) => item.compatibleMachineIds.contains(
+                                  machine.id,
+                                ),
+                              )
+                              .map((machine) {
+                                final type = widget.machineTypes
+                                    .where(
+                                      (value) => value.id == machine.typeId,
+                                    )
+                                    .firstOrNull;
+                                return Chip(
+                                  avatar: const Icon(
+                                    Icons.memory_rounded,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    type == null
+                                        ? machine.name
+                                        : '${machine.name} · ${type.name}',
+                                  ),
+                                );
+                              })
+                              .toList(),
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      Container(
+                        key: const Key('sidebar-qr-code'),
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: QrImageView(
+                          data: 'inventorinator:item:${item.id}',
+                          version: QrVersions.auto,
+                          size: 180,
+                          backgroundColor: Colors.white,
+                          eyeStyle: const QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: Colors.black,
+                          ),
+                          dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SelectableText(
+                        item.id,
+                        style: const TextStyle(
+                          color: Color(0xff929aac),
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      FilledButton.icon(
+                        key: const Key('download-qr'),
+                        onPressed: () => _downloadQr(context, item),
+                        icon: const Icon(Icons.download_rounded),
+                        label: const Text('Download labeled QR'),
+                      ),
+                      if (item.itemColorName.isNotEmpty &&
+                          item.imageBytes == null) ...[
+                        const SizedBox(height: 22),
+                        _sidebarColorCard(overlay: false),
+                      ],
+                      const SizedBox(height: 28),
+                      if (item.quantityAlertThreshold != null)
+                        _DetailSection(
+                          icon: Icons.notification_important_outlined,
+                          title: 'Low-stock alert threshold',
+                          text: _formatBomQuantity(
+                            item.quantityAlertThreshold!,
+                          ),
+                        ),
+                      if (item.barcode.isNotEmpty)
+                        _DetailSection(
+                          icon: Icons.barcode_reader,
+                          title: 'Product barcode',
+                          text: item.barcode,
+                        ),
+                      if (item.labelImageBytes != null) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.document_scanner_outlined,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 12),
+                            const Text(
+                              'Label',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(14),
                           child: Image.memory(
-                            item.imageBytes!,
-                            key: const Key('sidebar-product-image'),
+                            item.labelImageBytes!,
+                            key: const Key('sidebar-label-image'),
                             width: double.infinity,
                             fit: BoxFit.fitWidth,
                             filterQuality: FilterQuality.high,
                           ),
                         ),
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: const Color(0xff0d1017)
-                                  .withValues(alpha: .82),
-                              shape: BoxShape.circle,
-                            ),
-                            child: IconButton(
-                              tooltip: 'Close',
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(Icons.close_rounded),
+                        const SizedBox(height: 18),
+                      ],
+                      if (item.type == InventoryType.filament)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 20),
+                          child: Card(
+                            margin: EdgeInsets.zero,
+                            clipBehavior: Clip.antiAlias,
+                            child: ListTile(
+                              key: const Key('sidebar-storage-location'),
+                              onTap: widget.onStorageLocationTap == null
+                                  ? null
+                                  : _openStorageLocation,
+                              leading: const _LocationIcon(
+                                key: Key('sidebar-location-pin'),
+                              ),
+                              title: const Text('Storage location'),
+                              subtitle: Text(
+                                item.storageLocation.isEmpty
+                                    ? 'Not configured'
+                                    : item.storageLocation,
+                              ),
+                              trailing: widget.onStorageLocationTap == null
+                                  ? null
+                                  : const Icon(
+                                      Icons.arrow_forward_rounded,
+                                      semanticLabel: 'Open Stockroom location',
+                                    ),
                             ),
                           ),
                         ),
-                      ],
-                    )
-                  else
-                    Row(
-                      children: [
-                        _ItemVisual(item: item, size: 52),
-                        const Spacer(),
-                        IconButton(
-                          tooltip: 'Close',
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                  const SizedBox(height: 24),
-                  Text(
-                    item.typeLabel.toUpperCase(),
-                    style: TextStyle(
-                      color: item.color,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    item.name,
-                    style: const TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    item.compatibility.join('  •  '),
-                    style: const TextStyle(color: Color(0xff929aac)),
-                  ),
-                  if (item.compatibleMachineIds.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Compatible machines',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: widget.machines
-                          .where(
-                            (machine) =>
-                                item.compatibleMachineIds.contains(machine.id),
-                          )
-                          .map((machine) {
-                            final type = widget.machineTypes
-                                .where((value) => value.id == machine.typeId)
-                                .firstOrNull;
-                            return Chip(
-                              avatar: const Icon(
-                                Icons.memory_rounded,
-                                size: 18,
+                      if (item.type == InventoryType.filament) ...[
+                        const Divider(height: 40),
+                        Column(
+                          key: const Key('filament-moisture-tracking'),
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Moisture tracking',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 16),
+                            _DetailSection(
+                              icon: Icons.hourglass_bottom_rounded,
+                              title: 'Moisture lifespan',
+                              text: item.moistureLifespanMinutes == null
+                                  ? 'Not configured — edit this filament to start the countdown'
+                                  : _moistureLifespanLabel(item),
+                            ),
+                            if (item.filamentStatus == FilamentStatus.ready ||
+                                item.filamentStatus == FilamentStatus.deployed)
+                              _DetailSection(
+                                icon: Icons.water_drop_outlined,
+                                title: 'Moisture life remaining',
+                                text: _moistureRemainingLabel(item),
                               ),
-                              label: Text(
-                                type == null
-                                    ? machine.name
-                                    : '${machine.name} · ${type.name}',
-                              ),
-                            );
-                          })
-                          .toList(),
-                    ),
-                  ],
-                  const SizedBox(height: 22),
-                  const Text(
-                    'Status',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
-                  if (item.type == InventoryType.filament)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _statusChip(
-                          FilamentStatus.ready,
-                          'Ready',
-                          Icons.check_rounded,
-                          const Color(0xff45d2bd),
-                        ),
-                        _statusChip(
-                          FilamentStatus.deployed,
-                          'Deployed',
-                          Icons.lock_outline_rounded,
-                          const Color(0xff55a8ff),
-                        ),
-                        _statusChip(
-                          FilamentStatus.drying,
-                          'Drying',
-                          Icons.water_drop_outlined,
-                          const Color(0xff9c83ff),
-                        ),
-                        _statusChip(
-                          FilamentStatus.queuedForDrying,
-                          'Wet',
-                          Icons.water_drop_rounded,
-                          const Color(0xffffa552),
-                        ),
-                      ],
-                    )
-                  else
-                    FilterChip(
-                      key: const Key('item-deployed'),
-                      avatar: const Icon(Icons.lock_outline_rounded, size: 18),
-                      label: const Text('Deployed'),
-                      selected: item.deployed,
-                      selectedColor: const Color(0xff55a8ff)
-                          .withValues(alpha: .28),
-                      onSelected: widget.canEdit ? _setDeployed : null,
-                    ),
-                  if (_isLowStock(item)) ...[
-                    const SizedBox(height: 10),
-                    Chip(
-                      key: const Key('low-stock-status'),
-                      avatar: const Icon(
-                        Icons.warning_amber_rounded,
-                        color: Color(0xffffa552),
-                        size: 18,
-                      ),
-                      label: Text(
-                        'Low stock · ${_formatBomQuantity(item.quantity)} remaining',
-                      ),
-                      side: const BorderSide(color: Color(0xffffa552)),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: QrImageView(
-                      data: 'inventorinator:item:${item.id}',
-                      version: QrVersions.auto,
-                      size: 180,
-                      backgroundColor: Colors.white,
-                      eyeStyle: const QrEyeStyle(
-                        eyeShape: QrEyeShape.square,
-                        color: Colors.black,
-                      ),
-                      dataModuleStyle: const QrDataModuleStyle(
-                        dataModuleShape: QrDataModuleShape.square,
-                        color: Colors.black,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SelectableText(
-                    item.id,
-                    style: const TextStyle(
-                      color: Color(0xff929aac),
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  FilledButton.icon(
-                    key: const Key('download-qr'),
-                    onPressed: () => _downloadQr(context, item),
-                    icon: const Icon(Icons.download_rounded),
-                    label: const Text('Download labeled QR'),
-                  ),
-                  const SizedBox(height: 28),
-                  _DetailSection(
-                    icon: Icons.numbers_rounded,
-                    title: 'Quantity',
-                    text: _formatBomQuantity(item.quantity),
-                  ),
-                  if (item.quantityAlertThreshold != null)
-                    _DetailSection(
-                      icon: Icons.notification_important_outlined,
-                      title: 'Low-stock alert threshold',
-                      text: _formatBomQuantity(item.quantityAlertThreshold!),
-                    ),
-                  if (item.barcode.isNotEmpty)
-                    _DetailSection(
-                      icon: Icons.barcode_reader,
-                      title: 'Product barcode',
-                      text: item.barcode,
-                    ),
-                  if (item.productUrl.isNotEmpty)
-                    _ProductSourceSection(url: item.productUrl),
-                  if (item.labelImageBytes != null) ...[
-                    const SizedBox(height: 8),
-                    const Row(
-                      children: [
-                        Icon(
-                          Icons.document_scanner_outlined,
-                          color: Color(0xff8e75ff),
-                        ),
-                        SizedBox(width: 12),
-                        Text(
-                          'Label',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.memory(
-                        item.labelImageBytes!,
-                        key: const Key('sidebar-label-image'),
-                        width: double.infinity,
-                        fit: BoxFit.fitWidth,
-                        filterQuality: FilterQuality.high,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                  ],
-                  _DetailSection(
-                    icon: Icons.storefront_outlined,
-                    title: 'Vendor',
-                    text: item.vendor,
-                  ),
-                  if (item.type == InventoryType.filament)
-                    _DetailSection(
-                      icon: Icons.sell_outlined,
-                      title: 'Brand',
-                      text: item.brand,
-                    ),
-                  if (item.type == InventoryType.filament)
-                    _DetailSection(
-                      icon: Icons.scale_outlined,
-                      title: 'Spool size',
-                      text:
-                          widget.spoolTypes
-                              .where((spool) => spool.id == item.spoolTypeId)
-                              .firstOrNull
-                              ?.label ??
-                          '1 kg',
-                    ),
-                  if (item.type == InventoryType.filament)
-                    _DetailSection(
-                      icon: item.amsCompatible
-                          ? Icons.check_circle_outline_rounded
-                          : Icons.block_rounded,
-                      title: 'AMS compatibility',
-                      text: item.amsCompatible
-                          ? 'Compatible'
-                          : 'Not marked compatible',
-                    ),
-                  if (item.type == InventoryType.filament &&
-                      item.filamentStatus == FilamentStatus.deployed)
-                    _DetailSection(
-                      icon: Icons.precision_manufacturing_outlined,
-                      title: 'Deployment location',
-                      text: item.deploymentLocation,
-                    ),
-                  if (item.type == InventoryType.filament &&
-                      (item.filamentStatus == FilamentStatus.ready ||
-                          item.filamentStatus ==
-                              FilamentStatus.queuedForDrying))
-                    _DetailSection(
-                      icon: Icons.shelves,
-                      title: 'Storage location',
-                      text: item.storageLocation,
-                    ),
-                  if (item.type == InventoryType.filament &&
-                      (item.filamentStatus == FilamentStatus.ready ||
-                          item.filamentStatus == FilamentStatus.deployed))
-                    _DetailSection(
-                      icon: Icons.history_rounded,
-                      title: 'Time since dried',
-                      text: _timeSinceDried(item.lastDriedAt),
-                    ),
-                  if (item.type == InventoryType.filament)
-                    _DetailSection(
-                      icon: Icons.hourglass_bottom_rounded,
-                      title: 'Moisture lifespan',
-                      text: item.moistureLifespanMinutes == null
-                          ? 'Not configured — edit this filament to start the countdown'
-                          : _moistureLifespanLabel(item),
-                    ),
-                  if (item.type == InventoryType.filament &&
-                      (item.filamentStatus == FilamentStatus.ready ||
-                          item.filamentStatus == FilamentStatus.deployed))
-                    _DetailSection(
-                      icon: Icons.water_drop_outlined,
-                      title: 'Moisture life remaining',
-                      text: _moistureRemainingLabel(item),
-                    ),
-                  if (item.type == InventoryType.filament &&
-                      item.filamentStatus == FilamentStatus.drying)
-                    _DetailSection(
-                      icon: Icons.timer_outlined,
-                      title: 'Drying time remaining',
-                      text: '${dryingMinutesRemaining(item)} minutes',
-                    ),
-                  if (item.type.supportsPrinting)
-                    _DetailSection(
-                      icon: Icons.print_outlined,
-                      title: 'Printing instructions',
-                      text: item.printingInstructions,
-                    ),
-                  if (item.type == InventoryType.filament) ...[
-                    Row(
-                      children: [
-                        const Text(
-                          'Drying profile',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const Spacer(),
-                        SegmentedButton<bool>(
-                          key: const Key('temperature-unit-toggle'),
-                          segments: const [
-                            ButtonSegment(value: false, label: Text('°C')),
-                            ButtonSegment(value: true, label: Text('°F')),
                           ],
-                          selected: {useFahrenheit},
-                          showSelectedIcon: false,
-                          onSelectionChanged: (selection) =>
-                              setState(() => useFahrenheit = selection.first),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 14),
-                    _DetailSection(
-                      icon: Icons.thermostat_rounded,
-                      title: 'Drying temperature',
-                      text: dryingSettings.temperatureC == null
-                          ? 'Not configured'
-                          : _dryingTemperatureLabel(
-                              dryingSettings.temperatureC!,
-                              useFahrenheit,
-                            ),
-                    ),
-                    _DetailSection(
-                      icon: Icons.timer_outlined,
-                      title: 'Drying duration',
-                      text: dryingDuration == null
-                          ? 'Not configured'
-                          : _dryingDurationLabel(dryingDuration),
-                    ),
-                  ],
-                  if (item.type == InventoryType.custom)
-                    for (final field in item.customFieldValues.entries)
+                      if (item.type == InventoryType.filament)
+                        _filamentDetailsTabs(
+                          printingInstructions: effectivePrinting,
+                          dryingInstructions: effectiveDrying,
+                          storageInstructions: effectiveStorage,
+                          dryingSettings: dryingSettings,
+                          dryingDuration: dryingDuration,
+                        ),
+                      if (item.type != InventoryType.filament)
+                        _DetailSection(
+                          icon: Icons.storefront_outlined,
+                          title: 'Vendor',
+                          text: item.vendor,
+                        ),
+                      if (item.type == InventoryType.filament &&
+                          item.filamentStatus == FilamentStatus.deployed)
+                        _DetailSection(
+                          icon: Icons.precision_manufacturing_outlined,
+                          title: 'Deployment location',
+                          text: item.deploymentLocation,
+                        ),
+                      if (item.type == InventoryType.filament &&
+                          item.filamentStatus == FilamentStatus.drying)
+                        _DetailSection(
+                          icon: Icons.timer_outlined,
+                          title: 'Drying time remaining',
+                          text: '${dryingMinutesRemaining(item)} minutes',
+                        ),
+                      if (item.type != InventoryType.filament &&
+                          item.type.supportsPrinting)
+                        _DetailSection(
+                          icon: Icons.print_outlined,
+                          title: 'Printing instructions',
+                          text: item.printingInstructions,
+                        ),
+                      if (item.type == InventoryType.custom)
+                        for (final field in item.customFieldValues.entries)
+                          _DetailSection(
+                            icon: Icons.tune_rounded,
+                            title: field.key,
+                            text: field.value.isEmpty
+                                ? 'Not configured'
+                                : field.value,
+                          ),
+                      if (item.type != InventoryType.filament)
+                        _DetailSection(
+                          icon: Icons.inventory_2_outlined,
+                          title: 'Storage',
+                          text: item.storageInstructions,
+                        ),
+                      if (item.productUrl.isNotEmpty)
+                        _ProductSourceSection(url: item.productUrl),
                       _DetailSection(
-                        icon: Icons.tune_rounded,
-                        title: field.key,
-                        text: field.value.isEmpty
-                            ? 'Not configured'
-                            : field.value,
+                        key: const Key('sidebar-added-to-inventory'),
+                        icon: Icons.schedule_rounded,
+                        title: 'Added to inventory',
+                        text: _age(item.added),
                       ),
-                  _DetailSection(
-                    icon: Icons.inventory_2_outlined,
-                    title: 'Storage',
-                    text: item.storageInstructions,
+                      if (widget.canArchive) ...[
+                        const Divider(height: 40),
+                        const Text(
+                          'Inventory lifecycle',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Retired items remain in Archived so their QR code, history, and salvage potential are preserved.',
+                          style: const TextStyle(
+                            color: Color(0xff929aac),
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        if (item.archived) ...[
+                          _ArchiveBadge(item: item),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            key: const Key('restore-item'),
+                            onPressed: () => _setArchiveDisposition(null),
+                            icon: const Icon(Icons.unarchive_outlined),
+                            label: const Text('Restore to inventory'),
+                          ),
+                        ] else
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              if (widget.canMarkDepleted)
+                                OutlinedButton.icon(
+                                  key: const Key('mark-depleted'),
+                                  onPressed: () => _setArchiveDisposition(
+                                    ArchiveDisposition.depleted,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.hourglass_empty_rounded,
+                                  ),
+                                  label: const Text('Mark depleted'),
+                                ),
+                              OutlinedButton.icon(
+                                key: const Key('mark-destroyed'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xffff6b6b),
+                                ),
+                                onPressed: () => _setArchiveDisposition(
+                                  ArchiveDisposition.destroyed,
+                                ),
+                                icon: const Icon(Icons.broken_image_outlined),
+                                label: const Text('Mark destroyed'),
+                              ),
+                            ],
+                          ),
+                        const SizedBox(height: 12),
+                      ],
+                    ],
                   ),
-                  if (widget.canArchive) ...[
-                    const Divider(height: 40),
-                    const Text(
-                      'Inventory lifecycle',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Retired items remain in Archived so their QR code, history, and salvage potential are preserved.',
-                      style: const TextStyle(
-                        color: Color(0xff929aac),
-                        height: 1.4,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    if (item.archived) ...[
-                      _ArchiveBadge(item: item),
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        key: const Key('restore-item'),
-                        onPressed: () => _setArchiveDisposition(null),
-                        icon: const Icon(Icons.unarchive_outlined),
-                        label: const Text('Restore to inventory'),
-                      ),
-                    ] else
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          OutlinedButton.icon(
-                            key: const Key('mark-depleted'),
-                            onPressed: () => _setArchiveDisposition(
-                              ArchiveDisposition.depleted,
+                ),
+                if (desktopResizable)
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeLeftRight,
+                      child: GestureDetector(
+                        key: const Key('item-details-resize-handle'),
+                        behavior: HitTestBehavior.opaque,
+                        onHorizontalDragUpdate: (details) {
+                          final nextWidth = (panelWidth - details.delta.dx)
+                              .clamp(minimumWidth, maximumWidth)
+                              .toDouble();
+                          setState(() => panelWidth = nextWidth);
+                          widget.onWidthChanged?.call(nextWidth);
+                        },
+                        child: SizedBox(
+                          width: 16,
+                          child: Center(
+                            child: Container(
+                              width: 4,
+                              height: 54,
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary
+                                    .withValues(alpha: .7),
+                                borderRadius: BorderRadius.circular(99),
+                              ),
                             ),
-                            icon: const Icon(Icons.hourglass_empty_rounded),
-                            label: const Text('Mark depleted'),
                           ),
-                          OutlinedButton.icon(
-                            key: const Key('mark-destroyed'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xffff6b6b),
-                            ),
-                            onPressed: () => _setArchiveDisposition(
-                              ArchiveDisposition.destroyed,
-                            ),
-                            icon: const Icon(Icons.broken_image_outlined),
-                            label: const Text('Mark destroyed'),
-                          ),
-                        ],
+                        ),
                       ),
-                    const SizedBox(height: 12),
-                  ],
-                ],
-              ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -10405,6 +23682,26 @@ String _effectiveDryingInstructions(InventoryItem item) {
   return detectFilamentTemplate(
         '${item.name}\n${item.brand}\n${item.printingInstructions}',
       )?.drying ??
+      '';
+}
+
+String _effectivePrintingInstructions(InventoryItem item) {
+  if (item.printingInstructions.trim().isNotEmpty) {
+    return item.printingInstructions.trim();
+  }
+  return detectFilamentTemplate(
+        '${item.name}\n${item.brand}\n${item.dryingInstructions}',
+      )?.printing ??
+      '';
+}
+
+String _effectiveStorageInstructions(InventoryItem item) {
+  if (item.storageInstructions.trim().isNotEmpty) {
+    return item.storageInstructions.trim();
+  }
+  return detectFilamentTemplate(
+        '${item.name}\n${item.brand}\n${item.printingInstructions}\n${item.dryingInstructions}',
+      )?.storage ??
       '';
 }
 
@@ -10535,7 +23832,45 @@ String qrDownloadFileName(InventoryItem item) {
   return '${safeName.isEmpty ? 'Inventory-Item' : safeName}_${item.id}_QR.png';
 }
 
-Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
+String locationQrDownloadFileName(StockLocationRecord location, String path) {
+  final safeName = path
+      .trim()
+      .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  return '${safeName.isEmpty ? 'Stockroom-Location' : safeName}_${location.id}_QR.png';
+}
+
+Future<void> _downloadQr(BuildContext context, InventoryItem item) =>
+    _downloadLabeledQr(
+      context,
+      payload: 'inventorinator:item:${item.id}',
+      title: item.name,
+      id: item.id,
+      fileName: qrDownloadFileName(item),
+      dialogTitle: 'Save QR for ${item.name}',
+    );
+
+Future<void> _downloadLocationQr(
+  BuildContext context,
+  StockLocationRecord location,
+  String path,
+) => _downloadLabeledQr(
+  context,
+  payload: 'inventorinator:location:${location.id}',
+  title: path,
+  id: location.id,
+  fileName: locationQrDownloadFileName(location, path),
+  dialogTitle: 'Save QR for $path',
+);
+
+Future<void> _downloadLabeledQr(
+  BuildContext context, {
+  required String payload,
+  required String title,
+  required String id,
+  required String fileName,
+  required String dialogTitle,
+}) async {
   const width = 1200.0;
   const height = 1400.0;
   const qrSize = 1040.0;
@@ -10545,7 +23880,7 @@ Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
   canvas.save();
   canvas.translate(80, 80);
   QrPainter(
-    data: 'inventorinator:item:${item.id}',
+    data: payload,
     version: QrVersions.auto,
     gapless: true,
     eyeStyle: const QrEyeStyle(
@@ -10558,9 +23893,9 @@ Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
     ),
   ).paint(canvas, const Size.square(qrSize));
   canvas.restore();
-  final title = TextPainter(
+  final titlePainter = TextPainter(
     text: TextSpan(
-      text: item.name,
+      text: title,
       style: const TextStyle(
         color: Colors.black,
         fontSize: 54,
@@ -10571,10 +23906,10 @@ Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
     maxLines: 1,
     ellipsis: '…',
   )..layout(maxWidth: 1040);
-  title.paint(canvas, Offset((width - title.width) / 2, 1160));
-  final id = TextPainter(
+  titlePainter.paint(canvas, Offset((width - titlePainter.width) / 2, 1160));
+  final idPainter = TextPainter(
     text: TextSpan(
-      text: item.id,
+      text: id,
       style: const TextStyle(
         color: Color(0xff333333),
         fontSize: 34,
@@ -10583,7 +23918,7 @@ Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
     ),
     textDirection: TextDirection.ltr,
   )..layout(maxWidth: 1040);
-  id.paint(canvas, Offset((width - id.width) / 2, 1240));
+  idPainter.paint(canvas, Offset((width - idPainter.width) / 2, 1240));
   final image = await recorder.endRecording().toImage(
     width.toInt(),
     height.toInt(),
@@ -10591,20 +23926,20 @@ Future<void> _downloadQr(BuildContext context, InventoryItem item) async {
   final data = await image.toByteData(format: ui.ImageByteFormat.png);
   if (data == null || !context.mounted) return;
   final uri = await FilePicker.saveFile(
-    dialogTitle: 'Save QR for ${item.name}',
-    fileName: qrDownloadFileName(item),
+    dialogTitle: dialogTitle,
+    fileName: fileName,
     bytes: data.buffer.asUint8List(),
     mimeType: 'image/png',
   );
   if (uri != null && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Saved ${qrDownloadFileName(item)}')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Saved $fileName')));
   }
 }
 
 class _DetailSection extends StatelessWidget {
   const _DetailSection({
+    super.key,
     required this.icon,
     required this.title,
     required this.text,
@@ -10619,7 +23954,7 @@ class _DetailSection extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: const Color(0xff8e75ff)),
+        Icon(icon, color: Theme.of(context).colorScheme.primary),
         const SizedBox(width: 14),
         Expanded(
           child: Column(
@@ -10649,7 +23984,7 @@ class _ProductSourceSection extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.link_rounded, color: Color(0xff8e75ff)),
+        Icon(Icons.link_rounded, color: Theme.of(context).colorScheme.primary),
         const SizedBox(width: 14),
         Expanded(
           child: Column(
@@ -10670,8 +24005,8 @@ class _ProductSourceSection extends StatelessWidget {
                 },
                 child: Text(
                   url,
-                  style: const TextStyle(
-                    color: Color(0xff8e75ff),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
                     decoration: TextDecoration.underline,
                   ),
                 ),
@@ -10684,6 +24019,97 @@ class _ProductSourceSection extends StatelessWidget {
   );
 }
 
+class _CompatibleFilamentsDialog extends StatelessWidget {
+  const _CompatibleFilamentsDialog({
+    required this.printedPart,
+    required this.filaments,
+    required this.spoolSizeLabel,
+  });
+
+  final InventoryItem printedPart;
+  final List<InventoryItem> filaments;
+  final String Function(InventoryItem) spoolSizeLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final unconstrained =
+        printedPart.compatibility.isEmpty &&
+        printedPart.compatibleMachineIds.isEmpty;
+    return AlertDialog(
+      title: const Text('Compatible filaments'),
+      content: SizedBox(
+        width: 620,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              printedPart.name,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              unconstrained
+                  ? 'No material or machine constraints are set, so all stocked filament is shown.'
+                  : 'Matched from shared compatible Machines and Compatibility / tags.',
+              style: const TextStyle(color: Color(0xff929aac)),
+            ),
+            const SizedBox(height: 14),
+            if (filaments.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 28),
+                child: Column(
+                  children: [
+                    Icon(Icons.search_off_rounded, size: 42),
+                    SizedBox(height: 10),
+                    Text('No compatible filament is currently in stock.'),
+                  ],
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 430),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: filaments.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final filament = filaments[index];
+                    final details = <String>[
+                      if (filament.brand.isNotEmpty) filament.brand,
+                      spoolSizeLabel(filament),
+                      '×${_formatBomQuantity(filament.quantity)} in stock',
+                      if (filament.storageLocation.isNotEmpty)
+                        filament.storageLocation,
+                    ];
+                    return ListTile(
+                      key: Key('compatible-filament-${filament.id}'),
+                      leading: _ItemVisual(item: filament, size: 38),
+                      title: Text(filament.name),
+                      subtitle: Text(details.join(' · ')),
+                      trailing: filament.amsCompatible
+                          ? const Tooltip(
+                              message: 'AMS compatible',
+                              child: Icon(Icons.check_circle_outline_rounded),
+                            )
+                          : null,
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
 class ItemContextRegion extends StatelessWidget {
   const ItemContextRegion({
     super.key,
@@ -10694,6 +24120,7 @@ class ItemContextRegion extends StatelessWidget {
     this.canCreate = true,
     this.canArchive = true,
     this.canDelete = true,
+    this.onSelect,
     required this.child,
   });
   final InventoryItem item;
@@ -10703,6 +24130,7 @@ class ItemContextRegion extends StatelessWidget {
   final bool canCreate;
   final bool canArchive;
   final bool canDelete;
+  final VoidCallback? onSelect;
   final Widget child;
 
   @override
@@ -10710,8 +24138,17 @@ class ItemContextRegion extends StatelessWidget {
     behavior: HitTestBehavior.translucent,
     onSecondaryTapDown: (details) =>
         _showActions(context, details.globalPosition),
-    onLongPressStart: (details) =>
-        _showActions(context, details.globalPosition),
+    onLongPressStart: (details) {
+      final touchPlatform =
+          defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS;
+      if (touchPlatform && onSelect != null) {
+        HapticFeedback.mediumImpact();
+        onSelect!();
+        return;
+      }
+      _showActions(context, details.globalPosition);
+    },
     child: child,
   );
 
@@ -10724,50 +24161,76 @@ class ItemContextRegion extends StatelessWidget {
         position.dx,
         position.dy,
       ),
+      constraints: const BoxConstraints(minWidth: 230, maxWidth: 300),
       items: [
+        if (item.type == InventoryType.printedPart)
+          const PopupMenuItem(
+            value: ItemAction.showCompatibleFilaments,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'compatible-filaments',
+              icon: Icons.donut_large_rounded,
+              label: 'Show compatible filaments',
+            ),
+          ),
         if (canEdit)
           const PopupMenuItem(
             value: ItemAction.resetDryTimer,
-            child: ListTile(
-              leading: Icon(Icons.restart_alt_rounded),
-              title: Text('Reset dry timer'),
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'reset-dry-timer',
+              icon: Icons.restart_alt_rounded,
+              label: 'Reset dry timer',
             ),
           ),
         if (canEdit)
           const PopupMenuItem(
             value: ItemAction.edit,
-            child: ListTile(
-              leading: Icon(Icons.edit_outlined),
-              title: Text('Edit'),
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'edit',
+              icon: Icons.edit_outlined,
+              label: 'Edit',
             ),
           ),
         if (canCreate)
           const PopupMenuItem(
             value: ItemAction.duplicate,
-            child: ListTile(
-              leading: Icon(Icons.copy_rounded),
-              title: Text('Duplicate'),
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'duplicate',
+              icon: Icons.copy_rounded,
+              label: 'Duplicate',
             ),
           ),
         if (canArchive)
           PopupMenuItem(
             value: ItemAction.archive,
-            child: ListTile(
-              leading: Icon(
-                item.archived
-                    ? Icons.unarchive_outlined
-                    : Icons.archive_outlined,
-              ),
-              title: Text(item.archived ? 'Restore' : 'Archive'),
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: item.archived ? 'restore' : 'archive',
+              icon: item.archived
+                  ? Icons.unarchive_outlined
+                  : Icons.archive_outlined,
+              label: item.archived ? 'Restore' : 'Archive',
             ),
           ),
-        if (canDelete) const PopupMenuDivider(),
+        if (canDelete) const PopupMenuDivider(height: 12),
         if (canDelete)
           const PopupMenuItem(
             value: ItemAction.delete,
-            child: ListTile(
-              leading: Icon(Icons.delete_outline_rounded, color: Colors.red),
-              title: Text('Delete', style: TextStyle(color: Colors.red)),
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'delete',
+              icon: Icons.delete_outline_rounded,
+              label: 'Delete',
+              destructive: true,
             ),
           ),
       ],
@@ -10776,22 +24239,97 @@ class ItemContextRegion extends StatelessWidget {
   }
 }
 
+class _PopupActionRow extends StatelessWidget {
+  const _PopupActionRow({
+    required this.actionKey,
+    required this.icon,
+    required this.label,
+    this.destructive = false,
+    this.selected = false,
+  });
+
+  final String actionKey;
+  final IconData icon;
+  final String label;
+  final bool destructive;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = destructive
+        ? const Color(0xffff6b7a)
+        : Theme.of(context).colorScheme.primary;
+    return Row(
+      key: Key('context-action-$actionKey'),
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 19, color: accent),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: destructive
+                  ? accent
+                  : Theme.of(context).colorScheme.onSurface,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        if (selected)
+          Icon(
+            Icons.check_rounded,
+            size: 19,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+      ],
+    );
+  }
+}
+
 class _QuantityBadge extends StatelessWidget {
-  const _QuantityBadge({required this.item});
+  const _QuantityBadge({required this.item, this.compact = false});
 
   final InventoryItem item;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final lowStock = _isLowStock(item);
-    final accent = lowStock ? const Color(0xffffa552) : item.color;
+    final accent = lowStock ? const Color(0xffffa552) : _itemCardChromeColor;
+    final light = Theme.of(context).brightness == Brightness.light;
+    final background = light
+        ? Color.alphaBlend(
+            accent.withValues(alpha: lowStock ? .22 : .04),
+            const Color(0xff30313a),
+          )
+        : Color.alphaBlend(
+            accent.withValues(alpha: lowStock ? .24 : .1),
+            _themeCanvas(context).withValues(alpha: .82),
+          );
     return Container(
       key: Key('item-quantity-${item.id}'),
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 11,
+        vertical: compact ? 5 : 6,
+      ),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: lowStock ? .22 : .14),
+        color: background,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: accent.withValues(alpha: .65)),
+        border: Border.all(
+          color: lowStock
+              ? accent.withValues(alpha: .72)
+              : light
+              ? const Color(0xff686a76)
+              : accent.withValues(alpha: .65),
+        ),
         boxShadow: lowStock
             ? [BoxShadow(color: accent.withValues(alpha: .2), blurRadius: 14)]
             : null,
@@ -10800,22 +24338,22 @@ class _QuantityBadge extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (lowStock) ...[
-            const Icon(
+            Icon(
               Icons.warning_amber_rounded,
-              color: Color(0xffffa552),
-              size: 17,
+              color: const Color(0xffffa552),
+              size: compact ? 15 : 17,
             ),
             const SizedBox(width: 5),
           ],
           Text(
             '×${_formatBomQuantity(item.quantity)}',
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.white,
-              fontSize: 18,
+              fontSize: compact ? 15 : 18,
               fontWeight: FontWeight.w900,
             ),
           ),
-          if (lowStock) ...[
+          if (lowStock && !compact) ...[
             const SizedBox(width: 6),
             const Text(
               'LOW',
@@ -10831,6 +24369,109 @@ class _QuantityBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+class _QuantityStepper extends StatelessWidget {
+  const _QuantityStepper({
+    required this.item,
+    this.onQuantityChanged,
+    this.compact = false,
+  });
+
+  final InventoryItem item;
+  final ValueChanged<double>? onQuantityChanged;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final editable = onQuantityChanged != null && !item.archived;
+    if (!editable) return _QuantityBadge(item: item, compact: compact);
+    return Row(
+      key: Key('item-quantity-stepper-${item.id}'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _QuantityStepButton(
+          key: Key('decrease-quantity-${item.id}'),
+          icon: Icons.remove_rounded,
+          tooltip: 'Decrease quantity',
+          compact: compact,
+          onPressed: item.quantity > 0 ? () => onQuantityChanged!(-1) : null,
+        ),
+        SizedBox(width: compact ? 3 : 5),
+        _QuantityBadge(item: item, compact: compact),
+        SizedBox(width: compact ? 3 : 5),
+        _QuantityStepButton(
+          key: Key('increase-quantity-${item.id}'),
+          icon: Icons.add_rounded,
+          tooltip: 'Increase quantity',
+          compact: compact,
+          onPressed: () => onQuantityChanged!(1),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuantityStepButton extends StatelessWidget {
+  const _QuantityStepButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.compact = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onPressed;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = compact ? 28.0 : 32.0;
+    return SizedBox.square(
+      dimension: size,
+      child: IconButton(
+        tooltip: tooltip,
+        style: const ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size.zero),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        iconSize: compact ? 17 : 19,
+        onPressed: onPressed,
+        icon: Icon(icon),
+      ),
+    );
+  }
+}
+
+class _MaterialBadge extends StatelessWidget {
+  const _MaterialBadge({required this.item});
+
+  final InventoryItem item;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: Key('item-material-${item.id}'),
+    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+    decoration: BoxDecoration(
+      color: _itemCardChromeColor.withValues(alpha: .14),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: _itemCardChromeColor.withValues(alpha: .65)),
+    ),
+    child: Text(
+      item.materialName,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 14,
+        fontWeight: FontWeight.w900,
+      ),
+    ),
+  );
 }
 
 bool _isLowStock(InventoryItem item) =>
@@ -11035,15 +24676,28 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
     vsync: this,
     duration: _scaledAnimationDuration(1450, widget.durationPercent),
   );
-  Timer? visibilityTimer;
   Timer? recurrenceTimer;
+  ValueNotifier<bool>? scrollingNotifier;
   bool wasVisible = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.trigger > 0) controller.forward(from: 0);
-    _restartVisibilityTimer();
+    _restartVisibilityTracking();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextNotifier = Scrollable.maybeOf(context)
+        ?.position
+        .isScrollingNotifier;
+    if (identical(scrollingNotifier, nextNotifier)) return;
+    scrollingNotifier?.removeListener(_handleScrollingChanged);
+    scrollingNotifier = nextNotifier;
+    scrollingNotifier?.addListener(_handleScrollingChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
   }
 
   @override
@@ -11057,29 +24711,29 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
     }
     if (widget.active != oldWidget.active ||
         widget.recurrenceSeconds != oldWidget.recurrenceSeconds) {
-      _restartVisibilityTimer();
+      _restartVisibilityTracking();
     }
     if (widget.trigger > 0 && widget.trigger != oldWidget.trigger) {
       controller.forward(from: 0);
     }
   }
 
-  void _restartVisibilityTimer() {
-    visibilityTimer?.cancel();
+  void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
     wasVisible = false;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
-    visibilityTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
-      (_) => _checkVisibility(),
-    );
     if (widget.recurrenceSeconds > 0) {
       recurrenceTimer = Timer.periodic(
         Duration(seconds: widget.recurrenceSeconds),
         (_) => _playIfVisible(),
       );
     }
+  }
+
+  void _handleScrollingChanged() {
+    if (scrollingNotifier?.value ?? false) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
   }
 
   void _checkVisibility() {
@@ -11102,7 +24756,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
 
   @override
   void dispose() {
-    visibilityTimer?.cancel();
+    scrollingNotifier?.removeListener(_handleScrollingChanged);
     recurrenceTimer?.cancel();
     controller.dispose();
     super.dispose();
@@ -11192,15 +24846,28 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
     vsync: this,
     duration: _scaledAnimationDuration(2300, widget.durationPercent),
   );
-  Timer? visibilityTimer;
   Timer? recurrenceTimer;
+  ValueNotifier<bool>? scrollingNotifier;
   bool wasVisible = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.trigger > 0) controller.forward(from: 0);
-    _restartVisibilityTimer();
+    _restartVisibilityTracking();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextNotifier = Scrollable.maybeOf(context)
+        ?.position
+        .isScrollingNotifier;
+    if (identical(scrollingNotifier, nextNotifier)) return;
+    scrollingNotifier?.removeListener(_handleScrollingChanged);
+    scrollingNotifier = nextNotifier;
+    scrollingNotifier?.addListener(_handleScrollingChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
   }
 
   @override
@@ -11214,29 +24881,29 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
     }
     if (widget.active != oldWidget.active ||
         widget.recurrenceSeconds != oldWidget.recurrenceSeconds) {
-      _restartVisibilityTimer();
+      _restartVisibilityTracking();
     }
     if (widget.trigger > 0 && widget.trigger != oldWidget.trigger) {
       controller.forward(from: 0);
     }
   }
 
-  void _restartVisibilityTimer() {
-    visibilityTimer?.cancel();
+  void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
     wasVisible = false;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
-    visibilityTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
-      (_) => _checkVisibility(),
-    );
     if (widget.recurrenceSeconds > 0) {
       recurrenceTimer = Timer.periodic(
         Duration(seconds: widget.recurrenceSeconds),
         (_) => _playIfVisible(),
       );
     }
+  }
+
+  void _handleScrollingChanged() {
+    if (scrollingNotifier?.value ?? false) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
   }
 
   void _checkVisibility() {
@@ -11259,7 +24926,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
 
   @override
   void dispose() {
-    visibilityTimer?.cancel();
+    scrollingNotifier?.removeListener(_handleScrollingChanged);
     recurrenceTimer?.cancel();
     controller.dispose();
     super.dispose();
@@ -11377,18 +25044,233 @@ class ItemCardEffects extends StatelessWidget {
   );
 }
 
+class _PhotoInventoryCardContent extends StatelessWidget {
+  const _PhotoInventoryCardContent({
+    required this.item,
+    required this.typeLabel,
+    required this.typeIcon,
+    required this.typeIconImageBytes,
+    required this.spoolSizeLabel,
+    required this.showStatus,
+    this.onQuantityChanged,
+  });
+
+  final InventoryItem item;
+  final String typeLabel;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
+  final String spoolSizeLabel;
+  final bool showStatus;
+  final ValueChanged<double>? onQuantityChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final swatch = _itemColorSwatch(item.itemColorName);
+    final metadata = [
+      if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
+      ...item.compatibility,
+    ].join('  •  ');
+    return Stack(
+      key: Key('photo-card-${item.id}'),
+      fit: StackFit.expand,
+      children: [
+        _CardPhotoBackground(
+          bytes: item.imageBytes!,
+          imageKey: Key('photo-card-background-${item.id}'),
+        ),
+        if (swatch != null) ColoredBox(color: swatch.withValues(alpha: .12)),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x66080a10), Color(0x22080a10), Color(0xe60a0d14)],
+              stops: [0, .42, 1],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _QuantityStepper(
+                    item: item,
+                    compact: true,
+                    onQuantityChanged: onQuantityChanged,
+                  ),
+                  const Spacer(),
+                  if (item.archived)
+                    _ArchiveBadge(item: item)
+                  else if (showStatus && item.quantity > 0)
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: _themeCanvas(context).withValues(alpha: .82),
+                        shape: BoxShape.circle,
+                      ),
+                      child: CountdownRing(
+                        key: Key('inventory-card-timer-${item.id}'),
+                        item: item,
+                      ),
+                    ),
+                ],
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _themeCanvas(context).withValues(alpha: .84),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: .18),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _CardTypeAndPrice(
+                      item: item,
+                      typeLabel: typeLabel,
+                      typeIcon: typeIcon,
+                      typeIconImageBytes: typeIconImageBytes,
+                      overlay: true,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        height: 1.15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (metadata.isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        metadata,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xffc3c8d3),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    if (swatch != null || item.materialName.isNotEmpty) ...[
+                      const SizedBox(height: 9),
+                      Row(
+                        children: [
+                          if (swatch != null) ...[
+                            Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                color: swatch,
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                            ),
+                            if (item.itemColorLabel.isNotEmpty) ...[
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Text(
+                                  item.itemColorLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ] else
+                              const Spacer(),
+                          ] else
+                            const Spacer(),
+                          if (item.materialName.isNotEmpty)
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 130),
+                              child: _MaterialBadge(item: item),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CardPhotoBackground extends StatelessWidget {
+  const _CardPhotoBackground({required this.bytes, required this.imageKey});
+
+  final Uint8List bytes;
+  final Key imageKey;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final logicalWidth = constraints.maxWidth.isFinite
+          ? constraints.maxWidth
+          : 400.0;
+      final requestedWidth =
+          (logicalWidth * MediaQuery.devicePixelRatioOf(context)).round();
+      // Keep the image-provider key stable while a desktop window is being
+      // resized. A per-pixel cacheWidth forces a fresh decode on every frame.
+      final cacheWidth = requestedWidth <= 320
+          ? 320
+          : requestedWidth <= 480
+          ? 480
+          : requestedWidth <= 720
+          ? 720
+          : requestedWidth <= 960
+          ? 960
+          : 1200;
+      return Image.memory(
+        bytes,
+        key: imageKey,
+        fit: BoxFit.cover,
+        cacheWidth: cacheWidth,
+        filterQuality: FilterQuality.medium,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => const ColoredBox(color: Color(0xff1a1525)),
+      );
+    },
+  );
+}
+
 class InventoryCard extends StatelessWidget {
   const InventoryCard({
     super.key,
     required this.item,
     required this.onOpen,
     required this.onAction,
+    this.onQuantityChanged,
+    this.onSelect,
+    this.selected = false,
+    this.typeLabel,
+    this.typeIcon,
+    this.typeIconImageBytes,
     this.spoolSizeLabel = '',
     this.quantitySyncVersion = 0,
     this.lowStockAnimationVersion = 0,
     this.moistureAnimationVersion = 0,
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
+    this.photoCard = false,
+    this.showStatus = true,
     this.canEdit = true,
     this.canCreate = true,
     this.canArchive = true,
@@ -11397,16 +25279,25 @@ class InventoryCard extends StatelessWidget {
   final InventoryItem item;
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
+  final ValueChanged<double>? onQuantityChanged;
+  final VoidCallback? onSelect;
+  final bool selected;
+  final String? typeLabel;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
   final String spoolSizeLabel;
   final int quantitySyncVersion;
   final int lowStockAnimationVersion;
   final int moistureAnimationVersion;
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
+  final bool photoCard;
+  final bool showStatus;
   final bool canEdit;
   final bool canCreate;
   final bool canArchive;
   final bool canDelete;
+
   @override
   Widget build(BuildContext context) => ItemContextRegion(
     item: item,
@@ -11415,10 +25306,32 @@ class InventoryCard extends StatelessWidget {
     canCreate: canCreate,
     canArchive: canArchive,
     canDelete: canDelete,
+    onSelect: onSelect,
     child: Card(
+      key: Key('inventory-card-${item.id}'),
+      color: selected
+          ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
+          : null,
+      shape: selected
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onOpen,
+        hoverColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .12),
+        focusColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .12),
+        highlightColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .17),
+        splashColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .17),
         child: ItemCardEffects(
           itemId: item.id,
           quantitySyncVersion: quantitySyncVersion,
@@ -11428,90 +25341,179 @@ class InventoryCard extends StatelessWidget {
           moistureActive: _hasMoistureVisualAlert(item),
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    _QuantityBadge(item: item),
-                    const Spacer(),
-                    if (item.archived)
-                      _ArchiveBadge(item: item)
-                    else
-                      CountdownRing(item: item),
-                  ],
-                ),
-                const Spacer(),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        item.typeLabel.toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: item.color,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.1,
-                        ),
+          child: photoCard && item.imageBytes != null
+              ? _PhotoInventoryCardContent(
+                  item: item,
+                  typeLabel: typeLabel ?? item.typeLabel,
+                  typeIcon: typeIcon,
+                  typeIconImageBytes: typeIconImageBytes,
+                  spoolSizeLabel: spoolSizeLabel,
+                  showStatus: showStatus,
+                  onQuantityChanged: canEdit ? onQuantityChanged : null,
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 220;
+                    return Padding(
+                      padding: EdgeInsets.all(compact ? 12 : 18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: _QuantityStepper(
+                                      item: item,
+                                      compact: compact,
+                                      onQuantityChanged: canEdit
+                                          ? onQuantityChanged
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              if (item.archived)
+                                _ArchiveBadge(item: item)
+                              else if (showStatus && item.quantity > 0)
+                                CountdownRing(
+                                  key: Key('inventory-card-timer-${item.id}'),
+                                  item: item,
+                                  compact: compact,
+                                ),
+                            ],
+                          ),
+                          const Spacer(),
+                          _CardTypeAndPrice(
+                            item: item,
+                            typeLabel: typeLabel ?? item.typeLabel,
+                            typeIcon: typeIcon,
+                            typeIconImageBytes: typeIconImageBytes,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            item.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: compact ? 15 : 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (!compact) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              [
+                                if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
+                                ...item.compatibility,
+                              ].join('  •  '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xff929aac),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                          SizedBox(height: compact ? 5 : 14),
+                          SizedBox(
+                            width: double.infinity,
+                            child: Row(
+                              children: [
+                                _ItemVisual(
+                                  item: item,
+                                  size: compact ? 32 : 38,
+                                  typeIcon: typeIcon,
+                                  typeIconImageBytes: typeIconImageBytes,
+                                ),
+                                const Spacer(),
+                                if (item.materialName.isNotEmpty) ...[
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 110,
+                                    ),
+                                    child: _MaterialBadge(item: item),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '\$${item.cost.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  item.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  [
-                    if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-                    ...item.compatibility,
-                  ].join('  •  '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xff929aac),
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    _ItemVisual(item: item, size: 38),
-                    const Spacer(),
-                    Text(
-                      _age(item.added),
-                      style: const TextStyle(
-                        color: Color(0xff7f8798),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     ),
+  );
+}
+
+class _CardTypeAndPrice extends StatelessWidget {
+  const _CardTypeAndPrice({
+    required this.item,
+    required this.typeLabel,
+    required this.typeIcon,
+    required this.typeIconImageBytes,
+    this.overlay = false,
+  });
+
+  final InventoryItem item;
+  final String typeLabel;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Row(
+        key: Key('item-type-row-${item.id}'),
+        children: [
+          _TypeBadgeIcon(
+            icon: typeIcon,
+            imageBytes: typeIconImageBytes,
+            size: 14,
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              typeLabel.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: _itemCardChromeColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 3),
+      Align(
+        key: Key('item-price-row-${item.id}'),
+        alignment: Alignment.centerRight,
+        child: Text(
+          '\$${item.cost.toStringAsFixed(2)}',
+          style: TextStyle(
+            color: overlay
+                ? Colors.white
+                : Theme.of(context).colorScheme.onSurface,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    ],
   );
 }
 
@@ -11521,12 +25523,19 @@ class InventoryRow extends StatelessWidget {
     required this.item,
     required this.onOpen,
     required this.onAction,
+    this.onQuantityChanged,
+    this.onSelect,
+    this.selected = false,
+    this.typeLabel,
+    this.typeIcon,
+    this.typeIconImageBytes,
     this.spoolSizeLabel = '',
     this.quantitySyncVersion = 0,
     this.lowStockAnimationVersion = 0,
     this.moistureAnimationVersion = 0,
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
+    this.showStatus = true,
     this.canEdit = true,
     this.canCreate = true,
     this.canArchive = true,
@@ -11535,16 +25544,197 @@ class InventoryRow extends StatelessWidget {
   final InventoryItem item;
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
+  final ValueChanged<double>? onQuantityChanged;
+  final VoidCallback? onSelect;
+  final bool selected;
+  final String? typeLabel;
+  final IconData? typeIcon;
+  final Uint8List? typeIconImageBytes;
   final String spoolSizeLabel;
   final int quantitySyncVersion;
   final int lowStockAnimationVersion;
   final int moistureAnimationVersion;
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
+  final bool showStatus;
   final bool canEdit;
   final bool canCreate;
   final bool canArchive;
   final bool canDelete;
+
+  String get _metadata => [
+    typeLabel ?? item.typeLabel,
+    if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
+    ...item.compatibility,
+  ].join('  •  ');
+
+  Widget _price() => Column(
+    crossAxisAlignment: CrossAxisAlignment.end,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        '\$${item.cost.toStringAsFixed(2)}',
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+    ],
+  );
+
+  Widget _mobileLayout() => ConstrainedBox(
+    key: Key('mobile-inventory-row-${item.id}'),
+    constraints: const BoxConstraints(minHeight: 132),
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ItemVisual(
+                item: item,
+                size: 48,
+                typeIcon: typeIcon,
+                typeIconImageBytes: typeIconImageBytes,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      key: Key('mobile-item-name-${item.id}'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      _metadata,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xff929aac),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected) ...[
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xffb9a9ff),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _QuantityStepper(
+                item: item,
+                compact: true,
+                onQuantityChanged: canEdit ? onQuantityChanged : null,
+              ),
+              if (item.archived) ...[
+                const SizedBox(width: 8),
+                Flexible(child: _ArchiveBadge(item: item)),
+              ] else
+                const Spacer(),
+              _price(),
+              const SizedBox(width: 10),
+              if (showStatus && item.quantity > 0)
+                CountdownRing(
+                  key: Key('inventory-row-timer-${item.id}'),
+                  item: item,
+                  compact: true,
+                ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _desktopLayout() => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: 86),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          _ItemVisual(
+            item: item,
+            size: 48,
+            typeIcon: typeIcon,
+            typeIconImageBytes: typeIconImageBytes,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  _metadata,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xff929aac),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          if (selected) ...[
+            const Icon(Icons.check_circle_rounded, color: Color(0xffb9a9ff)),
+            const SizedBox(width: 12),
+          ],
+          _QuantityStepper(
+            item: item,
+            onQuantityChanged: canEdit ? onQuantityChanged : null,
+          ),
+          const SizedBox(width: 12),
+          if (item.archived) ...[
+            _ArchiveBadge(item: item),
+            const SizedBox(width: 12),
+          ],
+          _price(),
+          if (showStatus && item.quantity > 0) ...[
+            const SizedBox(width: 12),
+            SizedBox(
+              height: 62,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: CountdownRing(
+                  key: Key('inventory-row-timer-${item.id}'),
+                  item: item,
+                  compact: true,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => ItemContextRegion(
     item: item,
@@ -11553,10 +25743,32 @@ class InventoryRow extends StatelessWidget {
     canCreate: canCreate,
     canArchive: canArchive,
     canDelete: canDelete,
+    onSelect: onSelect,
     child: Card(
+      key: Key('inventory-row-${item.id}'),
+      color: selected
+          ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
+          : null,
+      shape: selected
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
       child: InkWell(
         borderRadius: BorderRadius.circular(22),
         onTap: onOpen,
+        hoverColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .12),
+        focusColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .12),
+        highlightColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .17),
+        splashColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: .17),
         child: ItemCardEffects(
           itemId: item.id,
           quantitySyncVersion: quantitySyncVersion,
@@ -11566,71 +25778,9 @@ class InventoryRow extends StatelessWidget {
           moistureActive: _hasMoistureVisualAlert(item),
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 86),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  _ItemVisual(item: item, size: 48),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.name,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          [
-                            item.typeLabel,
-                            if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-                            ...item.compatibility,
-                          ].join('  •  '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xff929aac),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  _QuantityBadge(item: item),
-                  const SizedBox(width: 12),
-                  if (item.archived) ...[
-                    _ArchiveBadge(item: item),
-                    const SizedBox(width: 12),
-                  ],
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '\$${item.cost.toStringAsFixed(2)}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        _age(item.added),
-                        style: const TextStyle(
-                          color: Color(0xff7f8798),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(width: 12),
-                  CountdownRing(item: item, compact: true),
-                ],
-              ),
-            ),
+          child: LayoutBuilder(
+            builder: (_, constraints) =>
+                constraints.maxWidth < 600 ? _mobileLayout() : _desktopLayout(),
           ),
         ),
       ),
@@ -11708,10 +25858,11 @@ class CountdownRing extends StatelessWidget {
       child: Tooltip(
         message: statusLabel,
         child: TweenAnimationBuilder<double>(
-          key: ValueKey(
-            '${item.id}-${item.filamentStatus.name}-$lowStock-$remaining-${moistureRemaining?.inMinutes}',
-          ),
-          tween: Tween(begin: 0, end: progress),
+          // Starting at the current value prevents recycled grid cards from
+          // replaying the ring animation whenever they re-enter the viewport.
+          // With no explicit begin, later end-value changes still animate from
+          // the value currently on screen.
+          tween: Tween(end: progress),
           duration: const Duration(milliseconds: 650),
           curve: Curves.easeOutCubic,
           builder: (context, animatedProgress, child) => Container(
@@ -11789,6 +25940,29 @@ class CountdownRing extends StatelessWidget {
       ),
     );
   }
+}
+
+class _PinnedActionBarDelegate extends SliverPersistentHeaderDelegate {
+  const _PinnedActionBarDelegate({required this.height, required this.child});
+
+  final double height;
+  final Widget child;
+
+  @override
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) => child;
+
+  @override
+  bool shouldRebuild(covariant _PinnedActionBarDelegate oldDelegate) => true;
 }
 
 String _age(DateTime added) {

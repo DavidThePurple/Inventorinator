@@ -2,7 +2,21 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-const requiredInventorinatorSchemaVersion = 7;
+const requiredInventorinatorSchemaVersion = 11;
+
+bool canManageWorkspaceDevices(String? role) =>
+    role == 'owner' || role == 'admin' || role == 'manager';
+
+bool canRemoveWorkspaceDevices(String? role) => role == 'owner';
+
+String visibleSyncErrorForRole(Object error, String? role) {
+  if (error is SupabaseSyncException && error.isInvalidRefreshToken) {
+    return canManageWorkspaceDevices(role)
+        ? 'This device’s Remote Sync session expired. Pair it again to manage access.'
+        : '';
+  }
+  return error.toString();
+}
 
 enum WorkspaceRole {
   admin,
@@ -40,6 +54,8 @@ class SupabaseConfig {
     this.userId,
     this.workspaceId,
     this.workspaceRole,
+    this.accessToken,
+    this.accessTokenExpiresAt,
     this.refreshToken,
     this.lastSyncedAt,
     this.lastSyncedStateJson,
@@ -52,6 +68,8 @@ class SupabaseConfig {
   final String? userId;
   final String? workspaceId;
   final String? workspaceRole;
+  final String? accessToken;
+  final DateTime? accessTokenExpiresAt;
   final String? refreshToken;
   final DateTime? lastSyncedAt;
   final String? lastSyncedStateJson;
@@ -66,6 +84,28 @@ class SupabaseConfig {
 
   bool get hasSession => userId != null && refreshToken != null;
 
+  SupabaseSession? get cachedSession {
+    final access = accessToken;
+    final refresh = refreshToken;
+    final user = userId;
+    final expires = accessTokenExpiresAt;
+    if (access == null ||
+        refresh == null ||
+        user == null ||
+        expires == null ||
+        !expires.isAfter(
+          DateTime.now().toUtc().add(const Duration(minutes: 1)),
+        )) {
+      return null;
+    }
+    return SupabaseSession(
+      accessToken: access,
+      refreshToken: refresh,
+      userId: user,
+      expiresAt: expires,
+    );
+  }
+
   SupabaseConfig copyWith({
     String? url,
     String? publishableKey,
@@ -74,6 +114,8 @@ class SupabaseConfig {
     String? userId,
     String? workspaceId,
     String? workspaceRole,
+    String? accessToken,
+    DateTime? accessTokenExpiresAt,
     String? refreshToken,
     DateTime? lastSyncedAt,
     String? lastSyncedStateJson,
@@ -85,6 +127,8 @@ class SupabaseConfig {
     userId: userId ?? this.userId,
     workspaceId: workspaceId ?? this.workspaceId,
     workspaceRole: workspaceRole ?? this.workspaceRole,
+    accessToken: accessToken ?? this.accessToken,
+    accessTokenExpiresAt: accessTokenExpiresAt ?? this.accessTokenExpiresAt,
     refreshToken: refreshToken ?? this.refreshToken,
     lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
     lastSyncedStateJson: lastSyncedStateJson ?? this.lastSyncedStateJson,
@@ -98,6 +142,8 @@ class SupabaseConfig {
     'userId': userId,
     'workspaceId': workspaceId,
     'workspaceRole': workspaceRole,
+    'accessToken': accessToken,
+    'accessTokenExpiresAt': accessTokenExpiresAt?.toIso8601String(),
     'refreshToken': refreshToken,
     'lastSyncedAt': lastSyncedAt?.toIso8601String(),
     'lastSyncedStateJson': lastSyncedStateJson,
@@ -111,6 +157,10 @@ class SupabaseConfig {
     userId: json['userId'] as String?,
     workspaceId: json['workspaceId'] as String?,
     workspaceRole: json['workspaceRole'] as String?,
+    accessToken: json['accessToken'] as String?,
+    accessTokenExpiresAt: json['accessTokenExpiresAt'] == null
+        ? null
+        : DateTime.parse(json['accessTokenExpiresAt'] as String).toUtc(),
     refreshToken: json['refreshToken'] as String?,
     lastSyncedAt: json['lastSyncedAt'] == null
         ? null
@@ -124,16 +174,32 @@ class SupabaseSession {
     required this.accessToken,
     required this.refreshToken,
     required this.userId,
+    this.expiresAt,
   });
   final String accessToken;
   final String refreshToken;
   final String userId;
+  final DateTime? expiresAt;
 }
 
 class CloudWorkshopState {
   const CloudWorkshopState({required this.stateJson, required this.updatedAt});
   final String stateJson;
   final DateTime updatedAt;
+}
+
+class WorkspaceRecovery {
+  const WorkspaceRecovery({required this.workspaceId, required this.key});
+  final String workspaceId;
+  final String key;
+
+  factory WorkspaceRecovery.fromRpc(Object? value) {
+    final result = value as Map<String, dynamic>;
+    return WorkspaceRecovery(
+      workspaceId: result['workspace_id'] as String,
+      key: result['recovery_key'] as String,
+    );
+  }
 }
 
 class WorkspaceDevice {
@@ -154,6 +220,16 @@ class WorkspaceDevice {
 class SupabaseSyncException implements Exception {
   const SupabaseSyncException(this.message);
   final String message;
+
+  bool get isInvalidRefreshToken {
+    final normalized = message.toLowerCase();
+    return normalized.contains('refresh token') &&
+        (normalized.contains('already used') ||
+            normalized.contains('invalid') ||
+            normalized.contains('expired') ||
+            normalized.contains('not found'));
+  }
+
   @override
   String toString() => message;
 }
@@ -245,10 +321,21 @@ class SupabaseSyncService {
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     final user = body['user'] as Map<String, dynamic>?;
+    final expiresAtSeconds = body['expires_at'] as num?;
+    final expiresInSeconds = body['expires_in'] as num?;
+    final expiresAt = expiresAtSeconds != null
+        ? DateTime.fromMillisecondsSinceEpoch(
+            expiresAtSeconds.toInt() * 1000,
+            isUtc: true,
+          )
+        : DateTime.now().toUtc().add(
+            Duration(seconds: expiresInSeconds?.toInt() ?? 3600),
+          );
     return SupabaseSession(
       accessToken: body['access_token'] as String,
       refreshToken: body['refresh_token'] as String,
       userId: user?['id'] as String,
+      expiresAt: expiresAt,
     );
   }
 
@@ -279,6 +366,32 @@ class SupabaseSyncService {
       stateJson: jsonEncode(row['state_json']),
       updatedAt: DateTime.parse(row['updated_at'] as String).toUtc(),
     );
+  }
+
+  Future<DateTime?> latestUpdatedAt(SupabaseSession session) async {
+    final workspaceId = config.workspaceId;
+    if (workspaceId == null) {
+      throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    final response = await _request(
+      _client.get(
+        _uri('/rest/v1/workshop_states', {
+          'select': 'updated_at',
+          'workspace_id': 'eq.$workspaceId',
+        }),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      ),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SupabaseSyncException(_message(response));
+    }
+    final rows = jsonDecode(response.body) as List<dynamic>;
+    if (rows.isEmpty) return null;
+    final row = rows.single as Map<String, dynamic>;
+    return DateTime.parse(row['updated_at'] as String).toUtc();
   }
 
   Future<int> schemaVersion(SupabaseSession session) async {
@@ -352,6 +465,39 @@ class SupabaseSyncService {
   Future<String> createWorkspace(SupabaseSession session) async {
     final result = await _rpc(session, 'create_inventorinator_workspace', {});
     return result as String;
+  }
+
+  Future<WorkspaceRecovery> createWorkspaceWithRecovery(
+    SupabaseSession session,
+  ) async => WorkspaceRecovery.fromRpc(
+    await _rpc(session, 'create_inventorinator_workspace_with_recovery', {}),
+  );
+
+  Future<WorkspaceRecovery> recoverWorkspace(
+    SupabaseSession session, {
+    required String workspaceId,
+    required String recoveryKey,
+    required String deviceName,
+  }) async => WorkspaceRecovery.fromRpc(
+    await _rpc(session, 'recover_inventorinator_workspace', {
+      'target_workspace': workspaceId,
+      'recovery_key': recoveryKey,
+      'target_device_name': deviceName,
+    }),
+  );
+
+  Future<String> rotateRecoveryKey(SupabaseSession session) async {
+    final result = await _rpc(session, 'rotate_inventorinator_recovery_key', {
+      'target_workspace': config.workspaceId,
+    });
+    return result as String;
+  }
+
+  Future<String?> ensureRecoveryKey(SupabaseSession session) async {
+    final result = await _rpc(session, 'ensure_inventorinator_recovery_key', {
+      'target_workspace': config.workspaceId,
+    });
+    return result as String?;
   }
 
   Future<String> createPairingCode(SupabaseSession session) async {

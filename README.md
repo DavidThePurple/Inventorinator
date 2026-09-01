@@ -32,6 +32,9 @@ Release downloads are provided for:
 On Linux, extract the archive and run `./install.sh`. This registers the
 raygun icon and adds Inventorinator to the application menu for your user.
 
+Windows packages are currently unsigned and may trigger a Microsoft Defender
+SmartScreen warning. Verify the published SHA-256 checksum before running one.
+
 Inventorinator is under active development. Back up important inventory with
 the built-in database export before upgrading.
 
@@ -43,6 +46,10 @@ the built-in database export before upgrading.
   and material-specific instructions.
 - Creates kits and editable bills of materials, then turns them into persistent
   shared build queues.
+- Imports validated `.inventorinator-kit.json` BOM packages on desktop
+  (v1.1.0+). Files can be written manually, exported or scripted by another
+  tool, or optionally created with ChatGPT, Codex, Claude, or another research
+  tool; Inventorinator has no built-in AI account, API key, or usage fee.
 - Scans QR codes and product barcodes with ordinary phone and webcam cameras.
 - Captures and OCRs labels, imports product pages, and generates downloadable
   item QR labels.
@@ -56,7 +63,7 @@ the built-in database export before upgrading.
 
 Download the package for your platform from
 [Releases](https://github.com/DavidThePurple/Inventorinator/releases).
-Inventorinator works locally immediately; cloud synchronization is optional
+Inventorinator works locally immediately; remote synchronization is optional
 and can be connected from inside the app.
 
 Installation, self-hosting, development, and build documentation belong in the
@@ -67,7 +74,7 @@ Installation, self-hosting, development, and build documentation belong in the
 - Report bugs or request features in
   [GitHub Issues](https://github.com/DavidThePurple/Inventorinator/issues).
 - Read the [privacy notes](PRIVACY.md) before enabling OCR, web imports, or
-  cloud synchronization.
+  remote synchronization.
 - Report vulnerabilities according to the [security policy](SECURITY.md).
 - Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 - Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
@@ -77,6 +84,18 @@ Installation, self-hosting, development, and build documentation belong in the
 ChatGPT and OpenAI Codex were used as development tools during Inventorinator's
 design, implementation, testing, and documentation. Project direction and
 final decisions remain with the human maintainer.
+
+## Data attribution
+
+Optional filament swatch search uses data from
+[FilamentColors.xyz](https://filamentcolors.xyz/), licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Inventorinator
+caches API responses locally, throttles searches, honors server cooldowns, and
+remains fully usable without that service.
+
+The searchable Type icon picker includes the open-source
+[Lucide](https://lucide.dev/) icon set. Lucide is licensed under the
+[ISC License](https://github.com/lucide-icons/lucide/blob/main/LICENSE).
 
 ## License
 

@@ -25,6 +25,50 @@ void main() {
     expect(config.copyWith(publishableKey: '').isConfigured, isFalse);
   });
 
+  test('sync configuration preserves role, session, and merge checkpoint', () {
+    final expires = DateTime.now().toUtc().add(const Duration(hours: 2));
+    final configured = config.copyWith(
+      userId: 'user-id',
+      workspaceId: 'workspace-id',
+      workspaceRole: 'manager',
+      accessToken: 'access-token',
+      accessTokenExpiresAt: expires,
+      refreshToken: 'refresh-token',
+      lastSyncedAt: DateTime.utc(2026, 8, 28),
+      lastSyncedStateJson: '{"inventory":[]}',
+    );
+
+    final restored = SupabaseConfig.fromJson(configured.toJson());
+    expect(restored.workspaceRole, 'manager');
+    expect(restored.workspaceId, 'workspace-id');
+    expect(restored.accessToken, 'access-token');
+    expect(restored.accessTokenExpiresAt, expires);
+    expect(restored.cachedSession?.accessToken, 'access-token');
+    expect(restored.lastSyncedAt, DateTime.utc(2026, 8, 28));
+    expect(restored.lastSyncedStateJson, '{"inventory":[]}');
+  });
+
+  test('device management hierarchy and session errors are role-aware', () {
+    expect(canManageWorkspaceDevices('owner'), isTrue);
+    expect(canManageWorkspaceDevices('admin'), isTrue);
+    expect(canManageWorkspaceDevices('manager'), isTrue);
+    expect(canManageWorkspaceDevices('editor'), isFalse);
+    expect(canManageWorkspaceDevices('builder'), isFalse);
+    expect(canRemoveWorkspaceDevices('owner'), isTrue);
+    expect(canRemoveWorkspaceDevices('admin'), isFalse);
+
+    const expired = SupabaseSyncException(
+      'Invalid Refresh Token: Already Used',
+    );
+    expect(visibleSyncErrorForRole(expired, 'editor'), isEmpty);
+    expect(visibleSyncErrorForRole(expired, 'builder'), isEmpty);
+    expect(
+      visibleSyncErrorForRole(expired, 'admin'),
+      contains('session expired'),
+    );
+    expect(visibleSyncErrorForRole(expired, 'admin'), isNot(contains('Token')));
+  });
+
   test(
     'server and publishable key are verified before authentication',
     () async {
@@ -71,6 +115,7 @@ void main() {
       );
       expect(session.userId, 'user-id');
       expect(session.refreshToken, 'refresh');
+      expect(session.expiresAt, isNotNull);
     },
   );
 
@@ -101,6 +146,33 @@ void main() {
       ),
     );
     expect(jsonDecode(cloud!.stateJson), {'inventory': []});
+  });
+
+  test('revision check downloads only the workshop timestamp', () async {
+    final service = SupabaseSyncService(
+      config.copyWith(workspaceId: 'workspace-id'),
+      client: MockClient((request) async {
+        expect(request.url.path, '/rest/v1/workshop_states');
+        expect(request.url.queryParameters['select'], 'updated_at');
+        expect(request.url.queryParameters['workspace_id'], 'eq.workspace-id');
+        expect(request.headers['authorization'], 'Bearer access');
+        return http.Response(
+          jsonEncode([
+            {'updated_at': '2026-08-31T12:34:56Z'},
+          ]),
+          200,
+        );
+      }),
+    );
+
+    final updatedAt = await service.latestUpdatedAt(
+      const SupabaseSession(
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        userId: 'user-id',
+      ),
+    );
+    expect(updatedAt, DateTime.utc(2026, 8, 31, 12, 34, 56));
   });
 
   test('uploads use the role-enforcing audited RPC', () async {
@@ -157,6 +229,84 @@ void main() {
       expect(session.userId, 'anonymous-user');
     },
   );
+
+  test('owner recovery creates and transfers with a rotated key', () async {
+    var calls = 0;
+    final service = SupabaseSyncService(
+      config,
+      client: MockClient((request) async {
+        expect(request.headers['authorization'], 'Bearer access');
+        calls++;
+        if (request.url.path.endsWith(
+          '/create_inventorinator_workspace_with_recovery',
+        )) {
+          expect(jsonDecode(request.body), isEmpty);
+          return http.Response(
+            jsonEncode({
+              'workspace_id': 'workspace-id',
+              'recovery_key': 'FIRST-KEY',
+            }),
+            200,
+          );
+        }
+        expect(request.url.path, endsWith('/recover_inventorinator_workspace'));
+        expect(jsonDecode(request.body), {
+          'target_workspace': 'workspace-id',
+          'recovery_key': 'FIRST-KEY',
+          'target_device_name': 'Replacement laptop',
+        });
+        return http.Response(
+          jsonEncode({
+            'workspace_id': 'workspace-id',
+            'recovery_key': 'ROTATED-KEY',
+          }),
+          200,
+        );
+      }),
+    );
+    const session = SupabaseSession(
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      userId: 'user-id',
+    );
+
+    final created = await service.createWorkspaceWithRecovery(session);
+    expect(created.workspaceId, 'workspace-id');
+    expect(created.key, 'FIRST-KEY');
+    final recovered = await service.recoverWorkspace(
+      session,
+      workspaceId: created.workspaceId,
+      recoveryKey: created.key,
+      deviceName: 'Replacement laptop',
+    );
+    expect(recovered.key, 'ROTATED-KEY');
+    expect(calls, 2);
+  });
+
+  test('owner can provision a missing recovery credential once', () async {
+    final service = SupabaseSyncService(
+      config.copyWith(workspaceId: 'workspace-id'),
+      client: MockClient((request) async {
+        expect(
+          request.url.path,
+          endsWith('/ensure_inventorinator_recovery_key'),
+        );
+        expect(jsonDecode(request.body), {'target_workspace': 'workspace-id'});
+        return http.Response(jsonEncode('PROVISIONED-KEY'), 200);
+      }),
+    );
+
+    expect(
+      await service.ensureRecoveryKey(
+        const SupabaseSession(
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          userId: 'owner-id',
+        ),
+      ),
+      'PROVISIONED-KEY',
+    );
+  });
 
   test('schema version detects an installed connector', () async {
     final service = SupabaseSyncService(
@@ -235,6 +385,13 @@ void main() {
             200,
           );
         }
+        if (request.url.path.endsWith('/set_inventorinator_device_role')) {
+          expect(jsonDecode(request.body), {
+            'target_workspace': 'workspace-id',
+            'target_user': 'device-id',
+            'target_role': 'editor',
+          });
+        }
         return http.Response('', 204);
       }),
     );
@@ -247,6 +404,20 @@ void main() {
     expect(await service.currentRole(session), 'owner');
     final devices = await service.listDevices(session);
     expect(devices.single.name, 'Workshop tablet');
+    await service.setDeviceRole(session, 'device-id', 'editor');
     await service.removeDevice(session, 'device-id', lockOut: true);
+  });
+
+  test('invalid rotated refresh tokens are treated as fatal sessions', () {
+    expect(
+      const SupabaseSyncException('Invalid Refresh Token: Already Used')
+          .isInvalidRefreshToken,
+      isTrue,
+    );
+    expect(
+      const SupabaseSyncException('Network connection failed')
+          .isInvalidRefreshToken,
+      isFalse,
+    );
   });
 }

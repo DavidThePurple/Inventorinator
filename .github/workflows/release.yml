@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, matching pubspec.yaml (for example v1.0.0)"
+        description: "Release tag, matching pubspec.yaml (for example v1.1.0)"
         required: true
         type: string
 
@@ -36,13 +36,16 @@ jobs:
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
           test "$RELEASE_TAG" = "v$app_version"
+          ./tool/check_release_consistency.sh
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
 
   linux:
+    if: ${{ false }}
     needs: validate
-    runs-on: ubuntu-24.04
+    # Keep the portable Linux bundle compatible with Ubuntu 22.04-era glibc.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -65,8 +68,10 @@ jobs:
           install -m 644 \
             linux/packaging/media.everlasting.inventorinator.desktop \
             "$package_dir/Inventorinator.desktop"
+          install -m 644 README.md LICENSE CHANGELOG.md "$package_dir/"
           test -s "$package_dir/data/app_icon.png"
           test -s "$package_dir/Inventorinator.desktop"
+          test -s "$package_dir/LICENSE"
           test -s "$package_dir/share/icons/hicolor/512x512/apps/media.everlasting.inventorinator.png"
           test -s "$package_dir/share/applications/media.everlasting.inventorinator.desktop"
           tar -C dist -czf "dist/Inventorinator-${RELEASE_TAG}-Linux-x64.tar.gz" Inventorinator
@@ -78,6 +83,7 @@ jobs:
           if-no-files-found: error
 
   android:
+    if: ${{ false }}
     needs: validate
     runs-on: ubuntu-24.04
     env:
@@ -139,8 +145,14 @@ jobs:
       - name: Package Windows
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "dist\Inventorinator-$env:RELEASE_TAG-Windows-x64.zip"
+          $packageDir = "dist\Inventorinator"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item -Recurse "build\windows\x64\runner\Release\*" $packageDir
+          Copy-Item README.md, LICENSE, CHANGELOG.md $packageDir
+          if (-not (Test-Path "$packageDir\Inventorinator.exe")) { throw "Missing Windows executable" }
+          if (-not (Test-Path "$packageDir\LICENSE")) { throw "Missing license" }
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\Inventorinator-$env:RELEASE_TAG-Windows-x64.zip"
+          Remove-Item -Recurse -Force $packageDir
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows
@@ -148,6 +160,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: ${{ false }}
     needs: [linux, android, windows]
     runs-on: ubuntu-24.04
     permissions:

@@ -8,6 +8,58 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private fun readableDeviceName(): String {
+        val configuredName = try {
+            Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
+        } catch (_: SecurityException) {
+            null
+        }
+        val bluetoothName = try {
+            Settings.Secure.getString(contentResolver, "bluetooth_name")
+        } catch (_: SecurityException) {
+            null
+        }
+        val avdName = try {
+            Runtime.getRuntime()
+                .exec(arrayOf("/system/bin/getprop", "ro.boot.qemu.avd_name"))
+                .inputStream
+                .bufferedReader()
+                .use { it.readLine() }
+                ?.trim()
+        } catch (_: Exception) {
+            null
+        }
+
+        fun cleaned(value: String?): String? = value
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.replace('_', ' ')
+
+        fun isInternalName(value: String): Boolean {
+            val normalized = value.lowercase().replace('_', ' ')
+            return normalized == "android" ||
+                normalized == "emulator" ||
+                normalized.startsWith("sdk gphone") ||
+                normalized.startsWith("generic ") ||
+                normalized.startsWith("android sdk built for")
+        }
+
+        listOf(configuredName, bluetoothName, avdName)
+            .mapNotNull(::cleaned)
+            .firstOrNull { !isInternalName(it) }
+            ?.let { return it }
+
+        val model = cleaned(Build.MODEL) ?: "Android device"
+        if (!isInternalName(model)) {
+            val manufacturer = cleaned(Build.MANUFACTURER)
+            return if (
+                manufacturer == null ||
+                model.lowercase().startsWith(manufacturer.lowercase())
+            ) model else "$manufacturer $model"
+        }
+        return "Android emulator"
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
@@ -37,8 +89,7 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
-            val configuredName = Settings.Global.getString(contentResolver, "device_name")
-            result.success(configuredName?.trim()?.takeIf { it.isNotEmpty() } ?: Build.MODEL)
+            result.success(readableDeviceName())
         }
     }
 }

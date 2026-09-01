@@ -15,7 +15,12 @@ extract full administrator access. Therefore:
 - an outdated server is rejected with its installed and required versions;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current required schema: **v7**.
+Current required schema: **v11**.
+
+Schema v8-v10 add owner recovery and durability. Save the recovery package
+when creating a shared inventory. It can transfer ownership to a replacement
+device, lock out the previous owner device, and preserve the workspace if an
+anonymous auth identity is lost.
 
 ## One-command installer and updater
 

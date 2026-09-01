@@ -1,4 +1,6 @@
-insert into auth.users values ('00000000-0000-0000-0000-000000000001');
+begin;
+
+insert into auth.users(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.inventorinator_workspaces(id, created_by)
 values (
   '10000000-0000-0000-0000-000000000001',
@@ -99,3 +101,5 @@ begin
   end if;
 end;
 $$;
+
+rollback;

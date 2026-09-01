@@ -32,24 +32,33 @@ jobs:
       PGPASSWORD: audit
     steps:
       - uses: actions/checkout@v4
+      - name: Verify release and schema versions
+        run: ./tool/check_release_consistency.sh
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
       - name: Apply every migration
+        env:
+          INVENTORINATOR_DB_URL: postgresql://postgres:audit@127.0.0.1:5432/postgres
         run: |
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
-          for migration in supabase/migrations/*.sql; do
-            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f "$migration"
-          done
-          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "7"
+          ./supabase/install-or-update.sh --hosted
+          ./supabase/install-or-update.sh --hosted
+          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "11"
       - name: Verify builder quantity enforcement
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
+      - name: Verify role and owner boundaries
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/role_boundaries.sql
+      - name: Verify owner recovery
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
       - name: Build connector image
         run: docker build -f supabase/connector/Dockerfile supabase
 
   linux:
-    runs-on: ubuntu-24.04
+    # Build on the oldest supported Ubuntu baseline so native plugins do not
+    # unnecessarily require glibc 2.38 from Ubuntu 24.04.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -63,12 +72,14 @@ jobs:
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev tesseract-ocr
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter test
+      - run: flutter test --coverage
+      - name: Enforce the coverage floor
+        run: ./tool/check_coverage.sh 60
       - run: flutter build linux --release
       - name: Verify bundled native libraries
         run: |
-          if ldd build/linux/x64/release/bundle/inventorinator | grep -q "not found"; then
-            ldd build/linux/x64/release/bundle/inventorinator
+          if ldd build/linux/x64/release/bundle/Inventorinator | grep -q "not found"; then
+            ldd build/linux/x64/release/bundle/Inventorinator
             exit 1
           fi
           if ldd assets/ocr/linux_x64/tesseract | grep -q "not found"; then

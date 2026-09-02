@@ -93,6 +93,12 @@ jobs:
           INVENTORINATOR_NATIVE_DECODER_TEST: "1"
           LD_LIBRARY_PATH: build/linux/x64/release/bundle/lib
         run: flutter test test/widget_test.dart --plain-name "ingest decoder reads a tilted alphanumeric Code 128 FNSKU"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-linux
+          path: build/linux/x64/release/bundle
+          if-no-files-found: error
+          retention-days: 7
 
   android:
     runs-on: ubuntu-24.04
@@ -112,6 +118,12 @@ jobs:
       - name: Android app lint
         working-directory: android
         run: ./gradlew :app:lintDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-android
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
 
   windows:
     runs-on: windows-2025
@@ -127,3 +139,9 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-windows
+          path: build\windows\x64\runner\Release
+          if-no-files-found: error
+          retention-days: 7

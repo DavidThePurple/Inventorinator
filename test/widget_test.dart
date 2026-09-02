@@ -4847,6 +4847,11 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
@@ -4911,6 +4916,11 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
@@ -5819,6 +5829,10 @@ Bed Temperature: 80°C
     );
 
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.ensureVisible(
+      find.byKey(const Key('catalog-record-MACHINE-DETAILS')),
+    );
+    await tester.pump();
     await tester.tap(find.byKey(const Key('catalog-record-MACHINE-DETAILS')));
     await tester.pumpAndSettle();
 
@@ -6403,6 +6417,11 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('status-drying')), findsNothing);
@@ -6422,6 +6441,11 @@ Bed Temperature: 80°C
       ),
     );
     await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('item-deployed')), findsOneWidget);
@@ -6821,6 +6845,11 @@ Bed Temperature: 80°C
 
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byType(ItemDetailsPanel)).width, resizedWidth);
@@ -6866,6 +6895,11 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(
       find.text('ObXidian 0.4 mm'),
       buttons: kSecondaryMouseButton,
@@ -6962,6 +6996,12 @@ Bed Temperature: 80°C
     );
     await tester.pumpWidget(
       MaterialApp(home: InventoryHome(persistedState: state)),
+    );
+    await tester.pumpAndSettle();
+    await tester.dragUntilVisible(
+      find.byKey(const Key('inventory-card-INV-ZERO')),
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
     );
 
     expect(find.byKey(const Key('inventory-card-INV-ZERO')), findsOneWidget);
@@ -7110,6 +7150,11 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(find.text('Brass 0.6 mm'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archive'));
@@ -7121,6 +7166,11 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     expect(find.text('Brass 0.6 mm'), findsOneWidget);
     expect(find.text('1 archived'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pump();
     await tester.tap(find.text('Brass 0.6 mm'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     expect(find.text('Restore'), findsOneWidget);

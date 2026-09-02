@@ -1,9 +1,12 @@
 # Roadmap
 
-## v1.2.0 (planned)
+## v0.2.0 (planned)
 
 ### State-safe delayed writes
 
+- Treat eliminating local-state rollback after a save or Remote Sync response as
+  a v0.2 release requirement. A database acknowledgement must never reset newer
+  local edits to the older state that was originally submitted.
 - Replace independent delayed saves and reloads with per-record write queues so
   an older database response cannot overwrite a newer user action.
 - Preserve locally edited fields while an item creation or earlier update is
@@ -11,10 +14,20 @@
   must survive the initial database refresh.
 - Add revision-aware merging for local persistence and Remote Sync rather than
   treating debouncing alone as conflict resolution.
+- Never respond to a successful record write by reloading the whole inventory.
+  Acknowledge only the submitted record revision and retain any newer queued
+  field changes on that item.
+- Merge incoming changes field-by-field against the local outbox. Locally dirty
+  fields remain authoritative until their exact revision is acknowledged;
+  unrelated incoming fields and records may continue applying asynchronously.
 - Show a lightweight pending/saved state where feedback is useful without
   blocking continued edits.
 - Add race-condition tests for rapid quantity, status, location, lifecycle, and
   item-detail changes.
+- Add a required end-to-end test that creates an item, immediately changes its
+  status or another field while the initial image/database write is delayed,
+  receives both local and remote acknowledgements out of order, and proves the
+  newest visible value never rolls back on either device.
 
 ### Detailed personalization, notifications, and sound
 

@@ -3,7 +3,7 @@
   "schemaVersion": 1,
   "id": "example-printer-kit",
   "name": "Example Printer Kit",
-  "description": "Small example package for testing Inventorinator v1.1.0 kit import.",
+  "description": "Small example package for testing Inventorinator v0.1.0-alpha kit import.",
   "sources": [
     {
       "title": "Official assembly manual",

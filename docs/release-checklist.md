@@ -1,4 +1,4 @@
-# Inventorinator 1.1.0 practical release test checklist
+# Inventorinator 0.1.0-alpha practical release test checklist
 
 This is a hands-on test runbook. Check an item only after performing the steps
 on the packaged release candidate and observing the stated result.
@@ -497,7 +497,7 @@ Then verify the actual downloadable files:
 - [ ] **REL-01 — Version agreement**
   - Compare `pubspec.yaml`, in-app version, filenames, changelog, installer
     default tag, Git tag, and required connector schema.
-  - Pass: all identify `1.1.0+2` and schema 11 as intended.
+  - Pass: all identify `0.1.0-alpha+5` and schema 12 as intended.
 
 - [ ] **REL-02 — Artifact contents**
   - Inspect Linux and Windows archives.

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, matching pubspec.yaml (for example v1.1.0)"
+        description: "Release tag, matching pubspec.yaml (for example v0.1.0-alpha)"
         required: true
         type: string
 

@@ -2,7 +2,7 @@
 
 All notable changes to Inventorinator will be recorded here.
 
-## [1.1.0] - Unreleased
+## [0.1.0-alpha] - Unreleased
 
 ### Added
 
@@ -21,7 +21,7 @@ All notable changes to Inventorinator will be recorded here.
 - Shared-inventory ownership now survives auth-user deletion, preserves stolen
   device blocks and audit history, and revokes stale pairing codes on recovery.
 
-## [1.0.0] - 2026-08-28
+## [0.0.9-alpha] - 2026-08-28
 
 ### Added
 

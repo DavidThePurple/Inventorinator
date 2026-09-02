@@ -47,7 +47,7 @@ the built-in database export before upgrading.
 - Creates kits and editable bills of materials, then turns them into persistent
   shared build queues.
 - Imports validated `.inventorinator-kit.json` BOM packages on desktop
-  (v1.1.0+). Files can be written manually, exported or scripted by another
+  (v0.1.0-alpha+). Files can be written manually, exported or scripted by another
   tool, or optionally created with ChatGPT, Codex, Claude, or another research
   tool; Inventorinator has no built-in AI account, API key, or usage fee.
 - Scans QR codes and product barcodes with ordinary phone and webcam cameras.

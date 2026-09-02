@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-release_tag=${INVENTORINATOR_RELEASE_TAG:-v1.1.0}
+release_tag=${INVENTORINATOR_RELEASE_TAG:-v0.1.0-alpha}
 required_version=12
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 migrations_dir=$script_dir/migrations

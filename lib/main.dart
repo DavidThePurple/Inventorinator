@@ -468,11 +468,13 @@ class _JewelPanel extends StatelessWidget {
     required this.title,
     required this.palette,
     required this.child,
+    this.trailing,
   });
 
   final String title;
   final InventorinatorColors palette;
   final Widget child;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -485,13 +487,20 @@ class _JewelPanel extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
-            letterSpacing: .3,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  letterSpacing: .3,
+                ),
+              ),
+            ),
+            ?trailing,
+          ],
         ),
         const SizedBox(height: 10),
         child,
@@ -669,19 +678,31 @@ class _JewelAreaChartPainter extends CustomPainter {
       !identical(oldDelegate.values, values) || oldDelegate.color != color;
 }
 
-/// A compact glowing bar breakdown used alongside [_JewelAreaChart] for
-/// snapshot distributions (e.g. units per item type) rather than trends.
-class _JewelBarList extends StatelessWidget {
-  const _JewelBarList({required this.series, required this.color});
+/// Rotates [base]'s hue by [degrees], keeping its saturation and lightness,
+/// so a family of related series colors can be derived from one accent.
+Color _hueRotate(Color base, double degrees) {
+  final hsl = HSLColor.fromColor(base);
+  return hsl.withHue((hsl.hue + degrees) % 360).toColor();
+}
 
-  final List<({String label, double value})> series;
-  final Color color;
+/// Several [_JewelAreaChart]-style trends overlaid on shared axes, one line
+/// per item type, each colored by rotating the hue of a shared base color so
+/// the series read as one family rather than clashing.
+class _JewelMultiAreaChart extends StatelessWidget {
+  const _JewelMultiAreaChart({
+    required this.series,
+    required this.monthLabels,
+  });
+
+  final List<({String label, Color color, List<double> values})> series;
+  final List<String> monthLabels;
+  static const double _height = 130;
 
   @override
   Widget build(BuildContext context) {
-    if (series.isEmpty) {
+    if (series.isEmpty || monthLabels.length < 2) {
       return const SizedBox(
-        height: 130,
+        height: _height,
         child: Center(
           child: Text(
             'No items yet.',
@@ -690,77 +711,137 @@ class _JewelBarList extends StatelessWidget {
         ),
       );
     }
-    final maxValue = series.map((point) => point.value).reduce(math.max);
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final point in series)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        point.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                    Text(
-                      _formatBomQuantity(point.value),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: color,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => Stack(
-                      children: [
-                        Container(
-                          height: 6,
-                          width: constraints.maxWidth,
-                          color: color.withValues(alpha: .12),
-                        ),
-                        Container(
-                          height: 6,
-                          width: maxValue <= 0
-                              ? 0
-                              : constraints.maxWidth *
-                                    (point.value / maxValue),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                color.withValues(alpha: .55),
-                                color,
-                              ],
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: color.withValues(alpha: .55),
-                                blurRadius: 6,
-                              ),
-                            ],
-                          ),
+        SizedBox(
+          height: _height,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _JewelMultiAreaChartPainter(series: series),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (final label in monthLabels)
+              Text(
+                label,
+                style: const TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 12,
+          runSpacing: 6,
+          children: [
+            for (final line in series)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: line.color,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: line.color.withValues(alpha: .6),
+                          blurRadius: 4,
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${line.label} · ${_formatBomQuantity(line.values.last)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+          ],
+        ),
       ],
     );
   }
+}
+
+class _JewelMultiAreaChartPainter extends CustomPainter {
+  _JewelMultiAreaChartPainter({required this.series});
+
+  final List<({String label, Color color, List<double> values})> series;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final allValues = [
+      for (final line in series) ...line.values,
+    ];
+    final maxValue = allValues.reduce(math.max);
+    final minValue = math.min(0.0, allValues.reduce(math.min));
+    final range = (maxValue - minValue).abs() < 1e-6
+        ? 1.0
+        : maxValue - minValue;
+    final pointCount = series.first.values.length;
+    final stepX = size.width / (pointCount - 1);
+
+    Offset pointAt(List<double> values, int i) {
+      final normalized = (values[i] - minValue) / range;
+      return Offset(stepX * i, size.height - normalized * size.height);
+    }
+
+    Path lineFor(List<double> values) {
+      final path = Path()..moveTo(pointAt(values, 0).dx, pointAt(values, 0).dy);
+      for (var i = 0; i < values.length - 1; i++) {
+        final current = pointAt(values, i);
+        final next = pointAt(values, i + 1);
+        final controlX = (current.dx + next.dx) / 2;
+        path.cubicTo(controlX, current.dy, controlX, next.dy, next.dx, next.dy);
+      }
+      return path;
+    }
+
+    for (final line in series) {
+      final path = lineFor(line.values);
+      final fillPath = Path.from(path)
+        ..lineTo(pointAt(line.values, line.values.length - 1).dx, size.height)
+        ..lineTo(pointAt(line.values, 0).dx, size.height)
+        ..close();
+      canvas.drawPath(
+        fillPath,
+        Paint()..color = line.color.withValues(alpha: .1),
+      );
+    }
+
+    for (final line in series) {
+      final path = lineFor(line.values);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = line.color.withValues(alpha: .5)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = line.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..strokeCap = StrokeCap.round,
+      );
+      final endPoint = pointAt(line.values, line.values.length - 1);
+      canvas.drawCircle(endPoint, 3.5, Paint()..color = line.color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _JewelMultiAreaChartPainter oldDelegate) =>
+      !identical(oldDelegate.series, series);
 }
 
 extension InventoryTypeContext on InventoryType {
@@ -5381,6 +5462,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool typePanelExpanded = false;
   bool colorPanelExpanded = false;
   bool metricsPanelExpanded = false;
+  /// Type keys (see [_inventoryTypeDefinitionKey]) excluded from the
+  /// metrics panel's stats and charts. Empty means every type is tracked.
+  Set<String> metricsUntrackedTypeKeys = {};
+  bool metricsUnifiedGrowth = false;
   Timer? _syncDebounce;
   Timer? _deferredAutoSync;
   Timer? _syncPoll;
@@ -5607,6 +5692,19 @@ class _InventoryHomeState extends State<InventoryHome> {
     metricsPanelExpanded =
         widget.database?.loadBoolPreference(
           'metrics_panel_expanded',
+          fallback: false,
+        ) ??
+        false;
+    metricsUntrackedTypeKeys =
+        widget.database
+            ?.loadStringPreference('metrics_untracked_types', fallback: '')
+            .split(',')
+            .where((key) => key.isNotEmpty)
+            .toSet() ??
+        {};
+    metricsUnifiedGrowth =
+        widget.database?.loadBoolPreference(
+          'metrics_unified_growth',
           fallback: false,
         ) ??
         false;
@@ -6659,13 +6757,28 @@ class _InventoryHomeState extends State<InventoryHome> {
     return _visibleItemsCache = result;
   }
 
+  String _metricsTypeKey(InventoryItem item) => item.type == InventoryType.custom
+      ? 'custom:${item.customTypeId}'
+      : _inventoryTypeDefinitionKey(item.type);
+
+  bool _isMetricsTracked(InventoryItem item) =>
+      !metricsUntrackedTypeKeys.contains(_metricsTypeKey(item));
+
+  void _setMetricsUntrackedTypeKeys(Set<String> keys) {
+    setState(() => metricsUntrackedTypeKeys = keys);
+    widget.database?.saveStringPreference(
+      'metrics_untracked_types',
+      keys.join(','),
+    );
+  }
+
   _InventoryMetrics get _inventoryMetrics {
     var itemRecords = 0;
     var totalUnits = 0.0;
     var filamentSpools = 0.0;
     var lowStockRecords = 0;
     for (final item in inventory) {
-      if (item.archived) continue;
+      if (item.archived || !_isMetricsTracked(item)) continue;
       itemRecords++;
       totalUnits += item.quantity;
       if (item.type == InventoryType.filament) filamentSpools += item.quantity;
@@ -6697,45 +6810,77 @@ class _InventoryHomeState extends State<InventoryHome> {
     'Dec',
   ];
 
+  List<DateTime> get _metricsMonthStarts {
+    final now = DateTime.now();
+    return List.generate(6, (i) => DateTime(now.year, now.month - 5 + i, 1));
+  }
+
+  List<String> get _metricsMonthLabels => [
+    for (final monthStart in _metricsMonthStarts)
+      _monthAbbreviations[monthStart.month - 1],
+  ];
+
   /// Cumulative non-archived unit count by the end of each of the last six
   /// months, derived from each item's `added` timestamp. There is no
   /// historical snapshot table, so this reflects units currently on hand
   /// grouped by when they were added rather than true point-in-time stock.
-  List<({String label, double value})> get _inventoryGrowthSeries {
-    final now = DateTime.now();
-    final monthStarts = List.generate(
-      6,
-      (i) => DateTime(now.year, now.month - 5 + i, 1),
-    );
-    return [
-      for (final monthStart in monthStarts)
-        (
-          label: _monthAbbreviations[monthStart.month - 1],
-          value: inventory
-              .where(
-                (item) =>
-                    !item.archived &&
-                    item.added.isBefore(
-                      DateTime(monthStart.year, monthStart.month + 1, 1),
-                    ),
-              )
-              .fold(0.0, (sum, item) => sum + item.quantity),
-        ),
-    ];
-  }
+  List<({String label, double value})> get _inventoryGrowthSeries => [
+    for (final monthStart in _metricsMonthStarts)
+      (
+        label: _monthAbbreviations[monthStart.month - 1],
+        value: inventory
+            .where(
+              (item) =>
+                  !item.archived &&
+                  _isMetricsTracked(item) &&
+                  item.added.isBefore(
+                    DateTime(monthStart.year, monthStart.month + 1, 1),
+                  ),
+            )
+            .fold(0.0, (sum, item) => sum + item.quantity),
+      ),
+  ];
 
-  /// Total units on hand per item type, largest first.
-  List<({String label, double value})> get _inventoryTypeDistribution {
+  /// The same cumulative growth trend as [_inventoryGrowthSeries], split out
+  /// per item type (largest first, capped so the overlay stays legible),
+  /// each assigned a hue-rotated shade of [baseColor].
+  List<({String label, Color color, List<double> values})>
+  _inventoryTypeGrowthSeries(Color baseColor) {
     final totals = <String, double>{};
+    final labels = <String, String>{};
     for (final item in inventory) {
-      if (item.archived) continue;
-      final label = _itemTypeDisplayLabel(item);
-      totals[label] = (totals[label] ?? 0) + item.quantity;
+      if (item.archived || !_isMetricsTracked(item)) continue;
+      final key = _metricsTypeKey(item);
+      totals[key] = (totals[key] ?? 0) + item.quantity;
+      labels[key] = _itemTypeDisplayLabel(item);
     }
-    final entries = totals.entries.where((entry) => entry.value > 0).toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final topKeys = (totals.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value)))
+        .where((entry) => entry.value > 0)
+        .take(5)
+        .map((entry) => entry.key)
+        .toList();
+    final monthStarts = _metricsMonthStarts;
     return [
-      for (final entry in entries.take(6)) (label: entry.key, value: entry.value),
+      for (var i = 0; i < topKeys.length; i++)
+        (
+          label: labels[topKeys[i]]!,
+          color: _hueRotate(baseColor, i * 32.0),
+          values: [
+            for (final monthStart in monthStarts)
+              inventory
+                  .where(
+                    (item) =>
+                        !item.archived &&
+                        _isMetricsTracked(item) &&
+                        _metricsTypeKey(item) == topKeys[i] &&
+                        item.added.isBefore(
+                          DateTime(monthStart.year, monthStart.month + 1, 1),
+                        ),
+                  )
+                  .fold(0.0, (sum, item) => sum + item.quantity),
+          ],
+        ),
     ];
   }
 
@@ -15002,6 +15147,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
+            _metricsTypeTracker(palette),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -15014,6 +15161,94 @@ class _InventoryHomeState extends State<InventoryHome> {
           ],
         ),
       ),
+    );
+  }
+
+  List<({String key, String label, IconData icon})> get _metricsTrackableTypes => [
+    for (final value in InventoryType.values.where(
+      (value) => value != InventoryType.custom,
+    ))
+      if (!deletedTypeKeys.contains(_inventoryTypeDefinitionKey(value)))
+        (
+          key: _inventoryTypeDefinitionKey(value),
+          label: typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
+              _typeLabel(value),
+          icon: _iconFromKey(
+            typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+            _typeIcon(value),
+          ),
+        ),
+    for (final customType in customItemTypes)
+      if (!deletedTypeKeys.contains('custom:${customType.id}'))
+        (
+          key: 'custom:${customType.id}',
+          label: customType.name,
+          icon: _iconFromKey(customType.iconKey, Icons.tune_rounded),
+        ),
+  ];
+
+  Widget _metricsTypeTracker(InventorinatorColors palette) {
+    final types = _metricsTrackableTypes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Tracked types',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: _GlassFilterChip(
+                selected: metricsUntrackedTypeKeys.isEmpty,
+                child: FilterChip(
+                  key: const Key('metrics-track-all'),
+                  label: const Text('All types'),
+                  selected: metricsUntrackedTypeKeys.isEmpty,
+                  onSelected: (_) => _setMetricsUntrackedTypeKeys(const {}),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 8,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  selectedColor: Colors.transparent,
+                  side: BorderSide.none,
+                ),
+              ),
+            ),
+            for (final type in types)
+              _GlassFilterChip(
+                selected: !metricsUntrackedTypeKeys.contains(type.key),
+                child: FilterChip(
+                  key: Key('metrics-track-${type.key}'),
+                  avatar: Icon(type.icon, size: 18),
+                  label: Text(type.label),
+                  selected: !metricsUntrackedTypeKeys.contains(type.key),
+                  onSelected: (selected) {
+                    final updated = {...metricsUntrackedTypeKeys};
+                    if (selected) {
+                      updated.remove(type.key);
+                    } else {
+                      updated.add(type.key);
+                    }
+                    _setMetricsUntrackedTypeKeys(updated);
+                  },
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 8,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  selectedColor: Colors.transparent,
+                  side: BorderSide.none,
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -15046,42 +15281,36 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       );
 
-  Widget _metricsCharts(InventorinatorColors palette) {
-    final growth = _inventoryGrowthSeries;
-    final distribution = _inventoryTypeDistribution;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final stacked = constraints.maxWidth < 640;
-        final growthChart = _JewelPanel(
-          title: 'Inventory growth',
-          palette: palette,
-          child: _JewelAreaChart(series: growth, color: palette.accent),
-        );
-        final distributionChart = _JewelPanel(
-          title: 'Units by type',
-          palette: palette,
-          child: _JewelBarList(series: distribution, color: palette.accent),
-        );
-        if (stacked) {
-          return Column(
-            children: [
-              growthChart,
-              const SizedBox(height: 12),
-              distributionChart,
-            ],
+  Widget _metricsCharts(InventorinatorColors palette) => _JewelPanel(
+    title: 'Inventory growth',
+    palette: palette,
+    trailing: _GlassFilterChip(
+      selected: metricsUnifiedGrowth,
+      child: FilterChip(
+        key: const Key('metrics-unified-toggle'),
+        label: const Text('Unified'),
+        selected: metricsUnifiedGrowth,
+        onSelected: (selected) {
+          setState(() => metricsUnifiedGrowth = selected);
+          widget.database?.saveBoolPreference(
+            'metrics_unified_growth',
+            selected,
           );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(flex: 3, child: growthChart),
-            const SizedBox(width: 12),
-            Expanded(flex: 2, child: distributionChart),
-          ],
-        );
-      },
-    );
-  }
+        },
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        side: BorderSide.none,
+        visualDensity: VisualDensity.compact,
+      ),
+    ),
+    child: metricsUnifiedGrowth
+        ? _JewelAreaChart(series: _inventoryGrowthSeries, color: palette.accent)
+        : _JewelMultiAreaChart(
+            series: _inventoryTypeGrowthSeries(palette.accent),
+            monthLabels: _metricsMonthLabels,
+          ),
+  );
 
   Widget _typeFilterPanel({bool compact = false}) => Material(
     color: Theme.of(context).colorScheme.surfaceContainerLow,

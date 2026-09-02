@@ -199,7 +199,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*
+            gh release upload "$RELEASE_TAG" dist/* --clobber
             gh release edit "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Inventorinator $RELEASE_TAG" \

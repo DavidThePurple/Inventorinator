@@ -72,6 +72,9 @@ reports healthy. Starting it repeatedly is safe.
 
 ## Updating
 
+Follow the complete platform and database order in the
+[Wiki upgrade guide](https://github.com/DavidThePurple/Inventorinator/wiki/How-to-Upgrade).
+
 1. Back up the Supabase PostgreSQL database.
 2. Replace the server's `inventorinator/connector` and
    `inventorinator/migrations` folders with those from the new release.

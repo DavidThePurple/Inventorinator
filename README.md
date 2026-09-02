@@ -68,6 +68,8 @@ and can be connected from inside the app.
 
 Installation, self-hosting, development, and build documentation belong in the
 **[Inventorinator Wiki](https://github.com/DavidThePurple/Inventorinator/wiki)**.
+Before replacing an existing installation, follow the
+**[upgrade guide](https://github.com/DavidThePurple/Inventorinator/wiki/How-to-Upgrade)**.
 
 ## Help and project information
 

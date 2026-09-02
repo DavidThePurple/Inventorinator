@@ -96,10 +96,9 @@ $$;
 
 -- A v11 client may still be connected during rollout. Its snapshot RPC must
 -- feed only its changed records into the v12 stream until every device updates.
-select public.save_inventorinator_workshop_state(
-  '60000000-0000-0000-0000-000000000001',
-  '{"schemaVersion":8,"inventory":[{"id":"LEGACY-A","name":"Nut","quantity":4}]}'::jsonb
-);
+update public.workshop_states
+set state_json = '{"schemaVersion":8,"inventory":[{"id":"LEGACY-A","name":"Nut","quantity":4}]}'::jsonb
+where workspace_id = '60000000-0000-0000-0000-000000000001';
 
 do $$
 declare legacy_entity jsonb;
@@ -128,10 +127,9 @@ select public.apply_inventorinator_entity_changes(
   }]'::jsonb
 );
 
-select public.save_inventorinator_workshop_state(
-  '60000000-0000-0000-0000-000000000001',
-  '{"schemaVersion":8,"inventory":[{"id":"LEGACY-A","name":"Nut","quantity":5}]}'::jsonb
-);
+update public.workshop_states
+set state_json = '{"schemaVersion":8,"inventory":[{"id":"LEGACY-A","name":"Nut","quantity":5}]}'::jsonb
+where workspace_id = '60000000-0000-0000-0000-000000000001';
 
 do $$
 begin
@@ -252,6 +250,18 @@ do $$ begin
   raise exception 'builder quantity drift passed incremental integrity checks';
 exception when others then
   if sqlerrm = 'builder quantity drift passed incremental integrity checks' then raise; end if;
+end $$;
+
+do $$ begin
+  perform public.save_inventorinator_workshop_state(
+    '60000000-0000-0000-0000-000000000001',
+    '{"schemaVersion":8,"inventory":[]}'::jsonb
+  );
+  raise exception 'legacy snapshot RPC remained writable';
+exception when others then
+  if sqlerrm <> 'This Inventorinator client must be updated before syncing changes.' then
+    raise;
+  end if;
 end $$;
 
 rollback;

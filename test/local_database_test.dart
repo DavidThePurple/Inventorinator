@@ -80,6 +80,8 @@ void main() {
     final database = await LocalDatabase.open(overridePath: path);
     database.saveBoolPreference('sync_chime_enabled', false);
     database.saveStringPreference('device_name', 'Workshop desktop');
+    database.saveStringPreference('inventory_sort', 'addedDate');
+    database.saveBoolPreference('inventory_sort_ascending', false);
     database.close();
 
     final reopened = await LocalDatabase.open(overridePath: path);
@@ -90,6 +92,14 @@ void main() {
     expect(
       reopened.loadStringPreference('device_name', fallback: 'Unknown'),
       'Workshop desktop',
+    );
+    expect(
+      reopened.loadStringPreference('inventory_sort', fallback: 'type'),
+      'addedDate',
+    );
+    expect(
+      reopened.loadBoolPreference('inventory_sort_ascending', fallback: true),
+      isFalse,
     );
     reopened.close();
   });

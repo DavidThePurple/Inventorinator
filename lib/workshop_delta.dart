@@ -56,6 +56,29 @@ class WorkshopEntityChange {
       );
 }
 
+/// Keeps fields edited locally from being replaced by an incoming version of
+/// the same entity while those edits are still waiting in the sync outbox.
+List<WorkshopEntityChange> mergeRemoteChangesWithPending(
+  Iterable<WorkshopEntityChange> remoteChanges,
+  Iterable<WorkshopEntityChange> pendingChanges,
+) {
+  final pendingByKey = {
+    for (final change in pendingChanges)
+      '${change.entityType}\u0000${change.entityId}': change,
+  };
+  return remoteChanges.map((remote) {
+    final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
+    if (local == null) return remote;
+    if (local.deleted) return local;
+    return WorkshopEntityChange(
+      entityType: remote.entityType,
+      entityId: remote.entityId,
+      fields: {...remote.fields, ...local.fields},
+      revision: remote.revision,
+    );
+  }).toList();
+}
+
 Map<String, dynamic> _metadata(Map<String, dynamic> root) => {
   for (final entry in root.entries)
     if (!workshopEntityCollections.contains(entry.key)) entry.key: entry.value,

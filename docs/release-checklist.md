@@ -494,15 +494,26 @@ Run these from the exact commit used for the artifacts:
 
 Then verify the actual downloadable files:
 
+- [ ] **REL-00 — Version-specific upgrade path is ready before tagging**
+  - Add `docs/releases/vX.Y.Z.md` with user-facing changes, required schema,
+    backup order, expected success message, and links to the versioned Wiki
+    instructions.
+  - Preserve every earlier release's Wiki section and matching schema files;
+    never rewrite an old version to use `main` or silently redirect it to a
+    newer incompatible migration.
+  - Pass: the release notes, Wiki, updater, connector, and complete migration
+    bundle have been reviewed before the release tag or public artifacts exist.
+
 - [ ] **REL-01 — Version agreement**
   - Compare `pubspec.yaml`, in-app version, filenames, changelog, installer
     default tag, Git tag, and required connector schema.
-  - Pass: all identify `0.1.0-alpha+5` and schema 12 as intended.
+  - Pass: all identify the intended release/build and the same latest schema.
 
 - [ ] **REL-02 — Artifact contents**
-  - Inspect Linux and Windows archives.
+  - Inspect Linux, Windows, and version-specific Supabase archives.
   - Pass: executable, runtime files, icon/desktop metadata, README, LICENSE, and
-    CHANGELOG are present.
+    CHANGELOG are present; the Supabase archive contains the executable updater,
+    connector, and every migration through the required schema.
 
 - [ ] **REL-03 — Signing**
   - Verify Android signature and Windows signing status using the platform tools.
@@ -521,6 +532,13 @@ Then verify the actual downloadable files:
   - Upload as a GitHub pre-release, download each artifact as a user would,
     verify its SHA-256, install it, and repeat the platform smoke test.
   - Pass: downloaded files match checksums, install, launch, and retain data.
+
+- [ ] **REL-07 — Published guidance**
+  - Verify the public release notes name the version-specific changes and link
+    its exact migration bundle and Wiki section.
+  - Pass: a fresh user and an upgrading user can each reach the correct schema
+    without consulting `main`, replacing an older release's instructions, or
+    guessing which files apply.
 
 ## Result
 

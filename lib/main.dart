@@ -442,7 +442,23 @@ extension InventoryTypeContext on InventoryType {
   bool get supportsFilamentLifecycle => this == InventoryType.filament;
 }
 
-enum InventorySort { type, quantity, age, cost, dryingTime, moistureRemaining }
+enum InventorySort {
+  type,
+  quantity,
+  addedDate,
+  cost,
+  dryingTime,
+  moistureRemaining,
+}
+
+bool defaultInventorySortAscending(InventorySort value) => switch (value) {
+  InventorySort.type => true,
+  InventorySort.quantity => false,
+  InventorySort.addedDate => false,
+  InventorySort.cost => false,
+  InventorySort.dryingTime => false,
+  InventorySort.moistureRemaining => true,
+};
 
 enum CatalogViewFilter { kits, builds, machines, printers, tools }
 
@@ -473,6 +489,8 @@ enum ItemAction {
 }
 
 enum DebugCardEffect { remoteQuantity, lowStock, moistureThreshold }
+
+enum LocalSaveFeedback { idle, saving, saved }
 
 class VendorRecord {
   const VendorRecord({
@@ -1779,6 +1797,7 @@ class InventoryItem {
     required this.name,
     required this.type,
     required this.compatibility,
+    this.purposeTags = const [],
     required this.added,
     required this.cost,
     required this.color,
@@ -1835,6 +1854,7 @@ class InventoryItem {
   final String name;
   final InventoryType type;
   final List<String> compatibility;
+  final List<String> purposeTags;
   final DateTime added;
   final double cost;
   final Color color;
@@ -1892,6 +1912,7 @@ class InventoryItem {
     String? name,
     InventoryType? type,
     List<String>? compatibility,
+    List<String>? purposeTags,
     DateTime? added,
     double? cost,
     Color? color,
@@ -1953,6 +1974,7 @@ class InventoryItem {
     name: name ?? this.name,
     type: type ?? this.type,
     compatibility: compatibility ?? this.compatibility,
+    purposeTags: clearFilamentData ? const [] : purposeTags ?? this.purposeTags,
     added: added ?? this.added,
     cost: cost ?? this.cost,
     color: color ?? this.color,
@@ -3193,6 +3215,7 @@ Map<String, dynamic> _inventoryItemJson(
   'name': item.name,
   'type': item.type.name,
   'compatibility': item.compatibility,
+  'purposeTags': item.purposeTags,
   'added': item.added.toIso8601String(),
   'cost': item.cost,
   'color': item.color.toARGB32(),
@@ -3530,6 +3553,8 @@ WorkshopState? decodeWorkshopState(String? source) {
               item['name'] as String,
             ),
             compatibility: (item['compatibility'] as List).cast<String>(),
+            purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
+                .cast<String>(),
             added: DateTime.parse(item['added'] as String),
             cost: (item['cost'] as num).toDouble(),
             color: Color(item['color'] as int),
@@ -4062,12 +4087,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? [palette.flash, palette.flashDark]
         : _hovered && _hoverPhase == _GlassHoverPhase.purple || selected
         ? [palette.base, palette.container]
-        : light
-        ? [
-            Colors.white.withValues(alpha: .86),
-            palette.container.withValues(alpha: .3),
-          ]
-        : [const Color(0x29ffffff), palette.base.withValues(alpha: .12)];
+        : themedGlassRestingColors(palette, light: light);
     final rim = disabled
         ? light
               ? palette.outlineVariant.withValues(alpha: .58)
@@ -4076,7 +4096,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? palette.rim
         : light
         ? palette.outlineVariant
-        : const Color(0x38ebe6ff);
+        : palette.outline.withValues(alpha: .72);
     final inset = disabled
         ? light
               ? Colors.white.withValues(alpha: .28)
@@ -4087,7 +4107,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? palette.rim.withValues(alpha: .42)
         : light
         ? Colors.white.withValues(alpha: .92)
-        : const Color(0x29ffffff);
+        : palette.accent.withValues(alpha: .18);
     final radius = widget.joined
         ? BorderRadius.zero
         : BorderRadius.circular(10);
@@ -4141,6 +4161,19 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
     );
   }
 }
+
+List<Color> themedGlassRestingColors(
+  InventorinatorColors palette, {
+  required bool light,
+}) => light
+    ? [
+        Color.lerp(Colors.white, palette.base, .18)!,
+        Color.lerp(Colors.white, palette.container, .28)!,
+      ]
+    : [
+        palette.base.withValues(alpha: .34),
+        palette.container.withValues(alpha: .24),
+      ];
 
 class _GlassFilterChip extends StatefulWidget {
   const _GlassFilterChip({
@@ -4957,6 +4990,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
   late int historyLimit;
+  late bool alertSoundsEnabled;
+  late bool lowStockAlertsEnabled;
   late bool syncChimeEnabled;
   late bool dryingCompleteChimeEnabled;
   late bool moistureAlertChimeEnabled;
@@ -4987,9 +5022,13 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Set<String> selectedKitIds = {};
   final Set<String> selectedMachineIds = {};
   InventorySort sort = InventorySort.type;
+  bool sortAscending = true;
   static const _pageSizes = [12, 25, 100, 250, 1000];
   static const _minimumCardSizePercent = 75.0;
   static const _maximumCardSizePercent = 150.0;
+  // Thumbnail backfills can make a single changed-record patch tens of KiB.
+  // Keep remote transactions short enough for conservative PostgREST limits.
+  static const _syncUploadBatchSize = 1;
   final _pageSizeThumbShape = _GlassSliderThumbShape();
   final _cardSizeThumbShape = _GlassSliderThumbShape();
   final ValueNotifier<double> _pageSizeSliderValue = ValueNotifier(0);
@@ -5019,6 +5058,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   int _localStateRevision = 0;
   int _lastSyncedLocalRevision = 0;
   bool _syncRequestedWhileBusy = false;
+  final ValueNotifier<bool> _syncActivity = ValueNotifier(false);
+  final ValueNotifier<LocalSaveFeedback> _localSaveFeedback = ValueNotifier(
+    LocalSaveFeedback.idle,
+  );
+  Timer? _localSaveFeedbackTimer;
   bool _thumbnailBackfillRunning = false;
   Timer? _clockTick;
   bool _syncing = false;
@@ -5136,6 +5180,18 @@ class _InventoryHomeState extends State<InventoryHome> {
             : inventory.map(AdditionHistoryEntry.fromItem).toList());
     historyLimit = restored?.historyLimit ?? 100;
     final initializedKitSections = _initializeKitSections();
+    alertSoundsEnabled =
+        widget.database?.loadBoolPreference(
+          'alert_sounds_enabled',
+          fallback: true,
+        ) ??
+        true;
+    lowStockAlertsEnabled =
+        widget.database?.loadBoolPreference(
+          'low_stock_alerts_enabled',
+          fallback: true,
+        ) ??
+        true;
     syncChimeEnabled =
         widget.database?.loadBoolPreference(
           'sync_chime_enabled',
@@ -5154,6 +5210,22 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: true,
         ) ??
         true;
+    final savedSortName = widget.database?.loadStringPreference(
+      'inventory_sort',
+      fallback: InventorySort.type.name,
+    );
+    sort = savedSortName == 'age'
+        ? InventorySort.addedDate
+        : InventorySort.values
+                  .where((value) => value.name == savedSortName)
+                  .firstOrNull ??
+              InventorySort.type;
+    sortAscending =
+        widget.database?.loadBoolPreference(
+          'inventory_sort_ascending',
+          fallback: defaultInventorySortAscending(sort),
+        ) ??
+        defaultInventorySortAscending(sort);
     cardSizePercent =
         (double.tryParse(
                   widget.database?.loadStringPreference(
@@ -5303,7 +5375,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         content: const SizedBox(
           width: 500,
           child: Text(
-            'Begin with an empty inventory, or load a few demo items to explore Inventorinator. Demo items can be deleted later.',
+            'Start empty creates no inventory records. Demo mode adds seven sample items that you can edit or delete later. Neither option enables Remote Sync; you choose that separately after the guide.',
           ),
         ),
         actions: [
@@ -5338,11 +5410,158 @@ class _InventoryHomeState extends State<InventoryHome> {
     _persist();
     _capturePersistedEntityReferences();
     _incrementalPersistenceReady = true;
+    await _openGettingStarted();
+    if (!mounted) return;
     if (_needsSyncOnboarding) {
       await _openSyncOnboarding();
     } else {
       _startAutoSync();
     }
+  }
+
+  Future<void> _openGettingStarted() async {
+    const steps = <({IconData icon, String title, String body})>[
+      (
+        icon: Icons.inventory_2_outlined,
+        title: 'Local inventory first',
+        body: 'Inventorinator works without an account. Your inventory is saved on this device. Remote Sync is optional and can connect devices after this guide.',
+      ),
+      (
+        icon: Icons.add_circle_outline_rounded,
+        title: 'Add and find items',
+        body: 'Use Add item or Scan to capture stock. Search matches names, types, brands, materials, and compatibility. Filters and sorting help narrow larger inventories.',
+      ),
+      (
+        icon: Icons.warehouse_outlined,
+        title: 'Organize the Stockroom',
+        body: 'Create rooms, shelves, cabinets, and bins in Stockroom. Location QR codes open an area so you can review or move its inventory.',
+      ),
+      (
+        icon: Icons.health_and_safety_outlined,
+        title: 'Protect your inventory',
+        body: 'Export a portable backup from Local database. Remote Sync can keep selected devices together, but it does not replace a backup.',
+      ),
+    ];
+    final database = widget.database;
+    final completed =
+        database?.loadBoolPreference(
+          'getting_started_completed',
+          fallback: false,
+        ) ??
+        false;
+    var step = completed
+        ? 0
+        : (int.tryParse(
+                    database?.loadStringPreference(
+                          'getting_started_step',
+                          fallback: '0',
+                        ) ??
+                        '0',
+                  ) ??
+                  0)
+              .clamp(0, steps.length - 1);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) {
+          final current = steps[step];
+          return AlertDialog(
+            key: const Key('getting-started-dialog'),
+            title: Row(
+              children: [
+                const Icon(Icons.help_outline_rounded),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('Getting started')),
+                IconButton(
+                  key: const Key('close-getting-started'),
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.pop(dialogContext),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  LinearProgressIndicator(
+                    value: (step + 1) / steps.length,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  const SizedBox(height: 24),
+                  Icon(
+                    current.icon,
+                    key: Key('getting-started-step-$step'),
+                    size: 52,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    current.title,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(current.body, textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${step + 1} of ${steps.length}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              if (step > 0)
+                TextButton(
+                  key: const Key('getting-started-back'),
+                  onPressed: () {
+                    step--;
+                    database?.saveStringPreference(
+                      'getting_started_step',
+                      '$step',
+                    );
+                    refresh(() {});
+                  },
+                  child: const Text('Back'),
+                ),
+              TextButton(
+                key: const Key('getting-started-skip'),
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Skip for now'),
+              ),
+              FilledButton(
+                key: const Key('getting-started-next'),
+                onPressed: () {
+                  if (step < steps.length - 1) {
+                    step++;
+                    database?.saveStringPreference(
+                      'getting_started_step',
+                      '$step',
+                    );
+                    refresh(() {});
+                    return;
+                  }
+                  database?.saveBoolPreference(
+                    'getting_started_completed',
+                    true,
+                  );
+                  database?.saveStringPreference('getting_started_step', '0');
+                  Navigator.pop(dialogContext);
+                },
+                child: Text(step == steps.length - 1 ? 'Done' : 'Next'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _loadAndroidDeviceName() async {
@@ -5395,6 +5614,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     _pageSizeSliderValue.dispose();
     _cardSizeSliderValue.dispose();
+    _syncActivity.dispose();
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.dispose();
     for (final timer in _quantityCommitTimers.values) {
       timer.cancel();
     }
@@ -6052,6 +6274,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       customTypeFilterId,
       itemColorFilter,
       sort,
+      sortAscending,
     );
     if (_visibleItemsCacheKey == cacheKey) return _visibleItemsCache!;
     final needle = _normalized(query);
@@ -6071,6 +6294,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           ? cached.$2
           : _normalized(
               '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
+              '${item.purposeTags.join(' ')} '
               '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
               '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
               '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
@@ -6086,20 +6310,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       return searchable.contains(needle);
     }).toList();
     result.sort(
-      (a, b) => switch (sort) {
-        InventorySort.type => a.typeLabel.compareTo(b.typeLabel),
-        InventorySort.quantity => b.quantity.compareTo(a.quantity),
-        InventorySort.age => a.added.compareTo(b.added),
-        InventorySort.cost => b.cost.compareTo(a.cost),
-        InventorySort.dryingTime => (b.dryingMinutes ?? -1).compareTo(
-          a.dryingMinutes ?? -1,
-        ),
-        InventorySort.moistureRemaining => compareMoistureRemaining(
-          a,
-          b,
-          now: now,
-        ),
-      },
+      (a, b) => compareInventoryItems(
+        a,
+        b,
+        sort: sort,
+        ascending: sortAscending,
+        now: now,
+      ),
     );
     _visibleItemsCacheKey = cacheKey;
     return _visibleItemsCache = result;
@@ -7996,6 +8213,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     final quantity = math.max(0, current.quantity + delta).toDouble();
     if (quantity == current.quantity) return;
     _quantityCommitOriginals.putIfAbsent(item.id, () => current);
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.value = LocalSaveFeedback.saving;
     _publishInventoryItem(current.copyWith(quantity: quantity));
     _invalidateSearchCaches();
     _quantityCommitTimers.remove(item.id)?.cancel();
@@ -8010,12 +8229,23 @@ class _InventoryHomeState extends State<InventoryHome> {
     final original = _quantityCommitOriginals.remove(itemId);
     if (original == null || !mounted) return;
     final changed = _recordPendingQuantityAudit(itemId, original);
-    if (!changed) return;
+    if (!changed) {
+      if (_quantityCommitTimers.isEmpty) {
+        _localSaveFeedback.value = LocalSaveFeedback.idle;
+      }
+      return;
+    }
     final current = inventory
         .where((candidate) => candidate.id == itemId)
         .firstOrNull;
     if (current != null) _publishInventoryItem(current.copyWith());
     if (current != null) _persistInventoryItem(current);
+    if (_quantityCommitTimers.isEmpty) {
+      _localSaveFeedback.value = LocalSaveFeedback.saved;
+      _localSaveFeedbackTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) _localSaveFeedback.value = LocalSaveFeedback.idle;
+      });
+    }
     _checkMoistureThresholdAnimations();
   }
 
@@ -9569,16 +9799,17 @@ class _InventoryHomeState extends State<InventoryHome> {
         return left.compareTo(right);
       });
 
-  List<InventoryItem> get _quantityAlerts =>
-      inventory
-          .where(
-            (item) =>
-                !item.archived &&
-                item.quantityAlertThreshold != null &&
-                item.quantity <= item.quantityAlertThreshold!,
-          )
-          .toList()
-        ..sort((a, b) => a.quantity.compareTo(b.quantity));
+  List<InventoryItem> get _quantityAlerts => lowStockAlertsEnabled
+      ? (inventory
+            .where(
+              (item) =>
+                  !item.archived &&
+                  item.quantityAlertThreshold != null &&
+                  item.quantity <= item.quantityAlertThreshold!,
+            )
+            .toList()
+          ..sort((a, b) => a.quantity.compareTo(b.quantity)))
+      : const [];
 
   String _quantityAlertKey(InventoryItem item) =>
       'quantity:${item.id}:${item.quantityAlertThreshold}';
@@ -9663,10 +9894,49 @@ class _InventoryHomeState extends State<InventoryHome> {
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
       customThemeColor: widget.customThemeColor,
+      alertSoundsEnabled: alertSoundsEnabled,
+      lowStockAlertsEnabled: lowStockAlertsEnabled,
+      hideZeroQuantityItems: hideZeroQuantityItems,
+      syncChimeEnabled: syncChimeEnabled,
+      dryingCompleteChimeEnabled: dryingCompleteChimeEnabled,
+      moistureAlertChimeEnabled: moistureAlertChimeEnabled,
       onSettingsChanged: _updateAnimationSettings,
       onColorThemeChanged: widget.onColorThemeChanged ?? (_) {},
       onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
       onCustomThemeColorChanged: widget.onCustomThemeColorChanged ?? (_) {},
+      onAlertSoundsChanged: (value) {
+        setState(() => alertSoundsEnabled = value);
+        widget.database?.saveBoolPreference('alert_sounds_enabled', value);
+      },
+      onLowStockAlertsChanged: (value) {
+        setState(() => lowStockAlertsEnabled = value);
+        widget.database?.saveBoolPreference('low_stock_alerts_enabled', value);
+      },
+      onHideZeroQuantityItemsChanged: (value) {
+        setState(() {
+          hideZeroQuantityItems = value;
+          currentPage = 0;
+        });
+        widget.database?.saveBoolPreference('hide_zero_quantity_items', value);
+      },
+      onSyncChimeChanged: (value) {
+        setState(() => syncChimeEnabled = value);
+        widget.database?.saveBoolPreference('sync_chime_enabled', value);
+      },
+      onDryingCompleteChimeChanged: (value) {
+        setState(() => dryingCompleteChimeEnabled = value);
+        widget.database?.saveBoolPreference(
+          'drying_complete_chime_enabled',
+          value,
+        );
+      },
+      onMoistureAlertChimeChanged: (value) {
+        setState(() => moistureAlertChimeEnabled = value);
+        widget.database?.saveBoolPreference(
+          'moisture_alert_chime_enabled',
+          value,
+        );
+      },
       onPhotoCardsChanged: (value) {
         setState(() => photoCardsEnabled = value);
         widget.database?.saveBoolPreference('photo_cards_enabled', value);
@@ -9850,117 +10120,359 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Future<void> _openAdditionHistory() => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.new_releases_outlined),
-            SizedBox(width: 10),
-            Text('New items'),
-          ],
-        ),
-        content: SizedBox(
-          width: 520,
-          height: 520,
-          child: Column(
+  Future<void> _openAdditionHistory() async {
+    final selectedItem = await showDialog<InventoryItem>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Row(
             children: [
-              Row(
-                children: [
-                  Text('${additionHistory.length} additions preserved'),
-                  const Spacer(),
-                  const Text('Keep'),
-                  const SizedBox(width: 8),
-                  DropdownButton<int>(
-                    key: const Key('history-limit'),
-                    value: historyLimit,
-                    items: const [20, 50, 100, 500, 2000]
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text('$value'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() {
-                        historyLimit = value;
-                        _trimAdditionHistory();
-                      });
-                      setDialogState(() {});
-                      _persist();
-                    },
-                  ),
-                ],
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.devices_outlined),
-                title: const Text('This device'),
-                subtitle: Text(deviceName),
-                trailing: IconButton(
-                  key: const Key('rename-device'),
-                  tooltip: 'Rename this device',
-                  onPressed: () async {
-                    if (await _renameThisDevice()) setDialogState(() {});
-                  },
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-              ),
-              SwitchListTile(
-                key: const Key('sync-chime-toggle'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Chime for remotely added items'),
-                subtitle: const Text(
-                  'This setting applies only to this device.',
-                ),
-                value: syncChimeEnabled,
-                onChanged: (value) {
-                  setState(() => syncChimeEnabled = value);
-                  setDialogState(() {});
-                  widget.database?.saveBoolPreference(
-                    'sync_chime_enabled',
-                    value,
-                  );
-                },
-              ),
-              const Divider(),
-              Expanded(
-                child: additionHistory.isEmpty
-                    ? const Center(child: Text('No additions recorded yet.'))
-                    : ListView.separated(
-                        itemCount: additionHistory.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final entry = additionHistory[index];
-                          final local = entry.addedAt.toLocal();
-                          final when =
-                              '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
-                              '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
-                          return ListTile(
-                            leading: const Icon(Icons.add_circle_outline),
-                            title: Text(entry.name),
-                            subtitle: Text(
-                              '${_inventoryTypeDisplayLabel(entry.type)} · ${entry.deviceName} · $when',
-                            ),
-                          );
-                        },
-                      ),
-              ),
+              Icon(Icons.new_releases_outlined),
+              SizedBox(width: 10),
+              Text('New items'),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
+          content: SizedBox(
+            width: 520,
+            height: 520,
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final count = Text(
+                      '${additionHistory.length} additions preserved',
+                    );
+                    final retention = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Keep'),
+                        const SizedBox(width: 8),
+                        DropdownButton<int>(
+                          key: const Key('history-limit'),
+                          value: historyLimit,
+                          items: const [20, 50, 100, 500, 2000]
+                              .map(
+                                (value) => DropdownMenuItem(
+                                  value: value,
+                                  child: Text('$value'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              historyLimit = value;
+                              _trimAdditionHistory();
+                            });
+                            setDialogState(() {});
+                            _persist();
+                          },
+                        ),
+                      ],
+                    );
+                    if (constraints.maxWidth < 400) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [count, retention],
+                      );
+                    }
+                    return Row(children: [count, const Spacer(), retention]);
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.devices_outlined),
+                  title: const Text('This device'),
+                  subtitle: Text(deviceName),
+                  trailing: IconButton(
+                    key: const Key('rename-device'),
+                    tooltip: 'Rename this device',
+                    onPressed: () async {
+                      if (await _renameThisDevice()) setDialogState(() {});
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ),
+                SwitchListTile(
+                  key: const Key('sync-chime-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Chime for remotely added items'),
+                  subtitle: const Text(
+                    'This setting applies only to this device.',
+                  ),
+                  value: syncChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => syncChimeEnabled = value);
+                    setDialogState(() {});
+                    widget.database?.saveBoolPreference(
+                      'sync_chime_enabled',
+                      value,
+                    );
+                  },
+                ),
+                const Divider(),
+                Expanded(
+                  child: additionHistory.isEmpty
+                      ? const Center(child: Text('No additions recorded yet.'))
+                      : ListView.separated(
+                          itemCount: additionHistory.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final entry = additionHistory[index];
+                            final item = inventory
+                                .where(
+                                  (candidate) => candidate.id == entry.itemId,
+                                )
+                                .firstOrNull;
+                            final colorLabel = switch (item) {
+                              null => 'Color unavailable',
+                              final value
+                                  when value.itemColorLabel.trim().isNotEmpty =>
+                                value.itemColorLabel.trim(),
+                              final value
+                                  when value.itemColorName.trim().isNotEmpty =>
+                                value.itemColorName.trim(),
+                              _ => 'No color',
+                            };
+                            final locationLabel = switch (item) {
+                              null => 'Location unavailable',
+                              final value
+                                  when value.storageLocationId.isNotEmpty &&
+                                      _locationPath(value.storageLocationId)
+                                          .isNotEmpty =>
+                                _locationPath(value.storageLocationId),
+                              final value
+                                  when value.storageLocation
+                                      .trim()
+                                      .isNotEmpty =>
+                                value.storageLocation.trim(),
+                              _ => 'No location',
+                            };
+                            final quietColor = Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant;
+                            final local = entry.addedAt.toLocal();
+                            final when =
+                                '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+                                '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+                            return InkWell(
+                              key: Key('addition-entry-${entry.itemId}'),
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: item == null
+                                  ? null
+                                  : () => Navigator.pop(dialogContext, item),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                  horizontal: 8,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 2),
+                                      child: Icon(Icons.add_circle_outline),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Wrap(
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: [
+                                              Text(
+                                                entry.name,
+                                                key: Key(
+                                                  'addition-name-${entry.itemId}',
+                                                ),
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodyLarge,
+                                              ),
+                                              if (item == null)
+                                                _additionHistoryDeletedTag(
+                                                  entry.itemId,
+                                                ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 5),
+                                          Wrap(
+                                            spacing: 14,
+                                            runSpacing: 4,
+                                            children: [
+                                              _additionHistoryColorDetail(
+                                                key: Key(
+                                                  'addition-color-${entry.itemId}',
+                                                ),
+                                                item: item,
+                                                label: colorLabel,
+                                              ),
+                                              _additionHistoryDetail(
+                                                key: Key(
+                                                  'addition-location-${entry.itemId}',
+                                                ),
+                                                icon:
+                                                    Icons.location_on_outlined,
+                                                label: locationLabel,
+                                                muted:
+                                                    item == null ||
+                                                    (item
+                                                            .storageLocationId
+                                                            .isEmpty &&
+                                                        item.storageLocation
+                                                            .trim()
+                                                            .isEmpty),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${_inventoryTypeDisplayLabel(entry.type)} · ${entry.deviceName} · $when',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(color: quietColor),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+    if (selectedItem != null && mounted) {
+      await _openDetails(selectedItem);
+    }
+  }
+
+  Widget _additionHistoryDetail({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required bool muted,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Row(
+      key: key,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: 15,
+          color: muted ? colors.onSurfaceVariant : colors.primary,
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: muted ? colors.onSurfaceVariant : colors.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _additionHistoryDeletedTag(String itemId) {
+    const warning = Color(0xffffa552);
+    return Tooltip(
+      message: 'This item was deleted, so its details are unavailable.',
+      child: Container(
+        key: Key('addition-deleted-$itemId'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: warning.withValues(alpha: .13),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: warning.withValues(alpha: .65)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.delete_outline_rounded, size: 14, color: warning),
+            SizedBox(width: 4),
+            Text(
+              'Deleted',
+              style: TextStyle(
+                color: warning,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _additionHistoryColorDetail({
+    required Key key,
+    required InventoryItem? item,
+    required String label,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    final colorValue = item?.itemColorName.trim() ?? '';
+    final swatch = _itemColorSwatch(colorValue);
+    if (colorValue.isEmpty || swatch == null) {
+      return _additionHistoryDetail(
+        key: key,
+        icon: Icons.palette_outlined,
+        label: colorValue.isEmpty ? label : '$label · No hex',
+        muted: true,
+      );
+    }
+    final hex = _colorHex(swatch);
+    final itemId = item!.id;
+    return Row(
+      key: key,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          key: Key('addition-color-swatch-$itemId'),
+          width: 17,
+          height: 17,
+          decoration: BoxDecoration(
+            color: swatch,
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '$label · ',
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: colors.onSurface),
+        ),
+        Text(
+          hex,
+          key: Key('addition-color-hex-$itemId'),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: colors.onSurfaceVariant,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
 
   Future<bool> _renameThisDevice() async {
     final name = await showDeviceNameDialog(
@@ -10777,7 +11289,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _playSyncChime() async {
-    if (!syncChimeEnabled) return;
+    if (!alertSoundsEnabled || !syncChimeEnabled) return;
     try {
       if (Platform.isAndroid || Platform.isWindows) {
         await _audioChannel.invokeMethod<void>('playSyncChime');
@@ -10799,7 +11311,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _playDryingCompleteChime() async {
-    if (!dryingCompleteChimeEnabled) return;
+    if (!alertSoundsEnabled || !dryingCompleteChimeEnabled) return;
     try {
       if (Platform.isAndroid || Platform.isWindows) {
         await _audioChannel.invokeMethod<void>('playDryingCompleteChime');
@@ -10821,7 +11333,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _playMoistureAlertChime() async {
-    if (!moistureAlertChimeEnabled) return;
+    if (!alertSoundsEnabled || !moistureAlertChimeEnabled) return;
     try {
       if (Platform.isAndroid || Platform.isWindows) {
         await _audioChannel.invokeMethod<void>('playMoistureAlertChime');
@@ -10950,7 +11462,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     var retryAfterRecovery = false;
     var syncSucceeded = false;
+    // This revision belongs to the state at the start of this sync pass. Any
+    // local edit after this point needs another pass, even if it lands while
+    // we are waiting to apply or confirm remote changes.
+    final syncingRevision = _localStateRevision;
     _syncing = true;
+    _syncActivity.value = true;
     _syncRequestedWhileBusy = false;
     try {
       final refreshed = await database.withSyncSessionLock(() async {
@@ -11032,44 +11549,49 @@ class _InventoryHomeState extends State<InventoryHome> {
         _syncRequestedWhileBusy = true;
         return;
       }
-      var pending = database.loadPendingWorkshopChanges();
-      var pendingByKey = {
-        for (final entry in pending)
-          '${entry.change.entityType}\u0000${entry.change.entityId}':
-              entry.change,
-      };
       if (incoming.changes.isNotEmpty && mounted) {
         await _waitForInventoryScrollIdle();
         if (!mounted) return;
-        final mergedIncoming = incoming.changes.map((change) {
-          final local =
-              pendingByKey['${change.entityType}\u0000${change.entityId}'];
-          if (local == null) return change;
-          if (local.deleted) return local;
-          return WorkshopEntityChange(
-            entityType: change.entityType,
-            entityId: change.entityId,
-            fields: {...change.fields, ...local.fields},
-            revision: change.revision,
-          );
-        }).toList();
+        // Re-read after the await. A user can edit this item while the remote
+        // request or scroll-settle wait is in flight.
+        final latestPending = database.loadPendingWorkshopChanges();
+        final mergedIncoming = mergeRemoteChangesWithPending(
+          incoming.changes,
+          latestPending.map((entry) => entry.change),
+        );
         database.applyRemoteWorkshopChanges(mergedIncoming);
         _applyRemoteEntityChanges(mergedIncoming);
       }
       cursor = incoming.revision;
       database.saveSyncCursor(config.workspaceId!, cursor);
 
-      final syncingRevision = _localStateRevision;
       final auditBatch = _pendingAuditBatch();
+      // Include edits made while the incoming batch was being applied. The
+      // versioned acknowledgement leaves any still-newer edit in the outbox.
+      var pending = database.loadPendingWorkshopChanges();
       if (pending.isNotEmpty) {
-        await service.uploadChanges(
-          session,
-          pending.map((entry) => entry.change),
-          deviceId: deviceId,
-          auditEvents: auditBatch,
-        );
-        database.acknowledgePendingWorkshopChanges(pending);
-        _acknowledgeAuditBatch(auditBatch);
+        var auditAcknowledged = false;
+        for (
+          var offset = 0;
+          offset < pending.length;
+          offset += _syncUploadBatchSize
+        ) {
+          final end = math.min(offset + _syncUploadBatchSize, pending.length);
+          final batch = pending.sublist(offset, end);
+          await service.uploadChanges(
+            session,
+            batch.map((entry) => entry.change),
+            deviceId: deviceId,
+            auditEvents: auditAcknowledged ? const [] : auditBatch,
+          );
+          // Acknowledge each completed batch immediately. Version matching
+          // preserves any newer edit made to the same record during upload.
+          database.acknowledgePendingWorkshopChanges(batch);
+          if (!auditAcknowledged) {
+            _acknowledgeAuditBatch(auditBatch);
+            auditAcknowledged = true;
+          }
+        }
       }
 
       // Pull again from the previous cursor. This includes our confirmed rows
@@ -11087,23 +11609,10 @@ class _InventoryHomeState extends State<InventoryHome> {
           return;
         }
         pending = database.loadPendingWorkshopChanges();
-        pendingByKey = {
-          for (final entry in pending)
-            '${entry.change.entityType}\u0000${entry.change.entityId}':
-                entry.change,
-        };
-        final mergedConfirmed = confirmed.changes.map((change) {
-          final local =
-              pendingByKey['${change.entityType}\u0000${change.entityId}'];
-          if (local == null) return change;
-          if (local.deleted) return local;
-          return WorkshopEntityChange(
-            entityType: change.entityType,
-            entityId: change.entityId,
-            fields: {...change.fields, ...local.fields},
-            revision: change.revision,
-          );
-        }).toList();
+        final mergedConfirmed = mergeRemoteChangesWithPending(
+          confirmed.changes,
+          pending.map((entry) => entry.change),
+        );
         database.applyRemoteWorkshopChanges(mergedConfirmed);
         _applyRemoteEntityChanges(mergedConfirmed);
       }
@@ -11147,13 +11656,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       _syncing = false;
       final newerStateNeedsSync =
           syncSucceeded && _localStateRevision != _lastSyncedLocalRevision;
-      final runAgain = _syncRequestedWhileBusy || newerStateNeedsSync;
+      // A poll that arrived while a failed request was in flight must wait for
+      // the normal retry interval. Immediate retries can otherwise keep a
+      // degraded server continuously busy.
+      final runAgain =
+          syncSucceeded && (_syncRequestedWhileBusy || newerStateNeedsSync);
       _syncRequestedWhileBusy = false;
+      var continuing = false;
       if (runAgain &&
           mounted &&
           !_autoSyncPausedForAuthentication &&
           !retryAfterRecovery) {
+        continuing = true;
         _scheduleAutomaticSync(delay: Duration.zero);
+      }
+      if (mounted && !continuing && !retryAfterRecovery) {
+        _syncActivity.value = false;
       }
     }
     if (retryAfterRecovery && mounted) {
@@ -11611,6 +12129,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 920;
       final narrow = constraints.maxWidth < 600;
+      final phoneNarrow = constraints.maxWidth < 400;
       return Padding(
         padding: EdgeInsets.fromLTRB(
           compact ? 12 : 20,
@@ -11660,6 +12179,18 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
                 const SizedBox(height: 10),
                 _mobileSizeControls(),
+              ] else if (compact) ...[
+                Row(
+                  children: [
+                    _resultCount(),
+                    const Spacer(),
+                    _sortControl(),
+                    const SizedBox(width: 8),
+                    _viewOptions(),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _sizeControls(expandSliders: true),
               ] else
                 Row(
                   children: [
@@ -11672,6 +12203,20 @@ class _InventoryHomeState extends State<InventoryHome> {
                     _viewOptions(),
                   ],
                 ),
+            ] else if (phoneNarrow) ...[
+              _typeFilterPanel(compact: true),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _resultCount(),
+                  const Spacer(),
+                  if (catalogFilter == null) ...[_sortControl(compact: true)],
+                ],
+              ),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerRight, child: _viewOptions()),
+              const SizedBox(height: 10),
+              _mobileSizeControls(),
             ] else if (compact) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -11853,7 +12398,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     String label(InventorySort value) => switch (value) {
       InventorySort.type => 'Type',
       InventorySort.quantity => 'Quantity',
-      InventorySort.age => 'Age',
+      InventorySort.addedDate => 'Added date',
       InventorySort.cost => 'Cost',
       InventorySort.dryingTime => 'Drying time',
       InventorySort.moistureRemaining => 'Moisture remaining',
@@ -11861,7 +12406,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     IconData icon(InventorySort value) => switch (value) {
       InventorySort.type => Icons.category_outlined,
       InventorySort.quantity => Icons.numbers_rounded,
-      InventorySort.age => Icons.schedule_rounded,
+      InventorySort.addedDate => Icons.calendar_today_outlined,
       InventorySort.cost => Icons.attach_money_rounded,
       InventorySort.dryingTime => Icons.local_fire_department_outlined,
       InventorySort.moistureRemaining => Icons.water_drop_outlined,
@@ -11875,7 +12420,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       constraints: const BoxConstraints(minWidth: 230, maxWidth: 280),
       onSelected: (value) => setState(() {
         sort = value;
+        sortAscending = defaultInventorySortAscending(value);
         currentPage = 0;
+        widget.database?.saveStringPreference('inventory_sort', value.name);
+        widget.database?.saveBoolPreference(
+          'inventory_sort_ascending',
+          sortAscending,
+        );
       }),
       itemBuilder: (context) => [
         for (final value in InventorySort.values)
@@ -11895,7 +12446,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         key: const Key('sort-glass-surface'),
         selected: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 9, 8),
+          padding: compact
+              ? const EdgeInsets.fromLTRB(10, 8, 7, 8)
+              : const EdgeInsets.fromLTRB(12, 8, 9, 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -11926,6 +12479,44 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       ),
     );
+    final direction = Tooltip(
+      message: sortAscending
+          ? 'Ascending · click for descending'
+          : 'Descending · click for ascending',
+      child: InkWell(
+        key: const Key('sort-direction-toggle'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() {
+          sortAscending = !sortAscending;
+          currentPage = 0;
+          widget.database?.saveBoolPreference(
+            'inventory_sort_ascending',
+            sortAscending,
+          );
+        }),
+        child: _GlassFilterChip(
+          selected: false,
+          child: SizedBox.square(
+            dimension: 40,
+            child: Icon(
+              sortAscending
+                  ? Icons.arrow_upward_rounded
+                  : Icons.arrow_downward_rounded,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      ),
+    );
+    final controls = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: compact ? 56 : 150, child: dropdown),
+        const SizedBox(width: 5),
+        direction,
+      ],
+    );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -11935,9 +12526,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             style: TextStyle(color: Color(0xff7f8798), fontSize: 12),
           ),
           const SizedBox(width: 8),
-          dropdown,
+          controls,
         ] else
-          SizedBox(width: compact ? 64 : 180, child: dropdown),
+          controls,
       ],
     );
   }
@@ -12172,50 +12763,70 @@ class _InventoryHomeState extends State<InventoryHome> {
         ],
       );
 
-  Widget _compactHeaderActionStrip({required bool showOverflowHint}) => Stack(
-    alignment: Alignment.centerRight,
-    children: [
-      SingleChildScrollView(
-        key: const Key('compact-header-actions'),
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.only(right: showOverflowHint ? 36 : 0),
-        child: Row(
-          children: [
-            ..._centerHeaderActions(),
-            const SizedBox(width: 8),
-            ..._databaseHeaderActions(),
-          ],
-        ),
-      ),
-      if (showOverflowHint)
-        Positioned(
-          right: 0,
-          top: 0,
-          bottom: 0,
-          child: IgnorePointer(
-            child: Container(
-              key: const Key('header-more-indicator'),
-              width: 42,
-              alignment: Alignment.centerRight,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Theme.of(context).scaffoldBackgroundColor
-                        .withValues(alpha: 0),
-                    Theme.of(context).scaffoldBackgroundColor,
-                  ],
+  Widget _compactHeaderActionStrip({required bool showOverflowHint}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          // Both action groups fit comfortably at this width. Anchor them to
+          // opposite sides of the bar instead of letting Stack place the
+          // intrinsic-width scroll view against the right edge.
+          if (!showOverflowHint && constraints.maxWidth >= 520) {
+            return Row(
+              key: const Key('compact-header-actions'),
+              children: [
+                ..._centerHeaderActions(),
+                const Spacer(),
+                ..._databaseHeaderActions(),
+              ],
+            );
+          }
+          return Stack(
+            alignment: Alignment.centerRight,
+            children: [
+              Positioned.fill(
+                child: SingleChildScrollView(
+                  key: const Key('compact-header-actions'),
+                  scrollDirection: Axis.horizontal,
+                  padding: EdgeInsets.only(right: showOverflowHint ? 36 : 0),
+                  child: Row(
+                    children: [
+                      ..._centerHeaderActions(),
+                      const SizedBox(width: 8),
+                      ..._databaseHeaderActions(),
+                    ],
+                  ),
                 ),
               ),
-              child: Icon(
-                Icons.chevron_right_rounded,
-                color: Theme.of(context).colorScheme.primary,
-                size: 28,
-              ),
-            ),
-          ),
-        ),
-    ],
-  );
+              if (showOverflowHint)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      key: const Key('header-more-indicator'),
+                      width: 42,
+                      alignment: Alignment.centerRight,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Theme.of(context).scaffoldBackgroundColor
+                                .withValues(alpha: 0),
+                            Theme.of(context).scaffoldBackgroundColor,
+                          ],
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.chevron_right_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 28,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      );
 
   Widget _glassQuickAction({
     required Key key,
@@ -13616,18 +14227,53 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _configBlockButton(
-              key: const Key('database-settings'),
-              tooltip: 'Local database',
-              onPressed: widget.database == null ? null : _openDatabaseSettings,
-              icon: Icons.storage_rounded,
+            ValueListenableBuilder<LocalSaveFeedback>(
+              valueListenable: _localSaveFeedback,
+              builder: (context, feedback, _) {
+                final saving = feedback == LocalSaveFeedback.saving;
+                final saved = feedback == LocalSaveFeedback.saved;
+                return _configBlockButton(
+                  key: const Key('database-settings'),
+                  tooltip: saving
+                      ? 'Saving changes…'
+                      : saved
+                      ? 'Changes saved'
+                      : 'Local database',
+                  onPressed: widget.database == null
+                      ? null
+                      : _openDatabaseSettings,
+                  icon: Icons.storage_rounded,
+                  iconWidget: feedback == LocalSaveFeedback.idle
+                      ? null
+                      : Icon(
+                          saving
+                              ? Icons.sync_rounded
+                              : Icons.check_circle_outline,
+                          key: const Key('local-save-feedback'),
+                          size: 18,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                );
+              },
             ),
             _configBlockDivider(),
-            _configBlockButton(
-              key: const Key('cloud-sync'),
-              tooltip: 'Remote Sync',
-              onPressed: widget.database == null ? null : _openCloudSync,
-              icon: Icons.cloud_sync_outlined,
+            ValueListenableBuilder<bool>(
+              valueListenable: _syncActivity,
+              builder: (context, syncing, _) => _configBlockButton(
+                key: const Key('cloud-sync'),
+                tooltip: syncing ? 'Syncing changes…' : 'Remote Sync',
+                onPressed: widget.database == null ? null : _openCloudSync,
+                icon: Icons.cloud_sync_outlined,
+                iconWidget: syncing
+                    ? SizedBox.square(
+                        dimension: 17,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      )
+                    : null,
+              ),
             ),
             _configBlockDivider(),
             _configBlockButton(
@@ -13650,6 +14296,13 @@ class _InventoryHomeState extends State<InventoryHome> {
               onPressed: _openAuditLog,
               icon: Icons.history_rounded,
             ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('getting-started-help'),
+              tooltip: 'Getting started',
+              onPressed: _openGettingStarted,
+              icon: Icons.help_outline_rounded,
+            ),
           ],
         ),
       ),
@@ -13661,6 +14314,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     required String tooltip,
     required VoidCallback? onPressed,
     required IconData icon,
+    Widget? iconWidget,
   }) {
     Widget joinedGlassLayer(
       BuildContext context,
@@ -13681,7 +14335,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         hoverColor: Colors.transparent,
         highlightColor: Colors.transparent,
       ).copyWith(backgroundBuilder: joinedGlassLayer),
-      icon: Icon(icon),
+      icon: iconWidget ?? Icon(icon),
     );
   }
 
@@ -14351,14 +15005,21 @@ class _InventoryHomeState extends State<InventoryHome> {
           )
         : LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 450;
+              final compact =
+                  constraints.maxWidth < 450 || constraints.maxHeight < 260;
+              final tiny = constraints.maxHeight < 210;
               return Padding(
-                padding: const EdgeInsets.all(18),
+                padding: EdgeInsets.all(compact ? 12 : 18),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _catalogRecordVisual(recordImage, icon, accent, 42),
-                    if (compact) const SizedBox(height: 16) else const Spacer(),
+                    _catalogRecordVisual(
+                      recordImage,
+                      icon,
+                      accent,
+                      compact ? 36 : 42,
+                    ),
+                    if (compact) const SizedBox(height: 10) else const Spacer(),
                     Text(
                       category,
                       style: TextStyle(
@@ -14368,33 +15029,35 @@ class _InventoryHomeState extends State<InventoryHome> {
                         letterSpacing: 1.1,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: compact ? 4 : 8),
                     Text(
                       title,
-                      maxLines: 2,
+                      maxLines: tiny ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 17,
+                      style: TextStyle(
+                        fontSize: compact ? 16 : 17,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: compact ? 4 : 6),
                     Text(
                       subtitle,
-                      maxLines: 2,
+                      maxLines: compact ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Color(0xffa4abba)),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xff7f8798),
-                        fontSize: 12,
+                    if (!compact) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xff7f8798),
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               );
@@ -19463,10 +20126,22 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.colorTheme,
     required this.brightnessMode,
     required this.customThemeColor,
+    required this.alertSoundsEnabled,
+    required this.lowStockAlertsEnabled,
+    required this.hideZeroQuantityItems,
+    required this.syncChimeEnabled,
+    required this.dryingCompleteChimeEnabled,
+    required this.moistureAlertChimeEnabled,
     required this.onSettingsChanged,
     required this.onColorThemeChanged,
     required this.onBrightnessModeChanged,
     required this.onCustomThemeColorChanged,
+    required this.onAlertSoundsChanged,
+    required this.onLowStockAlertsChanged,
+    required this.onHideZeroQuantityItemsChanged,
+    required this.onSyncChimeChanged,
+    required this.onDryingCompleteChimeChanged,
+    required this.onMoistureAlertChimeChanged,
     required this.onPhotoCardsChanged,
     required this.onCustomIconAnimationModeChanged,
   });
@@ -19477,11 +20152,23 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
   final Color customThemeColor;
+  final bool alertSoundsEnabled;
+  final bool lowStockAlertsEnabled;
+  final bool hideZeroQuantityItems;
+  final bool syncChimeEnabled;
+  final bool dryingCompleteChimeEnabled;
+  final bool moistureAlertChimeEnabled;
   final void Function(int durationPercent, int recurrenceSeconds)
   onSettingsChanged;
   final ValueChanged<AppColorTheme> onColorThemeChanged;
   final ValueChanged<AppBrightnessMode> onBrightnessModeChanged;
   final ValueChanged<Color> onCustomThemeColorChanged;
+  final ValueChanged<bool> onAlertSoundsChanged;
+  final ValueChanged<bool> onLowStockAlertsChanged;
+  final ValueChanged<bool> onHideZeroQuantityItemsChanged;
+  final ValueChanged<bool> onSyncChimeChanged;
+  final ValueChanged<bool> onDryingCompleteChimeChanged;
+  final ValueChanged<bool> onMoistureAlertChimeChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
@@ -19500,6 +20187,12 @@ class _PersonalizationSettingsDialogState
   late AppColorTheme colorTheme = widget.colorTheme;
   late AppBrightnessMode brightnessMode = widget.brightnessMode;
   late Color customThemeColor = widget.customThemeColor;
+  late bool alertSoundsEnabled = widget.alertSoundsEnabled;
+  late bool lowStockAlertsEnabled = widget.lowStockAlertsEnabled;
+  late bool hideZeroQuantityItems = widget.hideZeroQuantityItems;
+  late bool syncChimeEnabled = widget.syncChimeEnabled;
+  late bool dryingCompleteChimeEnabled = widget.dryingCompleteChimeEnabled;
+  late bool moistureAlertChimeEnabled = widget.moistureAlertChimeEnabled;
 
   Future<void> _pickCustomThemeColor() async {
     final selected = await showDialog<String>(
@@ -19665,6 +20358,110 @@ class _PersonalizationSettingsDialogState
               onChanged: (value) {
                 setState(() => photoCardsEnabled = value);
                 widget.onPhotoCardsChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Inventory display',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            SwitchListTile(
+              key: const Key('hide-zero-personalization'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Hide quantity 0 items'),
+              subtitle: const Text(
+                'Saved only on this device; Remote Sync cannot change it.',
+              ),
+              value: hideZeroQuantityItems,
+              onChanged: (value) {
+                setState(() => hideZeroQuantityItems = value);
+                widget.onHideZeroQuantityItemsChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Sounds',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            SwitchListTile(
+              key: const Key('low-stock-alerts-personalization'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Low-stock alerts'),
+              subtitle: const Text(
+                'Show quantity-threshold alerts on this device.',
+              ),
+              value: lowStockAlertsEnabled,
+              onChanged: (value) {
+                setState(() => lowStockAlertsEnabled = value);
+                widget.onLowStockAlertsChanged(value);
+              },
+            ),
+            SwitchListTile(
+              key: const Key('alert-sounds-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Alert sounds'),
+              subtitle: const Text(
+                'Silence remote-item, drying-complete, and moisture alerts on this device.',
+              ),
+              value: alertSoundsEnabled,
+              onChanged: (value) {
+                setState(() => alertSoundsEnabled = value);
+                widget.onAlertSoundsChanged(value);
+              },
+            ),
+            if (!alertSoundsEnabled)
+              Container(
+                key: const Key('all-alert-sounds-muted'),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'All alert sounds are muted. Your individual choices are preserved.',
+                ),
+              ),
+            SwitchListTile(
+              key: const Key('sync-chime-personalization'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Remote item additions'),
+              subtitle: const Text('Chime when another device adds an item.'),
+              value: syncChimeEnabled,
+              onChanged: (value) {
+                setState(() => syncChimeEnabled = value);
+                widget.onSyncChimeChanged(value);
+              },
+            ),
+            SwitchListTile(
+              key: const Key('drying-chime-personalization'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Drying complete'),
+              subtitle: const Text('Chime when a drying timer finishes.'),
+              value: dryingCompleteChimeEnabled,
+              onChanged: (value) {
+                setState(() => dryingCompleteChimeEnabled = value);
+                widget.onDryingCompleteChimeChanged(value);
+              },
+            ),
+            SwitchListTile(
+              key: const Key('moisture-chime-personalization'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Moisture threshold'),
+              subtitle: const Text(
+                'Chime once when filament crosses its alert threshold.',
+              ),
+              value: moistureAlertChimeEnabled,
+              onChanged: (value) {
+                setState(() => moistureAlertChimeEnabled = value);
+                widget.onMoistureAlertChimeChanged(value);
               },
             ),
             const Divider(height: 28),
@@ -20184,6 +20981,16 @@ Uri? shopifyProductEndpoint(Uri uri) {
   );
 }
 
+List<String> limitedProductImageUrls(
+  Iterable<String> candidates, {
+  int limit = 2,
+}) => candidates
+    .map((value) => value.trim())
+    .where((value) => value.isNotEmpty)
+    .toSet()
+    .take(limit)
+    .toList();
+
 Map<String, dynamic>? extractShopifyProductMetadata(
   Map<String, dynamic> source,
   Uri originalUri,
@@ -20215,6 +21022,24 @@ Map<String, dynamic>? extractShopifyProductMetadata(
   final description = source['description']?.toString() ?? '';
   final vendor = source['vendor']?.toString().trim() ?? '';
   final barcode = selected['barcode']?.toString().trim() ?? '';
+  String colorName = '';
+  final options = source['options'];
+  if (options is List) {
+    for (var index = 0; index < options.length; index++) {
+      final option = options[index];
+      final optionName = option is Map ? option['name'] : option;
+      if (RegExp(r'^colou?r$', caseSensitive: false).hasMatch('$optionName')) {
+        colorName = selected['option${index + 1}']?.toString().trim() ?? '';
+        if (colorName.isEmpty && variantTitle.isNotEmpty) {
+          final titleOptions = variantTitle.split('/');
+          if (index < titleOptions.length) {
+            colorName = titleOptions[index].trim();
+          }
+        }
+        break;
+      }
+    }
+  }
   return <String, dynamic>{
     '@type': 'Product',
     'name': displayName,
@@ -20223,7 +21048,90 @@ Map<String, dynamic>? extractShopifyProductMetadata(
     if (image?.isNotEmpty == true) 'image': image,
     if (description.isNotEmpty) 'description': description,
     if (barcode.isNotEmpty) 'gtin13': barcode,
+    if (colorName.isNotEmpty) 'color': colorName,
   };
+}
+
+typedef ImportedProductColor = ({String label, String hex});
+
+ImportedProductColor? extractProductColorMetadata(
+  Map<String, dynamic> product,
+  String sourceHtml,
+) {
+  String label = '';
+  String hex = '';
+
+  String normalizedHex(String value) {
+    final match = RegExp(
+      r'(?<![0-9a-f])#([0-9a-f]{3}|[0-9a-f]{6})(?![0-9a-f])',
+      caseSensitive: false,
+    ).firstMatch(value);
+    if (match == null) return '';
+    var digits = match.group(1)!;
+    if (digits.length == 3) {
+      digits = digits
+          .split('')
+          .map((character) => '$character$character')
+          .join();
+    }
+    return '#${digits.toUpperCase()}';
+  }
+
+  void inspect(Object? value) {
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final key = entry.key.toString().toLowerCase().replaceAll(
+          RegExp(r'[^a-z]'),
+          '',
+        );
+        final text = entry.value is String ? entry.value.toString().trim() : '';
+        if (text.isNotEmpty &&
+            {'color', 'colour', 'colorname', 'colourname'}.contains(key)) {
+          final candidateHex = normalizedHex(text);
+          if (candidateHex.isNotEmpty) {
+            hex = hex.isEmpty ? candidateHex : hex;
+          } else if (label.isEmpty) {
+            label = text;
+          }
+        }
+        if (text.isNotEmpty && {'hex', 'colorhex', 'colourhex'}.contains(key)) {
+          final candidateHex = normalizedHex(
+            text.startsWith('#') ? text : '#$text',
+          );
+          if (candidateHex.isNotEmpty && hex.isEmpty) hex = candidateHex;
+        }
+        inspect(entry.value);
+      }
+    } else if (value is List) {
+      for (final entry in value) {
+        inspect(entry);
+      }
+    }
+  }
+
+  inspect(product);
+  final document = html_parser.parse(sourceHtml);
+  for (final element in document.querySelectorAll(
+    'meta[property="product:color"], [data-color], [data-colour], [data-color-hex], [data-hex]',
+  )) {
+    final value =
+        element.attributes['content'] ??
+        element.attributes['data-color'] ??
+        element.attributes['data-colour'] ??
+        element.attributes['data-color-hex'] ??
+        element.attributes['data-hex'] ??
+        '';
+    final candidateHex = normalizedHex(
+      value.startsWith('#') ? value : '#$value',
+    );
+    if (candidateHex.isNotEmpty && hex.isEmpty) {
+      hex = candidateHex;
+    } else if (value.trim().isNotEmpty && label.isEmpty) {
+      label = value.trim();
+    }
+  }
+  if (label.isEmpty && hex.isEmpty) return null;
+  return (label: label, hex: hex);
 }
 
 void _collectImageUrls(Object? value, List<String> output) {
@@ -20510,9 +21418,11 @@ class AddItemDialog extends StatefulWidget {
 class _AddItemDialogState extends State<AddItemDialog> {
   static const _maximumProductPageBytes = 8 * 1024 * 1024;
   static const _maximumProductImageBytes = 12 * 1024 * 1024;
+  static const _maximumProductImageRequests = 2;
   final formKey = GlobalKey<FormState>();
   late final TextEditingController nameController;
   late final TextEditingController compatibilityController;
+  late final TextEditingController purposeTagsController;
   late final TextEditingController costController;
   late final TextEditingController quantityController;
   late final TextEditingController quantityAlertThresholdController;
@@ -20587,6 +21497,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
       text: item?.compatibility.isNotEmpty == true
           ? item!.compatibility.join(', ')
           : label?.compatibility,
+    );
+    purposeTagsController = TextEditingController(
+      text: item?.purposeTags.join(', '),
     );
     costController = TextEditingController(text: item?.cost.toStringAsFixed(2));
     quantityController = TextEditingController(
@@ -20759,6 +21672,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   void dispose() {
     nameController.dispose();
     compatibilityController.dispose();
+    purposeTagsController.dispose();
     costController.dispose();
     quantityController.dispose();
     quantityAlertThresholdController.dispose();
@@ -21088,6 +22002,18 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             },
                           ),
                         ),
+                        if (type == InventoryType.filament) ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            key: const Key('filament-purpose-tags'),
+                            controller: purposeTagsController,
+                            decoration: const InputDecoration(
+                              labelText: 'Purpose tags',
+                              hintText: 'Coextruded, Use first, Engineering…',
+                              helperText: 'Separate tags with commas',
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         if (widget.locations.isEmpty ||
                             ((storageLocationId == null ||
@@ -22181,6 +23107,12 @@ class _AddItemDialogState extends State<AddItemDialog> {
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
         .toList();
+    final purposeTags = purposeTagsController.text
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
     Navigator.pop(
       context,
       InventoryItem(
@@ -22188,6 +23120,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
         name: nameController.text.trim(),
         type: type,
         compatibility: compatibility,
+        purposeTags: type == InventoryType.filament ? purposeTags : const [],
         added: widget.initialItem?.added ?? DateTime.now(),
         cost: double.parse(costController.text),
         quantity: double.parse(quantityController.text),
@@ -22579,7 +23512,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
       }
       Uint8List? downloadedImage;
       ProductImportRateLimitException? imageRateLimit;
-      for (final imageUrl in imageUrls.toSet()) {
+      for (final imageUrl in limitedProductImageUrls(
+        imageUrls,
+        limit: _maximumProductImageRequests,
+      )) {
         try {
           final imageUri = uri.resolve(imageUrl);
           if (!{'http', 'https'}.contains(imageUri.scheme)) continue;
@@ -22618,6 +23554,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
       final template = detectFilamentTemplate(
         '$productName\n${description ?? ''}\n${document.body?.text ?? ''}',
       );
+      final importedColor = template == null
+          ? null
+          : extractProductColorMetadata(product, sourceHtml);
       final instructions = applyFilamentFallbacks(
         extractedInstructions,
         template,
@@ -22664,6 +23603,16 @@ class _AddItemDialogState extends State<AddItemDialog> {
           storageController.text = instructions.storage;
         }
         if (template != null) type = InventoryType.filament;
+        if (importedColor != null) {
+          if (itemColorLabelController.text.trim().isEmpty &&
+              importedColor.label.isNotEmpty) {
+            itemColorLabelController.text = importedColor.label;
+          }
+          if (itemColorController.text.trim().isEmpty &&
+              importedColor.hex.isNotEmpty) {
+            itemColorController.text = importedColor.hex;
+          }
+        }
         if (downloadedImage != null) {
           itemImage = downloadedImage;
           itemThumbnail = downloadedThumbnail;
@@ -24360,10 +25309,17 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        item.compatibility.join('  •  '),
-                        style: const TextStyle(color: Color(0xff929aac)),
-                      ),
+                      if (_itemDisplayTags(item).isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Wrap(
+                          key: const Key('item-tags'),
+                          spacing: 7,
+                          runSpacing: 7,
+                          children: _itemDisplayTags(item)
+                              .map((tag) => _PurposeTagPill(label: tag))
+                              .toList(),
+                        ),
+                      ],
                       if (item.compatibleMachineIds.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         const Text(
@@ -24889,6 +25845,31 @@ int compareMoistureRemaining(
   if (rightRemaining == null) return -1;
   final remainingOrder = leftRemaining.compareTo(rightRemaining);
   return remainingOrder != 0 ? remainingOrder : left.name.compareTo(right.name);
+}
+
+int compareInventoryItems(
+  InventoryItem left,
+  InventoryItem right, {
+  required InventorySort sort,
+  required bool ascending,
+  DateTime? now,
+}) {
+  final primary = switch (sort) {
+    InventorySort.type => left.typeLabel.compareTo(right.typeLabel),
+    InventorySort.quantity => left.quantity.compareTo(right.quantity),
+    InventorySort.addedDate => left.added.compareTo(right.added),
+    InventorySort.cost => left.cost.compareTo(right.cost),
+    InventorySort.dryingTime => (left.dryingMinutes ?? -1).compareTo(
+      right.dryingMinutes ?? -1,
+    ),
+    InventorySort.moistureRemaining => compareMoistureRemaining(
+      left,
+      right,
+      now: now,
+    ),
+  };
+  if (primary != 0) return ascending ? primary : -primary;
+  return left.id.compareTo(right.id);
 }
 
 String _moistureRemainingLabel(InventoryItem item, {DateTime? now}) {
@@ -26160,6 +27141,99 @@ class ItemCardEffects extends StatelessWidget {
   }
 }
 
+class _PurposeTagPill extends StatelessWidget {
+  const _PurposeTagPill({required this.label, this.overlay = false});
+
+  final String label;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 18,
+    alignment: Alignment.center,
+    padding: const EdgeInsets.symmetric(horizontal: 7),
+    decoration: BoxDecoration(
+      color: overlay
+          ? Colors.black.withValues(alpha: .5)
+          : Theme.of(context).colorScheme.primary.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: overlay
+            ? Colors.white.withValues(alpha: .85)
+            : Theme.of(context).colorScheme.primary.withValues(alpha: .8),
+        width: 1.2,
+      ),
+    ),
+    child: Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: overlay ? Colors.white : Theme.of(context).colorScheme.onSurface,
+        fontSize: 10,
+        height: 1,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+}
+
+List<String> _itemDisplayTags(InventoryItem item) =>
+    {...item.purposeTags, ...item.compatibility}.toList();
+
+class _ItemTagRow extends StatelessWidget {
+  const _ItemTagRow({required this.item, this.overlay = false});
+
+  final InventoryItem item;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    key: Key('card-purpose-tags-${item.id}'),
+    children: [
+      for (final (index, tag) in _itemDisplayTags(item).take(2).indexed) ...[
+        if (index > 0) const SizedBox(width: 5),
+        Flexible(
+          child: _PurposeTagPill(label: tag, overlay: overlay),
+        ),
+      ],
+    ],
+  );
+}
+
+class _CardTagMetadataRow extends StatelessWidget {
+  const _CardTagMetadataRow({
+    required this.item,
+    required this.metadata,
+    this.overlay = false,
+  });
+
+  final InventoryItem item;
+  final String metadata;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      if (metadata.isNotEmpty)
+        Text(
+          metadata,
+          maxLines: 1,
+          style: TextStyle(
+            color: overlay ? const Color(0xffc3c8d3) : const Color(0xff929aac),
+            fontSize: 12,
+          ),
+        ),
+      if (metadata.isNotEmpty && _itemDisplayTags(item).isNotEmpty)
+        const SizedBox(width: 7),
+      if (_itemDisplayTags(item).isNotEmpty)
+        Expanded(
+          child: _ItemTagRow(item: item, overlay: overlay),
+        ),
+    ],
+  );
+}
+
 class _PhotoInventoryCardContent extends StatelessWidget {
   const _PhotoInventoryCardContent({
     required this.item,
@@ -26182,149 +27256,161 @@ class _PhotoInventoryCardContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final swatch = _itemColorSwatch(item.itemColorName);
-    final metadata = [
-      if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-      ...item.compatibility,
-    ].join('  •  ');
-    return Stack(
-      key: Key('photo-card-${item.id}'),
-      fit: StackFit.expand,
-      children: [
-        _CardPhotoBackground(
-          bytes: item.thumbnailBytes ?? item.imageBytes!,
-          imageKey: Key('photo-card-background-${item.id}'),
-        ),
-        if (swatch != null) ColoredBox(color: swatch.withValues(alpha: .12)),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0x66080a10), Color(0x22080a10), Color(0xe60a0d14)],
-              stops: [0, .42, 1],
+    final metadata = [if (spoolSizeLabel.isNotEmpty) spoolSizeLabel]
+        .join('  •  ');
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.maxWidth < 220 || constraints.maxHeight < 250;
+        return Stack(
+          key: Key('photo-card-${item.id}'),
+          fit: StackFit.expand,
+          children: [
+            _CardPhotoBackground(
+              bytes: item.thumbnailBytes ?? item.imageBytes!,
+              imageKey: Key('photo-card-background-${item.id}'),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            if (swatch != null)
+              ColoredBox(color: swatch.withValues(alpha: .12)),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x66080a10),
+                    Color(0x22080a10),
+                    Color(0xe60a0d14),
+                  ],
+                  stops: [0, .42, 1],
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(compact ? 10 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _QuantityStepper(
-                    item: item,
-                    compact: true,
-                    onQuantityChanged: onQuantityChanged,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _QuantityStepper(
+                        item: item,
+                        compact: true,
+                        onQuantityChanged: onQuantityChanged,
+                      ),
+                      const Spacer(),
+                      if (item.archived)
+                        _ArchiveBadge(item: item)
+                      else if (showStatus && item.quantity > 0)
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: _themeCanvas(context).withValues(alpha: .82),
+                            shape: BoxShape.circle,
+                          ),
+                          child: CountdownRing(
+                            key: Key('inventory-card-timer-${item.id}'),
+                            item: item,
+                            compact: compact,
+                          ),
+                        ),
+                    ],
                   ),
                   const Spacer(),
-                  if (item.archived)
-                    _ArchiveBadge(item: item)
-                  else if (showStatus && item.quantity > 0)
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: _themeCanvas(context).withValues(alpha: .82),
-                        shape: BoxShape.circle,
-                      ),
-                      child: CountdownRing(
-                        key: Key('inventory-card-timer-${item.id}'),
-                        item: item,
+                  Container(
+                    padding: EdgeInsets.all(compact ? 9 : 12),
+                    decoration: BoxDecoration(
+                      color: _themeCanvas(context).withValues(alpha: .84),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: .18),
                       ),
                     ),
-                ],
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _themeCanvas(context).withValues(alpha: .84),
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: .18),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _CardTypeAndPrice(
-                      item: item,
-                      typeLabel: typeLabel,
-                      typeIcon: typeIcon,
-                      typeIconImageBytes: typeIconImageBytes,
-                      overlay: true,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        height: 1.15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    if (metadata.isNotEmpty) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        metadata,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xffc3c8d3),
-                          fontSize: 12,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _CardTypeAndPrice(
+                          item: item,
+                          typeLabel: typeLabel,
+                          typeIcon: typeIcon,
+                          typeIconImageBytes: typeIconImageBytes,
+                          overlay: true,
                         ),
-                      ),
-                    ],
-                    if (swatch != null || item.materialName.isNotEmpty) ...[
-                      const SizedBox(height: 9),
-                      Row(
-                        children: [
-                          if (swatch != null) ...[
-                            Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: swatch,
-                                borderRadius: BorderRadius.circular(7),
-                              ),
-                            ),
-                            if (item.itemColorLabel.isNotEmpty) ...[
-                              const SizedBox(width: 7),
-                              Expanded(
-                                child: Text(
-                                  item.itemColorLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
+                        const SizedBox(height: 6),
+                        Text(
+                          item.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: compact ? 15 : 17,
+                            height: 1.15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (!compact &&
+                            (metadata.isNotEmpty ||
+                                _itemDisplayTags(item).isNotEmpty)) ...[
+                          const SizedBox(height: 6),
+                          _CardTagMetadataRow(
+                            item: item,
+                            metadata: metadata,
+                            overlay: true,
+                          ),
+                        ],
+                        if (!compact &&
+                            (swatch != null ||
+                                item.materialName.isNotEmpty)) ...[
+                          const SizedBox(height: 9),
+                          Row(
+                            children: [
+                              if (swatch != null) ...[
+                                Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: swatch,
+                                    borderRadius: BorderRadius.circular(7),
                                   ),
                                 ),
-                              ),
-                            ] else
-                              const Spacer(),
-                          ] else
-                            const Spacer(),
-                          if (item.materialName.isNotEmpty)
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 130),
-                              child: _MaterialBadge(item: item),
-                            ),
+                                if (item.itemColorLabel.isNotEmpty) ...[
+                                  const SizedBox(width: 7),
+                                  Expanded(
+                                    child: Text(
+                                      item.itemColorLabel,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ] else
+                                  const Spacer(),
+                              ] else
+                                const Spacer(),
+                              if (item.materialName.isNotEmpty)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 130,
+                                  ),
+                                  child: _MaterialBadge(item: item),
+                                ),
+                            ],
+                          ),
                         ],
-                      ),
-                    ],
-                  ],
-                ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -26460,7 +27546,9 @@ class InventoryCard extends StatelessWidget {
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,
-          child: photoCard && item.imageBytes != null
+          child:
+              photoCard &&
+                  (item.thumbnailBytes != null || item.imageBytes != null)
               ? _PhotoInventoryCardContent(
                   item: item,
                   typeLabel: typeLabel ?? item.typeLabel,
@@ -26526,17 +27614,9 @@ class InventoryCard extends StatelessWidget {
                           ),
                           if (!compact) ...[
                             const SizedBox(height: 8),
-                            Text(
-                              [
-                                if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-                                ...item.compatibility,
-                              ].join('  •  '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xff929aac),
-                                fontSize: 12,
-                              ),
+                            _CardTagMetadataRow(
+                              item: item,
+                              metadata: spoolSizeLabel,
                             ),
                           ],
                           SizedBox(height: compact ? 5 : 14),

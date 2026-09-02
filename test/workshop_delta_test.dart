@@ -56,4 +56,35 @@ void main() {
       {'id': 'B', 'name': 'Nut', 'quantity': 4},
     ]);
   });
+
+  test('latest pending fields win over an incoming version of the item', () {
+    final merged = mergeRemoteChangesWithPending(
+      const [
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'FILAMENT-1',
+          fields: {
+            'name': 'PolyLite PLA',
+            'filamentStatus': 'ready',
+            'image': 'remote-product-image',
+          },
+          revision: 42,
+        ),
+      ],
+      const [
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'FILAMENT-1',
+          fields: {'filamentStatus': 'wet'},
+        ),
+      ],
+    );
+
+    expect(merged.single.fields, {
+      'name': 'PolyLite PLA',
+      'filamentStatus': 'wet',
+      'image': 'remote-product-image',
+    });
+    expect(merged.single.revision, 42);
+  });
 }

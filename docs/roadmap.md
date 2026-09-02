@@ -22,6 +22,8 @@
   unrelated incoming fields and records may continue applying asynchronously.
 - Show a lightweight pending/saved state where feedback is useful without
   blocking continued edits.
+  Implementation status: complete for debounced quantity changes; broaden this
+  feedback as the remaining queued-write paths move to the record outbox.
 - Add race-condition tests for rapid quantity, status, location, lifecycle, and
   item-detail changes.
 - Add a required end-to-end test that creates an item, immediately changes its
@@ -30,6 +32,11 @@
   newest visible value never rolls back on either device.
 
 ### Detailed personalization, notifications, and sound
+
+Implementation status: in progress. Per-device master mute and independent
+Remote-addition, drying-complete, and moisture-threshold chime controls are
+available together in Personalization. Low-stock visual notifications can also
+be disabled independently per device without changing item thresholds.
 
 - Provide per-effect controls for card, status, alert, moisture, and Remote Sync
   animations, including intensity and duration where appropriate.
@@ -52,6 +59,9 @@
 
 ### Multi-color filament support
 
+Implementation status: in progress. URL import now recognizes explicit color
+names and hexadecimal swatches from structured product data and product pages.
+
 - Allow one filament item or spool to contain multiple named colors rather than
   forcing it into a single color field.
 - Preserve the color order for gradients, coextrusions, transitions, and other
@@ -68,6 +78,9 @@
   variant-level colors instead of silently choosing the wrong value.
 
 ### Filament purpose and property tags
+
+Implementation status: in progress. Filament purpose tags can now be edited,
+saved, searched, and displayed on item cards and details.
 
 - Add visible, filterable filament tags for construction, intended use, print
   role, handling priority, and verified material properties.
@@ -98,6 +111,8 @@
 
 ### Inventory sorting controls
 
+Implementation status: complete in the current v0.2 development branch.
+
 - Add **Added Date** to the main inventory sort options using each item's
   original creation timestamp rather than its latest edit or sync time.
 - Add an invert-sort control that switches the active sort between ascending
@@ -109,6 +124,8 @@
 
 ### New Items review clarity
 
+Implementation status: complete in the current v0.2 development branch.
+
 - Give every entry in the **New Items** window a consistent second information
   line showing its color or colors and storage location.
 - Keep missing values explicit but visually quiet so entries remain aligned and
@@ -118,6 +135,8 @@
 
 ### Per-device inventory visibility
 
+Implementation status: complete in the current v0.2 development branch.
+
 - Persist the **Hide quantity 0 items** toggle in SQLite as a per-device
   preference.
 - Restore it at launch without Remote Sync changing another device's choice.
@@ -125,6 +144,8 @@
   as they are added.
 
 ### Rudimentary in-app onboarding
+
+Implementation status: complete in the current v0.2 development branch.
 
 - Add a short first-run path covering local inventory, Remote Sync, adding the
   first item, searching, Stockroom locations, and backup/export.

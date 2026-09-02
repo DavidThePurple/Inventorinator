@@ -58,6 +58,9 @@ void main() {
     await tester.tap(find.byKey(const Key('start-empty-inventory')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const Key('getting-started-dialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('getting-started-skip')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('This device only'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -85,6 +88,8 @@ void main() {
     await tester.tap(find.byKey(const Key('load-demo-inventory')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const Key('getting-started-skip')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('This device only'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -97,6 +102,33 @@ void main() {
     await tester.pump();
     database.close();
     directory.deleteSync(recursive: true);
+  });
+
+  testWidgets('Getting started is replayable and walks through core tasks', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.tap(find.byKey(const Key('getting-started-help')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('getting-started-dialog')), findsOneWidget);
+    expect(find.text('Local inventory first'), findsOneWidget);
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('getting-started-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add and find items'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('getting-started-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('Organize the Stockroom'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('getting-started-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('Protect your inventory'), findsOneWidget);
+    expect(find.text('Done'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('pairing code dialog lays out its QR code', (tester) async {
@@ -334,6 +366,145 @@ void main() {
     expect(find.text('2000'), findsOneWidget);
   });
 
+  testWidgets('new item history shows color and storage location', (
+    tester,
+  ) async {
+    final item = InventoryItem(
+      id: 'INV-HISTORY-DETAILS',
+      name: 'Ocean Blue PLA',
+      type: InventoryType.filament,
+      compatibility: const ['1.75 mm'],
+      added: DateTime(2026, 9, 2, 12),
+      cost: 22.50,
+      color: const Color(0xff8e75ff),
+      itemColorName: '#1769AA',
+      itemColorLabel: 'Ocean blue',
+      storageLocationId: 'LOC-RACK',
+    );
+    final state = encodeWorkshopState(
+      inventory: [item],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      locations: const [
+        StockLocationRecord(id: 'LOC-RACK', name: 'Filament rack'),
+      ],
+      additionHistory: [
+        AdditionHistoryEntry.fromItem(item, deviceName: 'Workshop tablet'),
+      ],
+    );
+
+    await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('addition-history')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('addition-color-INV-HISTORY-DETAILS')),
+        matching: find.text('Ocean blue'),
+      ),
+      findsNothing,
+    );
+    expect(find.text('Ocean blue · '), findsOneWidget);
+    expect(
+      find.byKey(const Key('addition-color-swatch-INV-HISTORY-DETAILS')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('addition-color-hex-INV-HISTORY-DETAILS')),
+      findsOneWidget,
+    );
+    expect(find.text('#1769AA'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('addition-location-INV-HISTORY-DETAILS')),
+        matching: find.text('Filament rack'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const Key('addition-entry-INV-HISTORY-DETAILS')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(ItemDetailsPanel), findsOneWidget);
+    expect(find.byKey(const Key('edit-item-top')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('new item history keeps missing details explicit on Android', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final item = InventoryItem(
+      id: 'INV-HISTORY-MISSING',
+      name: 'Unsorted fasteners with a comfortably long item name',
+      type: InventoryType.fastener,
+      compatibility: const [],
+      added: DateTime(2026, 9, 2, 12),
+      cost: 0,
+      color: const Color(0xff8e75ff),
+    );
+    final state = encodeWorkshopState(
+      inventory: [item],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      additionHistory: [AdditionHistoryEntry.fromItem(item)],
+    );
+
+    await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('addition-history')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No color'), findsWidgets);
+    expect(find.text('No location'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('deleted new item history explains why it cannot be opened', (
+    tester,
+  ) async {
+    final deletedItem = InventoryItem(
+      id: 'INV-HISTORY-DELETED',
+      name: 'Deleted sample item',
+      type: InventoryType.other,
+      compatibility: const [],
+      added: DateTime(2026, 9, 2, 12),
+      cost: 0,
+      color: const Color(0xff8e75ff),
+    );
+    final state = encodeWorkshopState(
+      inventory: const [],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      additionHistory: [AdditionHistoryEntry.fromItem(deletedItem)],
+    );
+
+    await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('addition-history')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('addition-deleted-INV-HISTORY-DELETED')),
+      findsOneWidget,
+    );
+    expect(find.text('Deleted'), findsOneWidget);
+    expect(
+      tester
+          .widget<InkWell>(
+            find.byKey(const Key('addition-entry-INV-HISTORY-DELETED')),
+          )
+          .onTap,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('alerts expose separate per-device chime controls', (
     tester,
   ) async {
@@ -436,6 +607,68 @@ void main() {
     await tester.tap(find.byKey(const Key('moisture-alerts')));
     await tester.pumpAndSettle();
     expect(find.text('No unread inventory alerts.'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    database.close();
+    directory.deleteSync(recursive: true);
+  });
+
+  testWidgets('low-stock alerts can be disabled per device', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final directory = Directory.systemTemp.createTempSync(
+      'inventorinator-low-stock-alert-pref-',
+    );
+    final database = (await tester.runAsync(
+      () => LocalDatabase.open(
+        overridePath: '${directory.path}/inventory.sqlite3',
+      ),
+    ))!;
+    final item = sampleInventory.first.copyWith(
+      id: 'LOW-STOCK-PREF',
+      quantity: 1,
+      quantityAlertThreshold: 5,
+    );
+    final state = encodeWorkshopState(
+      inventory: [item],
+      vendors: starterVendors,
+      brands: starterBrands,
+      products: starterProducts,
+    );
+    database.saveState(state);
+    database.saveSyncConfig(
+      jsonEncode(
+        const SupabaseConfig(
+          syncMode: 'local',
+          url: '',
+          publishableKey: '',
+        ).toJson(),
+      ),
+    );
+
+    await tester.pumpWidget(
+      InventorinatorApp(database: database, persistedState: state),
+    );
+    await tester.tap(find.byKey(const Key('personalization-settings')));
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const Key('low-stock-alerts-personalization'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      database.loadBoolPreference('low_stock_alerts_enabled', fallback: true),
+      isFalse,
+    );
+    Navigator.of(tester.element(toggle)).pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('moisture-alerts')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('quantity-alert-LOW-STOCK-PREF')),
+      findsNothing,
+    );
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
@@ -863,12 +1096,25 @@ Bed Temperature: 80°C
     );
   });
 
+  test('URL import caps and deduplicates product image requests', () {
+    expect(
+      limitedProductImageUrls([
+        'https://cdn.example/first.png',
+        'https://cdn.example/first.png',
+        'https://cdn.example/second.png',
+        'https://cdn.example/third.png',
+      ]),
+      ['https://cdn.example/first.png', 'https://cdn.example/second.png'],
+    );
+  });
+
   test('Shopify URL import selects the requested variant', () {
     final product = extractShopifyProductMetadata({
       'title': 'Polymaker PLA Pro',
       'vendor': 'Polymaker',
       'description': '<p>Nozzle temperature: 210-230°C</p>',
       'featured_image': '//cdn.example/default.png',
+      'options': ['Color', 'Size'],
       'variants': [
         {
           'id': 10,
@@ -892,6 +1138,20 @@ Bed Temperature: 80°C
     expect((product?['offers'] as Map?)?['price'], '24.99');
     expect(product?['gtin13'], '222');
     expect(product?['image'], 'https://cdn.example/purple.png');
+    expect(product?['color'], 'Purple');
+  });
+
+  test('URL import extracts explicit filament color names and hex values', () {
+    final color = extractProductColorMetadata({
+      '@type': 'Product',
+      'color': 'Galaxy Purple',
+      'additionalProperty': [
+        {'name': 'Color Hex', 'colorHex': '7b4cff'},
+      ],
+    }, '<span data-color-hex="#112233"></span>');
+
+    expect(color?.label, 'Galaxy Purple');
+    expect(color?.hex, '#7B4CFF');
   });
 
   test('filament template detection preserves specific material families', () {
@@ -1096,6 +1356,26 @@ Bed Temperature: 80°C
     expect(decoded?.inventory.single.imageBytes, [1, 2, 3]);
     expect(decoded?.inventory.single.labelImageBytes, [4, 5, 6]);
     expect(decoded?.inventory.single.catalogProductId, 'PROD-INSERT');
+  });
+
+  test('filament purpose tags survive export and import', () {
+    final item = sampleInventory.first.copyWith(
+      type: InventoryType.filament,
+      purposeTags: const ['Coextruded', 'Beauty prints only'],
+    );
+    final decoded = decodeWorkshopState(
+      encodeWorkshopState(
+        inventory: [item],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      ),
+    )!;
+
+    expect(decoded.inventory.single.purposeTags, [
+      'Coextruded',
+      'Beauty prints only',
+    ]);
   });
 
   testWidgets('kit package import plan creates zero stock and is idempotent', (
@@ -2052,6 +2332,42 @@ Bed Temperature: 80°C
     expect(items.map((item) => item.id), ['WET', 'SOON', 'FRESH', 'OTHER']);
   });
 
+  test('added date sort supports both directions with stable ties', () {
+    final older = sampleInventory.first.copyWith(
+      id: 'A',
+      added: DateTime(2026, 1, 1),
+    );
+    final newer = sampleInventory.first.copyWith(
+      id: 'B',
+      added: DateTime(2026, 2, 1),
+    );
+    final newerTie = sampleInventory.first.copyWith(
+      id: 'C',
+      added: DateTime(2026, 2, 1),
+    );
+    final ascending = [newerTie, newer, older]
+      ..sort(
+        (left, right) => compareInventoryItems(
+          left,
+          right,
+          sort: InventorySort.addedDate,
+          ascending: true,
+        ),
+      );
+    final descending = [older, newerTie, newer]
+      ..sort(
+        (left, right) => compareInventoryItems(
+          left,
+          right,
+          sort: InventorySort.addedDate,
+          ascending: false,
+        ),
+      );
+
+    expect(ascending.map((item) => item.id), ['A', 'B', 'C']);
+    expect(descending.map((item) => item.id), ['B', 'C', 'A']);
+  });
+
   testWidgets('remote quantity changes fire a southeast card animation', (
     tester,
   ) async {
@@ -2205,6 +2521,21 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('color-theme-darkBlack')), findsOneWidget);
     expect(find.byKey(const Key('color-theme-darkBrown')), findsOneWidget);
     expect(find.byKey(const Key('color-theme-custom')), findsOneWidget);
+    expect(find.byKey(const Key('alert-sounds-toggle')), findsOneWidget);
+    expect(
+      find.byKey(const Key('low-stock-alerts-personalization')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('hide-zero-personalization')), findsOneWidget);
+    expect(find.byKey(const Key('sync-chime-personalization')), findsOneWidget);
+    expect(
+      find.byKey(const Key('drying-chime-personalization')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('moisture-chime-personalization')),
+      findsOneWidget,
+    );
     final photoToggle = find.byKey(const Key('photo-cards-toggle'));
     expect(photoToggle, findsOneWidget);
     expect(tester.widget<SwitchListTile>(photoToggle).value, isFalse);
@@ -2223,19 +2554,110 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    expect(tester.takeException(), isNull, reason: 'initial 360px layout');
 
     await tester.drag(
       find.byKey(const Key('compact-header-actions')),
       const Offset(-320, 0),
     );
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'scrolled header layout');
     await tester.tap(find.byKey(const Key('personalization-settings')));
     await tester.pumpAndSettle();
 
     expect(find.text('Personalization settings'), findsOneWidget);
     expect(find.byKey(const Key('custom-icon-animation-mode')), findsOneWidget);
     expect(find.byKey(const Key('animation-duration')), findsOneWidget);
-    expect(tester.takeException(), isNull);
+    final layoutException = tester.takeException();
+    expect(
+      layoutException,
+      isNull,
+      reason: layoutException is FlutterError
+          ? layoutException.toStringDeep()
+          : '$layoutException',
+    );
+  });
+
+  testWidgets('personalization can silence alert sounds on this device', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final directory = Directory.systemTemp.createTempSync(
+      'inventorinator-alert-sounds-',
+    );
+    final database = (await tester.runAsync(
+      () => LocalDatabase.open(
+        overridePath: '${directory.path}/inventory.sqlite3',
+      ),
+    ))!;
+    database.saveState(
+      encodeWorkshopState(
+        inventory: const [],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      ),
+    );
+    database.saveSyncConfig(
+      jsonEncode(
+        const SupabaseConfig(
+          syncMode: 'local',
+          url: '',
+          publishableKey: '',
+        ).toJson(),
+      ),
+    );
+
+    await tester.pumpWidget(InventorinatorApp(database: database));
+    await tester.tap(find.byKey(const Key('personalization-settings')));
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const Key('alert-sounds-toggle'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(
+      database.loadBoolPreference('alert_sounds_enabled', fallback: true),
+      isFalse,
+    );
+    expect(find.byKey(const Key('all-alert-sounds-muted')), findsOneWidget);
+
+    for (final key in const [
+      'sync-chime-personalization',
+      'drying-chime-personalization',
+      'moisture-chime-personalization',
+    ]) {
+      final toggle = find.byKey(Key(key));
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      database.loadBoolPreference('sync_chime_enabled', fallback: true),
+      isFalse,
+    );
+    expect(
+      database.loadBoolPreference(
+        'drying_complete_chime_enabled',
+        fallback: true,
+      ),
+      isFalse,
+    );
+    expect(
+      database.loadBoolPreference(
+        'moisture_alert_chime_enabled',
+        fallback: true,
+      ),
+      isFalse,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    database.close();
+    directory.deleteSync(recursive: true);
   });
 
   testWidgets('color theme changes live and persists', (tester) async {
@@ -2360,7 +2782,32 @@ Bed Temperature: 80°C
     directory.deleteSync(recursive: true);
   });
 
-  testWidgets('photo card mode uses the product image as its background', (
+  test('resting glass buttons derive their color from the active theme', () {
+    final red = themedGlassRestingColors(
+      InventorinatorColors.palettes[AppColorTheme.darkRed]!,
+      light: false,
+    );
+    final blue = themedGlassRestingColors(
+      InventorinatorColors.palettes[AppColorTheme.darkBlue]!,
+      light: false,
+    );
+
+    expect(red, isNot(blue));
+    expect(
+      red.first,
+      InventorinatorColors.palettes[AppColorTheme.darkRed]!.base.withValues(
+        alpha: .34,
+      ),
+    );
+    expect(
+      blue.first,
+      InventorinatorColors.palettes[AppColorTheme.darkBlue]!.base.withValues(
+        alpha: .34,
+      ),
+    );
+  });
+
+  testWidgets('photo card mode uses a cached thumbnail as its background', (
     tester,
   ) async {
     final imageBytes = Uint8List.fromList(
@@ -2369,7 +2816,8 @@ Bed Temperature: 80°C
     final item = sampleInventory.first.copyWith(
       id: 'INV-PHOTO-CARD',
       name: 'Cookiecad Blue Ombre TPU 95A',
-      imageBytes: imageBytes,
+      thumbnailBytes: imageBytes,
+      clearImageBytes: true,
       itemColorName: '#7455FF',
       itemColorLabel: 'Blue Ombre',
       materialId: 'MAT-FIL-TPU',
@@ -2407,6 +2855,46 @@ Bed Temperature: 80°C
     );
     expect(
       find.byKey(const Key('increase-quantity-INV-PHOTO-CARD')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('compact square photo cards do not overflow', (tester) async {
+    final thumbnail = Uint8List.fromList(
+      img.encodePng(img.Image(width: 2, height: 2)),
+    );
+    final item = sampleInventory.first.copyWith(
+      id: 'INV-COMPACT-PHOTO',
+      name: 'Long multicolor filament product name',
+      thumbnailBytes: thumbnail,
+      clearImageBytes: true,
+      itemColorName: '#7455FF',
+      itemColorLabel: 'Blue Ombre',
+      materialId: 'MAT-FIL-PLA',
+      materialName: 'PLA',
+      compatibility: const ['1 kg spool'],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox.square(
+            dimension: 200,
+            child: InventoryCard(
+              item: item,
+              photoCard: true,
+              onQuantityChanged: (_) {},
+              onOpen: () {},
+              onAction: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('photo-card-INV-COMPACT-PHOTO')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -2612,6 +3100,7 @@ Bed Temperature: 80°C
     await tester.pump();
 
     expect(find.text('×4'), findsOneWidget);
+    expect(find.byTooltip('Saving changes…'), findsOneWidget);
     expect(
       decodeWorkshopState(database.loadState())!.inventory.single.quantity,
       2,
@@ -2625,8 +3114,11 @@ Bed Temperature: 80°C
     await tester.pump(const Duration(milliseconds: 150));
     final saved = decodeWorkshopState(database.loadState())!;
     expect(saved.inventory.single.quantity, 4);
+    expect(find.byTooltip('Changes saved'), findsOneWidget);
     expect(saved.auditLog, hasLength(1));
     expect(saved.auditLog.single.changes['quantity'], '2 → 4');
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const Key('local-save-feedback')), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
@@ -2931,10 +3423,13 @@ Bed Temperature: 80°C
     expect(sortMenu.clipBehavior, Clip.antiAlias);
     await tester.tap(find.byKey(const Key('sort-menu')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('context-action-sort-age')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('context-action-sort-age')));
+    expect(
+      find.byKey(const Key('context-action-sort-addedDate')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
     await tester.pumpAndSettle();
-    expect(find.text('Age'), findsOneWidget);
+    expect(find.text('Added date'), findsOneWidget);
     await tester.fling(
       find.byType(CustomScrollView),
       const Offset(0, -3000),
@@ -2942,7 +3437,7 @@ Bed Temperature: 80°C
     );
     await tester.pumpAndSettle();
     expect(find.text('Page 1 of 3 · 30 results'), findsOneWidget);
-    expect(find.text('Page item 29'), findsNothing);
+    expect(find.text('Page item 0'), findsNothing);
 
     await tester.fling(
       find.byType(CustomScrollView),
@@ -2950,12 +3445,12 @@ Bed Temperature: 80°C
       3000,
     );
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).first, 'Page item 29');
+    await tester.enterText(find.byType(TextField).first, 'Page item 0');
     await tester.pumpAndSettle();
     expect(
       find.descendant(
         of: find.byType(InventoryCard),
-        matching: find.text('Page item 29'),
+        matching: find.text('Page item 0'),
       ),
       findsOneWidget,
     );
@@ -3022,6 +3517,21 @@ Bed Temperature: 80°C
       lessThan(
         tester
             .getTopLeft(find.byKey(const Key('inventory-row-INV-LOW-QUANTITY')))
+            .dy,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('sort-direction-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getTopLeft(find.byKey(const Key('inventory-row-INV-LOW-QUANTITY')))
+          .dy,
+      lessThan(
+        tester
+            .getTopLeft(
+              find.byKey(const Key('inventory-row-INV-HIGH-QUANTITY')),
+            )
             .dy,
       ),
     );
@@ -3751,7 +4261,7 @@ Bed Temperature: 80°C
     expect(configGroup, findsOneWidget);
     expect(
       find.descendant(of: configGroup, matching: find.byType(IconButton)),
-      findsNWidgets(5),
+      findsNWidgets(6),
     );
     expect(
       tester.getSize(find.byKey(const Key('personalization-settings'))),
@@ -3825,10 +4335,35 @@ Bed Temperature: 80°C
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('compact desktop controls stay aligned and give sliders room', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(758, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
+
+    final alerts = tester.getRect(find.byKey(const Key('moisture-alerts')));
+    final config = tester.getRect(find.byKey(const Key('config-action-group')));
+    expect(alerts.left, lessThan(60));
+    expect(config.right, greaterThan(690));
+    expect(
+      tester.getSize(find.byKey(const Key('page-size-slider'))).width,
+      greaterThan(200),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('card-size-slider'))).width,
+      greaterThan(200),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('local database uses action tiles on Android dimensions', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     tester.view.physicalSize = const Size(600, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -3903,7 +4438,8 @@ Bed Temperature: 80°C
         (decoration) =>
             decoration.gradient is LinearGradient &&
             (decoration.gradient! as LinearGradient).colors.first ==
-                const Color(0x29ffffff),
+                InventorinatorColors.palettes[AppColorTheme.darkPurple]!.base
+                    .withValues(alpha: .34),
       ),
       isTrue,
     );
@@ -6436,6 +6972,75 @@ Bed Temperature: 80°C
 
     expect(find.byKey(const Key('inventory-card-INV-ZERO')), findsNothing);
     expect(find.byKey(const Key('inventory-card-INV-STOCKED')), findsOneWidget);
+  });
+
+  testWidgets('zero-quantity visibility survives restart on this device', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final directory = Directory.systemTemp.createTempSync(
+      'inventorinator-hide-zero-',
+    );
+    final database = (await tester.runAsync(
+      () => LocalDatabase.open(
+        overridePath: '${directory.path}/inventory.sqlite3',
+      ),
+    ))!;
+    final state = encodeWorkshopState(
+      inventory: [
+        InventoryItem(
+          id: 'INV-ZERO-PERSIST',
+          name: 'Empty stack',
+          type: InventoryType.other,
+          compatibility: const [],
+          added: DateTime(2026),
+          cost: 0,
+          color: Colors.purple,
+          quantity: 0,
+        ),
+      ],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+    );
+    database.saveState(state);
+
+    await tester.pumpWidget(
+      InventorinatorApp(database: database, persistedState: state),
+    );
+    await tester.tap(find.byKey(const Key('personalization-settings')));
+    await tester.pumpAndSettle();
+    final preferenceToggle = find.byKey(const Key('hide-zero-personalization'));
+    await tester.ensureVisible(preferenceToggle);
+    await tester.tap(preferenceToggle);
+    await tester.pumpAndSettle();
+    expect(
+      database.loadBoolPreference('hide_zero_quantity_items', fallback: false),
+      isTrue,
+    );
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('inventory-card-INV-ZERO-PERSIST')),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await tester.pumpWidget(
+      InventorinatorApp(database: database, persistedState: state),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('inventory-card-INV-ZERO-PERSIST')),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    database.close();
+    directory.deleteSync(recursive: true);
   });
 
   testWidgets('printed part context menu finds compatible stocked filament', (

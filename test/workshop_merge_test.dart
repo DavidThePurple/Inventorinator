@@ -7,7 +7,14 @@ void main() {
   Map<String, dynamic> state() => {
     'schemaVersion': 3,
     'inventory': [
-      {'id': 'INV-1', 'name': 'PLA', 'quantity': 1, 'location': 'Shelf A'},
+      {
+        'id': 'INV-1',
+        'name': 'PLA',
+        'quantity': 1,
+        'location': 'Shelf A',
+        'filamentStatus': 'ready',
+        'image': null,
+      },
     ],
     'customItemTypes': [
       {
@@ -76,6 +83,30 @@ void main() {
       expect(item['location'], 'Shelf B');
     },
   );
+
+  test('an in-flight image save cannot reset a newer filament status', () {
+    final base = state();
+    final local = jsonDecode(jsonEncode(base)) as Map<String, dynamic>;
+    final cloud = jsonDecode(jsonEncode(base)) as Map<String, dynamic>;
+    final localItem = (local['inventory'] as List).single;
+    final cloudItem = (cloud['inventory'] as List).single;
+    localItem['filamentStatus'] = 'queuedForDrying';
+    localItem['image'] = null;
+    cloudItem['filamentStatus'] = 'ready';
+    cloudItem['image'] = 'base64-product-image';
+
+    final merged = jsonDecode(
+      mergeWorkshopStates(
+        jsonEncode(base),
+        jsonEncode(local),
+        jsonEncode(cloud),
+      ),
+    ) as Map<String, dynamic>;
+    final item = (merged['inventory'] as List).single;
+
+    expect(item['filamentStatus'], 'queuedForDrying');
+    expect(item['image'], 'base64-product-image');
+  });
 
   test('same-field conflicts pause instead of silently choosing a device', () {
     final base = state();

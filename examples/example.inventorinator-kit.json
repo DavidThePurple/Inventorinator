@@ -1,0 +1,66 @@
+{
+  "format": "inventorinator-kit",
+  "schemaVersion": 1,
+  "id": "example-printer-kit",
+  "name": "Example Printer Kit",
+  "description": "Small example package for testing Inventorinator v1.1.0 kit import.",
+  "sources": [
+    {
+      "title": "Official assembly manual",
+      "url": "https://example.com/printer/manual"
+    }
+  ],
+  "sections": [
+    {
+      "id": "frame",
+      "name": "Frame",
+      "description": "Structural frame components"
+    },
+    {
+      "id": "toolhead",
+      "name": "Toolhead"
+    }
+  ],
+  "parts": [
+    {
+      "id": "m3x10-screw",
+      "name": "M3x10 socket screw",
+      "type": "fastener",
+      "material": "Stainless steel",
+      "section": "frame",
+      "quantity": 12,
+      "unitCost": 0.08,
+      "sources": [
+        {
+          "title": "Official frame BOM",
+          "url": "https://example.com/printer/frame-bom"
+        }
+      ]
+    },
+    {
+      "id": "brass-nozzle",
+      "name": "0.4 mm brass nozzle",
+      "type": "nozzle",
+      "material": "Brass",
+      "section": "toolhead",
+      "quantity": 1,
+      "compatibility": [
+        "Example Printer"
+      ]
+    }
+  ],
+  "machines": [
+    {
+      "id": "example-printer",
+      "name": "Example Printer",
+      "type": "Printer",
+      "model": "Model 1",
+      "sources": [
+        {
+          "title": "Manufacturer product page",
+          "url": "https://example.com/printer"
+        }
+      ]
+    }
+  ]
+}

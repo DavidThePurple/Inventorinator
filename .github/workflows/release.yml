@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, matching pubspec.yaml (for example v1.0.0)"
+        description: "Release tag, matching pubspec.yaml (for example v1.1.0)"
         required: true
         type: string
 
@@ -36,13 +36,15 @@ jobs:
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
           test "$RELEASE_TAG" = "v$app_version"
+          ./tool/check_release_consistency.sh
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
 
   linux:
     needs: validate
-    runs-on: ubuntu-24.04
+    # Keep the portable Linux bundle compatible with Ubuntu 22.04-era glibc.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -65,17 +67,30 @@ jobs:
           install -m 644 \
             linux/packaging/media.everlasting.inventorinator.desktop \
             "$package_dir/Inventorinator.desktop"
+          install -m 644 README.md LICENSE CHANGELOG.md "$package_dir/"
           test -s "$package_dir/data/app_icon.png"
           test -s "$package_dir/Inventorinator.desktop"
+          test -s "$package_dir/LICENSE"
           test -s "$package_dir/share/icons/hicolor/512x512/apps/media.everlasting.inventorinator.png"
           test -s "$package_dir/share/applications/media.everlasting.inventorinator.desktop"
-          tar -C dist -czf "dist/Inventorinator-${RELEASE_TAG}-Linux-x64.tar.gz" Inventorinator
+          test -x "$package_dir/Inventorinator"
+          test -x "$package_dir/install.sh"
+          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
+          test -n "$app_build"
+          archive="Inventorinator-${RELEASE_TAG}-build${app_build}-Linux-x64.tar.gz"
+          tar -C dist -czf "dist/$archive" Inventorinator
+          verify_dir="$(mktemp -d)"
+          tar -C "$verify_dir" -xzf "dist/$archive"
+          test -x "$verify_dir/Inventorinator/Inventorinator"
+          test -x "$verify_dir/Inventorinator/install.sh"
+          rm -rf "$verify_dir"
           rm -rf "$package_dir"
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux
           path: dist/*
           if-no-files-found: error
+          retention-days: 7
 
   android:
     needs: validate
@@ -110,18 +125,25 @@ jobs:
             "storeFile=../inventorinator-upload.jks" \
             > android/key.properties
       - run: flutter pub get
-      - run: flutter build apk --release --split-per-abi
+      - run: |
+          flutter build apk --release
+          flutter build apk --release --split-per-abi
       - name: Name Android packages
         run: |
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk "dist/Inventorinator-${RELEASE_TAG}-Android-armeabi-v7a.apk"
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/Inventorinator-${RELEASE_TAG}-Android-arm64-v8a.apk"
-          cp build/app/outputs/flutter-apk/app-x86_64-release.apk "dist/Inventorinator-${RELEASE_TAG}-Android-x86_64.apk"
+          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
+          test -n "$app_build"
+          package_version="${RELEASE_TAG}-build${app_build}"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/Inventorinator-${package_version}-Android-universal.apk"
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk "dist/Inventorinator-${package_version}-Android-armeabi-v7a.apk"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/Inventorinator-${package_version}-Android-arm64-v8a.apk"
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk "dist/Inventorinator-${package_version}-Android-x86_64.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: release-android
           path: dist/*
           if-no-files-found: error
+          retention-days: 7
 
   windows:
     needs: validate
@@ -139,13 +161,23 @@ jobs:
       - name: Package Windows
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "dist\Inventorinator-$env:RELEASE_TAG-Windows-x64.zip"
+          $versionLine = Select-String -Path pubspec.yaml -Pattern '^version:\s+[^+]+\+(\d+)\s*$'
+          if (-not $versionLine) { throw "Missing application build number" }
+          $appBuild = $versionLine.Matches[0].Groups[1].Value
+          $packageDir = "dist\Inventorinator"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item -Recurse "build\windows\x64\runner\Release\*" $packageDir
+          Copy-Item README.md, LICENSE, CHANGELOG.md $packageDir
+          if (-not (Test-Path "$packageDir\Inventorinator.exe")) { throw "Missing Windows executable" }
+          if (-not (Test-Path "$packageDir\LICENSE")) { throw "Missing license" }
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\Inventorinator-$env:RELEASE_TAG-build$appBuild-Windows-x64.zip"
+          Remove-Item -Recurse -Force $packageDir
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows
           path: dist/*
           if-no-files-found: error
+          retention-days: 7
 
   publish:
     needs: [linux, android, windows]

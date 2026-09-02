@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -88,6 +89,63 @@ void main() {
       reopened.loadStringPreference('device_name', fallback: 'Unknown'),
       'Workshop desktop',
     );
+    reopened.close();
+  });
+
+  test('sync session operations are serialized per database', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-sync-lock-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    final firstRelease = Completer<void>();
+    final order = <String>[];
+
+    final first = database.withSyncSessionLock(() async {
+      order.add('first-start');
+      await firstRelease.future;
+      order.add('first-end');
+    });
+    final second = database.withSyncSessionLock(() async {
+      order.add('second-start');
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(order, ['first-start']);
+    firstRelease.complete();
+    await Future.wait([first, second]);
+    expect(order, ['first-start', 'first-end', 'second-start']);
+    database.close();
+  });
+
+  test('owner recovery credential survives close and reopen', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-recovery-key-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final path = '${directory.path}/inventory.sqlite3';
+    final database = await LocalDatabase.open(overridePath: path);
+    database.saveWorkspaceRecoveryKey('workspace-1', 'RECOVERY-KEY');
+    database.close();
+
+    final reopened = await LocalDatabase.open(overridePath: path);
+    expect(reopened.loadWorkspaceRecoveryKey('workspace-1'), 'RECOVERY-KEY');
+    reopened.close();
+  });
+
+  test('API cache survives close and reopen', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-api-cache-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final path = '${directory.path}/inventory.sqlite3';
+    final database = await LocalDatabase.open(overridePath: path);
+    database.saveApiCache('filamentcolors:test', '{"results":[]}');
+    database.close();
+
+    final reopened = await LocalDatabase.open(overridePath: path);
+    expect(reopened.loadApiCache('filamentcolors:test'), '{"results":[]}');
     reopened.close();
   });
 

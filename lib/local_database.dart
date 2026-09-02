@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,11 +7,32 @@ import 'package:path/path.dart' as path_util;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+class LocalDatabaseAlreadyOpenException implements Exception {
+  const LocalDatabaseAlreadyOpenException();
+
+  @override
+  String toString() => 'Inventorinator is already running.';
+}
+
 class LocalDatabase {
-  LocalDatabase._(this.path, this._database);
+  LocalDatabase._(this.path, this._database, this._instanceLock);
 
   final String path;
   Database _database;
+  final RandomAccessFile? _instanceLock;
+  Future<void> _syncSessionTail = Future<void>.value();
+
+  Future<T> withSyncSessionLock<T>(Future<T> Function() action) async {
+    final previous = _syncSessionTail;
+    final release = Completer<void>();
+    _syncSessionTail = release.future;
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release.complete();
+    }
+  }
 
   static Future<LocalDatabase> open({String? overridePath}) async {
     final databasePath =
@@ -20,8 +42,19 @@ class LocalDatabase {
           'inventorinator.sqlite3',
         );
     await Directory(path_util.dirname(databasePath)).create(recursive: true);
+    RandomAccessFile? instanceLock;
+    if (overridePath == null &&
+        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      instanceLock = File('$databasePath.lock').openSync(mode: FileMode.append);
+      try {
+        instanceLock.lockSync(FileLock.exclusive);
+      } on FileSystemException {
+        instanceLock.closeSync();
+        throw const LocalDatabaseAlreadyOpenException();
+      }
+    }
     final database = sqlite3.open(databasePath);
-    final result = LocalDatabase._(databasePath, database);
+    final result = LocalDatabase._(databasePath, database, instanceLock);
     result._createSchema();
     await _hardenLocalPermissions(databasePath);
     return result;
@@ -58,6 +91,13 @@ class LocalDatabase {
       CREATE TABLE IF NOT EXISTS preferences (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      ) STRICT
+    ''');
+    _database.execute('''
+      CREATE TABLE IF NOT EXISTS api_cache (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       ) STRICT
     ''');
   }
@@ -99,6 +139,25 @@ class LocalDatabase {
     );
   }
 
+  String? loadApiCache(String key) {
+    final rows = _database.select('SELECT value FROM api_cache WHERE key = ?', [
+      key,
+    ]);
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  void saveApiCache(String key, String value) {
+    _database.execute(
+      '''
+      INSERT INTO api_cache (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+      ''',
+      [key, value, DateTime.now().toUtc().toIso8601String()],
+    );
+  }
+
   String? loadSyncConfig() {
     final rows = _database.select(
       'SELECT config_json FROM sync_config WHERE id = 1',
@@ -116,6 +175,22 @@ class LocalDatabase {
         updated_at = excluded.updated_at
       ''',
       [configJson, DateTime.now().toUtc().toIso8601String()],
+    );
+  }
+
+  String? loadWorkspaceRecoveryKey(String workspaceId) {
+    final value = loadStringPreference(
+      'workspace_recovery_key_$workspaceId',
+      fallback: '',
+    ).trim();
+    return value.isEmpty ? null : value;
+  }
+
+  void saveWorkspaceRecoveryKey(String workspaceId, String recoveryKey) {
+    if (workspaceId.trim().isEmpty || recoveryKey.trim().isEmpty) return;
+    saveStringPreference(
+      'workspace_recovery_key_${workspaceId.trim()}',
+      recoveryKey.trim(),
     );
   }
 
@@ -231,5 +306,8 @@ class LocalDatabase {
     await _hardenLocalPermissions(path);
   }
 
-  void close() => _database.close();
+  void close() {
+    _database.close();
+    _instanceLock?.closeSync();
+  }
 }

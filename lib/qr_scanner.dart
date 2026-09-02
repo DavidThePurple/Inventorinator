@@ -111,6 +111,13 @@ class _InventoryQrScannerState extends State<InventoryQrScanner> {
                   onCode: (code, image) => widget.onCode(code, mode, image),
                   onLabelCapture: widget.onLabelCapture,
                 )
+              : Platform.isWindows
+              ? _WindowsCameraScanner(
+                  mode: mode,
+                  captureMode: captureMode,
+                  onCode: (code, image) => widget.onCode(code, mode, image),
+                  onLabelCapture: widget.onLabelCapture,
+                )
               : _UnsupportedScanner(
                   onCode: (code) => widget.onCode(code, mode, null),
                 ),
@@ -324,6 +331,283 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
   }
 }
 
+class _WindowsCameraScanner extends StatefulWidget {
+  const _WindowsCameraScanner({
+    required this.onCode,
+    required this.mode,
+    required this.captureMode,
+    this.onLabelCapture,
+  });
+
+  final void Function(String code, Uint8List? imageBytes) onCode;
+  final ScanMode mode;
+  final ScanCaptureMode captureMode;
+  final LabelCaptureCallback? onLabelCapture;
+
+  @override
+  State<_WindowsCameraScanner> createState() =>
+      _WindowsCameraScannerState();
+}
+
+class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
+  final manual = TextEditingController();
+  List<CameraDescription> cameras = const [];
+  int selectedCamera = 0;
+  CameraController? camera;
+  Timer? scanTimer;
+  bool initializing = true;
+  bool capturing = false;
+  bool decoding = false;
+  bool delivered = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_findCameras());
+  }
+
+  @override
+  void didUpdateWidget(covariant _WindowsCameraScanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mode != widget.mode ||
+        oldWidget.captureMode != widget.captureMode) {
+      delivered = false;
+    }
+  }
+
+  Future<void> _findCameras() async {
+    scanTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        initializing = true;
+        error = null;
+      });
+    }
+    try {
+      final found = await availableCameras();
+      if (!mounted) return;
+      setState(() {
+        cameras = found;
+        selectedCamera = selectedCamera
+            .clamp(0, found.isEmpty ? 0 : found.length - 1)
+            .toInt();
+        initializing = false;
+        error = found.isEmpty ? 'No Windows camera was found.' : null;
+      });
+      if (found.isNotEmpty) await _startCamera(selectedCamera);
+    } catch (exception) {
+      if (!mounted) return;
+      setState(() {
+        initializing = false;
+        error = 'Could not list Windows cameras: $exception';
+      });
+    }
+  }
+
+  Future<void> _startCamera(int index) async {
+    scanTimer?.cancel();
+    final previous = camera;
+    camera = null;
+    if (mounted) {
+      setState(() {
+        selectedCamera = index;
+        initializing = true;
+        error = null;
+      });
+    }
+    await previous?.dispose();
+    try {
+      final next = CameraController(
+        cameras[index],
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+      await next.initialize();
+      if (!mounted) {
+        await next.dispose();
+        return;
+      }
+      setState(() {
+        camera = next;
+        initializing = false;
+        delivered = false;
+      });
+      scanTimer = Timer.periodic(
+        const Duration(milliseconds: 650),
+        (_) => unawaited(_scanCurrentFrame()),
+      );
+    } catch (exception) {
+      if (!mounted) return;
+      setState(() {
+        initializing = false;
+        error = 'Could not open ${cameras[index].name}: $exception';
+      });
+    }
+  }
+
+  Future<Uint8List?> _takePicture() async {
+    final active = camera;
+    if (active == null || !active.value.isInitialized || capturing) return null;
+    capturing = true;
+    try {
+      final picture = await active.takePicture();
+      final bytes = await picture.readAsBytes();
+      try {
+        await File(picture.path).delete();
+      } catch (_) {
+        // The Windows plugin normally stores captures in a temporary file.
+      }
+      return bytes;
+    } catch (exception) {
+      if (mounted) setState(() => error = 'Camera capture failed: $exception');
+      return null;
+    } finally {
+      capturing = false;
+    }
+  }
+
+  Future<void> _scanCurrentFrame() async {
+    if (widget.captureMode != ScanCaptureMode.barcode ||
+        delivered ||
+        decoding) {
+      return;
+    }
+    final bytes = await _takePicture();
+    if (bytes == null) return;
+    decoding = true;
+    try {
+      String? code;
+      try {
+        code = widget.mode == ScanMode.ingest
+            ? await compute(decodeProductBarcodeFrame, bytes)
+            : await compute(decodeAnyBarcodeFrame, bytes);
+      } catch (exception) {
+        debugPrint('Windows barcode decoder error: $exception');
+      }
+      code ??= await compute(_decodeQrFrame, bytes);
+      if (code != null && !delivered) {
+        delivered = true;
+        widget.onCode(code, bytes);
+      }
+    } finally {
+      decoding = false;
+    }
+  }
+
+  Future<void> _captureLabel() async {
+    if (widget.onLabelCapture == null) return;
+    final bytes = await _takePicture();
+    if (bytes != null) await widget.onLabelCapture!(bytes);
+  }
+
+  @override
+  void dispose() {
+    scanTimer?.cancel();
+    manual.dispose();
+    unawaited(camera?.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = camera;
+    return Column(
+      children: [
+        if (cameras.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: DropdownButtonFormField<int>(
+              key: const Key('windows-camera-selector'),
+              initialValue: selectedCamera,
+              decoration: const InputDecoration(
+                labelText: 'Camera',
+                prefixIcon: Icon(Icons.videocam_outlined),
+              ),
+              items: [
+                for (var index = 0; index < cameras.length; index++)
+                  DropdownMenuItem(
+                    value: index,
+                    child: Text(
+                      cameras[index].name,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: initializing
+                  ? null
+                  : (value) {
+                      if (value != null && value != selectedCamera) {
+                        unawaited(_startCamera(value));
+                      }
+                    },
+            ),
+          ),
+        Expanded(
+          child: active == null || !active.value.isInitialized
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (initializing) const CircularProgressIndicator(),
+                      if (error != null) ...[
+                        Text(error!, textAlign: TextAlign.center),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _findCameras,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Check cameras again'),
+                        ),
+                      ],
+                    ],
+                  ),
+                )
+              : GestureDetector(
+                  key: const Key('scanner-camera-surface'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap:
+                      widget.mode == ScanMode.ingest &&
+                          widget.captureMode == ScanCaptureMode.ocr &&
+                          widget.onLabelCapture != null
+                      ? _captureLabel
+                      : null,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Center(
+                        child: AspectRatio(
+                          aspectRatio: active.value.aspectRatio,
+                          child: CameraPreview(active),
+                        ),
+                      ),
+                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
+                      if (capturing &&
+                          widget.captureMode == ScanCaptureMode.ocr)
+                        const ColoredBox(
+                          color: Color(0x33000000),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                    ],
+                  ),
+                ),
+        ),
+        if (error != null && active != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              error!,
+              style: const TextStyle(color: Colors.orangeAccent),
+            ),
+          ),
+        _ManualCode(
+          controller: manual,
+          onCode: (code) => widget.onCode(code, null),
+        ),
+      ],
+    );
+  }
+}
+
 class _LinuxCameraScanner extends StatefulWidget {
   const _LinuxCameraScanner({
     required this.onCode,
@@ -518,7 +802,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       try {
         code = widget.mode == ScanMode.ingest
             ? await compute(decodeProductBarcodeFrame, bytes)
-            : await compute(_decodeAnyBarcodeFrame, bytes);
+            : await compute(decodeAnyBarcodeFrame, bytes);
       } catch (exception) {
         debugPrint('Native barcode decoder error: $exception');
       }
@@ -824,7 +1108,7 @@ String? _decodeBarcodeFrame(Uint8List bytes, int format) {
   return _decodeBarcodeImage(image, format);
 }
 
-String? _decodeAnyBarcodeFrame(Uint8List bytes) =>
+String? decodeAnyBarcodeFrame(Uint8List bytes) =>
     _decodeBarcodeFrame(bytes, zxing.Format.any);
 
 String? decodeProductBarcodeFrame(Uint8List bytes) {

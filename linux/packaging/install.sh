@@ -8,6 +8,11 @@ icons_root="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 icons_dir="$icons_root/512x512/apps"
 bin_dir="$HOME/.local/bin"
 
+# Repair the application bit if an archive extractor discarded Unix modes.
+if [[ ! -x "$source_dir/Inventorinator" ]]; then
+  chmod u+x "$source_dir/Inventorinator"
+fi
+
 test -x "$source_dir/Inventorinator"
 test -s "$source_dir/data/app_icon.png"
 

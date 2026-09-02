@@ -435,6 +435,334 @@ enum InventoryType {
   custom,
 }
 
+class _InventoryMetrics {
+  const _InventoryMetrics({
+    required this.itemRecords,
+    required this.totalUnits,
+    required this.filamentSpools,
+    required this.lowStockRecords,
+  });
+
+  /// Number of inventory rows, i.e. distinct items/stacks (not units).
+  final int itemRecords;
+
+  /// Sum of [InventoryItem.quantity] across every non-archived item.
+  final double totalUnits;
+
+  /// Sum of [InventoryItem.quantity] across non-archived filament items;
+  /// a stack of 5 spools in one row counts as 5, not 1.
+  final double filamentSpools;
+
+  final int lowStockRecords;
+}
+
+class _MetricStat {
+  const _MetricStat(this.label, this.value, this.icon);
+  final String label;
+  final String value;
+  final IconData icon;
+}
+
+class _JewelPanel extends StatelessWidget {
+  const _JewelPanel({
+    required this.title,
+    required this.palette,
+    required this.child,
+  });
+
+  final String title;
+  final InventorinatorColors palette;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: palette.panel,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: palette.outlineVariant),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+            letterSpacing: .3,
+          ),
+        ),
+        const SizedBox(height: 10),
+        child,
+      ],
+    ),
+  );
+}
+
+/// A glowing filled line chart in the style of a "jewel" sparkline: a
+/// gradient-filled area under a blurred, luminous stroke, with the peak
+/// point called out beneath the chart.
+class _JewelAreaChart extends StatelessWidget {
+  const _JewelAreaChart({required this.series, required this.color});
+
+  final List<({String label, double value})> series;
+  final Color color;
+  static const double _height = 130;
+
+  @override
+  Widget build(BuildContext context) {
+    if (series.length < 2) {
+      return const SizedBox(
+        height: _height,
+        child: Center(
+          child: Text(
+            'Not enough history yet.',
+            style: TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    final peak = series.reduce((a, b) => a.value >= b.value ? a : b);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: _height,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _JewelAreaChartPainter(
+              values: [for (final point in series) point.value],
+              color: color,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (final point in series)
+              Text(
+                point.label,
+                style: const TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.trending_up_rounded, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              'Peak ${_formatBomQuantity(peak.value)} units in ${peak.label}',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _JewelAreaChartPainter extends CustomPainter {
+  _JewelAreaChartPainter({required this.values, required this.color});
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final maxValue = values.reduce(math.max);
+    final minValue = math.min(0.0, values.reduce(math.min));
+    final range = (maxValue - minValue).abs() < 1e-6
+        ? 1.0
+        : maxValue - minValue;
+    final stepX = size.width / (values.length - 1);
+
+    Offset pointAt(int i) {
+      final normalized = (values[i] - minValue) / range;
+      return Offset(stepX * i, size.height - normalized * size.height);
+    }
+
+    final linePath = Path()..moveTo(pointAt(0).dx, pointAt(0).dy);
+    for (var i = 0; i < values.length - 1; i++) {
+      final current = pointAt(i);
+      final next = pointAt(i + 1);
+      final controlX = (current.dx + next.dx) / 2;
+      linePath.cubicTo(
+        controlX,
+        current.dy,
+        controlX,
+        next.dy,
+        next.dx,
+        next.dy,
+      );
+    }
+
+    final fillPath = Path.from(linePath)
+      ..lineTo(pointAt(values.length - 1).dx, size.height)
+      ..lineTo(pointAt(0).dx, size.height)
+      ..close();
+
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..shader =
+            LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                color.withValues(alpha: .38),
+                color.withValues(alpha: 0),
+              ],
+            ).createShader(
+              Rect.fromLTWH(0, 0, size.width, size.height),
+            ),
+    );
+
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = color.withValues(alpha: .55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round,
+    );
+
+    final peakIndex = values.indexOf(maxValue);
+    final peakPoint = pointAt(peakIndex);
+    canvas.drawCircle(
+      peakPoint,
+      7,
+      Paint()
+        ..color = color.withValues(alpha: .3)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    canvas.drawCircle(peakPoint, 4, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      peakPoint,
+      4,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _JewelAreaChartPainter oldDelegate) =>
+      !identical(oldDelegate.values, values) || oldDelegate.color != color;
+}
+
+/// A compact glowing bar breakdown used alongside [_JewelAreaChart] for
+/// snapshot distributions (e.g. units per item type) rather than trends.
+class _JewelBarList extends StatelessWidget {
+  const _JewelBarList({required this.series, required this.color});
+
+  final List<({String label, double value})> series;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    if (series.isEmpty) {
+      return const SizedBox(
+        height: 130,
+        child: Center(
+          child: Text(
+            'No items yet.',
+            style: TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    final maxValue = series.map((point) => point.value).reduce(math.max);
+    return Column(
+      children: [
+        for (final point in series)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        point.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    Text(
+                      _formatBomQuantity(point.value),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => Stack(
+                      children: [
+                        Container(
+                          height: 6,
+                          width: constraints.maxWidth,
+                          color: color.withValues(alpha: .12),
+                        ),
+                        Container(
+                          height: 6,
+                          width: maxValue <= 0
+                              ? 0
+                              : constraints.maxWidth *
+                                    (point.value / maxValue),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                color.withValues(alpha: .55),
+                                color,
+                              ],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: color.withValues(alpha: .55),
+                                blurRadius: 6,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 extension InventoryTypeContext on InventoryType {
   bool get supportsDrying => this == InventoryType.filament;
   bool get supportsPrinting =>
@@ -5048,8 +5376,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       ExpansibleController();
   final ExpansibleController colorFilterExpansionController =
       ExpansibleController();
+  final ExpansibleController metricsExpansionController =
+      ExpansibleController();
   bool typePanelExpanded = false;
   bool colorPanelExpanded = false;
+  bool metricsPanelExpanded = false;
   Timer? _syncDebounce;
   Timer? _deferredAutoSync;
   Timer? _syncPoll;
@@ -5270,6 +5601,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     hideZeroQuantityItems =
         widget.database?.loadBoolPreference(
           'hide_zero_quantity_items',
+          fallback: false,
+        ) ??
+        false;
+    metricsPanelExpanded =
+        widget.database?.loadBoolPreference(
+          'metrics_panel_expanded',
           fallback: false,
         ) ??
         false;
@@ -6320,6 +6657,86 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     _visibleItemsCacheKey = cacheKey;
     return _visibleItemsCache = result;
+  }
+
+  _InventoryMetrics get _inventoryMetrics {
+    var itemRecords = 0;
+    var totalUnits = 0.0;
+    var filamentSpools = 0.0;
+    var lowStockRecords = 0;
+    for (final item in inventory) {
+      if (item.archived) continue;
+      itemRecords++;
+      totalUnits += item.quantity;
+      if (item.type == InventoryType.filament) filamentSpools += item.quantity;
+      if (item.quantityAlertThreshold != null &&
+          item.quantity <= item.quantityAlertThreshold!) {
+        lowStockRecords++;
+      }
+    }
+    return _InventoryMetrics(
+      itemRecords: itemRecords,
+      totalUnits: totalUnits,
+      filamentSpools: filamentSpools,
+      lowStockRecords: lowStockRecords,
+    );
+  }
+
+  static const _monthAbbreviations = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  /// Cumulative non-archived unit count by the end of each of the last six
+  /// months, derived from each item's `added` timestamp. There is no
+  /// historical snapshot table, so this reflects units currently on hand
+  /// grouped by when they were added rather than true point-in-time stock.
+  List<({String label, double value})> get _inventoryGrowthSeries {
+    final now = DateTime.now();
+    final monthStarts = List.generate(
+      6,
+      (i) => DateTime(now.year, now.month - 5 + i, 1),
+    );
+    return [
+      for (final monthStart in monthStarts)
+        (
+          label: _monthAbbreviations[monthStart.month - 1],
+          value: inventory
+              .where(
+                (item) =>
+                    !item.archived &&
+                    item.added.isBefore(
+                      DateTime(monthStart.year, monthStart.month + 1, 1),
+                    ),
+              )
+              .fold(0.0, (sum, item) => sum + item.quantity),
+        ),
+    ];
+  }
+
+  /// Total units on hand per item type, largest first.
+  List<({String label, double value})> get _inventoryTypeDistribution {
+    final totals = <String, double>{};
+    for (final item in inventory) {
+      if (item.archived) continue;
+      final label = _itemTypeDisplayLabel(item);
+      totals[label] = (totals[label] ?? 0) + item.quantity;
+    }
+    final entries = totals.entries.where((entry) => entry.value > 0).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return [
+      for (final entry in entries.take(6)) (label: entry.key, value: entry.value),
+    ];
   }
 
   @override
@@ -12140,6 +12557,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (catalogFilter == null) ...[
+              _metricsPanel(),
+              const SizedBox(height: 14),
+            ],
             TextField(
               key: const Key('inventory-search'),
               controller: inventorySearchController,
@@ -14518,6 +14939,148 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
     }
     return const Icon(Icons.category_outlined, size: 20);
+  }
+
+  Widget _metricsPanel() {
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final metrics = _inventoryMetrics;
+    final stats = [
+      _MetricStat(
+        'Filament spools',
+        _formatBomQuantity(metrics.filamentSpools),
+        Icons.inventory_2_outlined,
+      ),
+      _MetricStat(
+        'Total units',
+        _formatBomQuantity(metrics.totalUnits),
+        Icons.widgets_outlined,
+      ),
+      _MetricStat(
+        'Item records',
+        metrics.itemRecords.toString(),
+        Icons.list_alt_outlined,
+      ),
+      _MetricStat(
+        'Low stock',
+        metrics.lowStockRecords.toString(),
+        Icons.warning_amber_rounded,
+      ),
+    ];
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: const Key('metrics-panel'),
+          controller: metricsExpansionController,
+          initiallyExpanded: metricsPanelExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => metricsPanelExpanded = expanded);
+            widget.database?.saveBoolPreference(
+              'metrics_panel_expanded',
+              expanded,
+            );
+          },
+          leading: const Icon(Icons.query_stats_rounded),
+          title: const Text(
+            'Metrics',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text(
+            '${_formatBomQuantity(metrics.filamentSpools)} filament spools · '
+            '${metrics.itemRecords} item records',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Color(0xff9da5b7)),
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final stat in stats) _metricStatTile(stat, palette),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _metricsCharts(palette),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _metricStatTile(_MetricStat stat, InventorinatorColors palette) =>
+      Container(
+        width: 150,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: palette.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: palette.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(stat.icon, size: 18, color: palette.accent),
+            const SizedBox(height: 8),
+            Text(
+              stat.value,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            Text(
+              stat.label,
+              style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+
+  Widget _metricsCharts(InventorinatorColors palette) {
+    final growth = _inventoryGrowthSeries;
+    final distribution = _inventoryTypeDistribution;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stacked = constraints.maxWidth < 640;
+        final growthChart = _JewelPanel(
+          title: 'Inventory growth',
+          palette: palette,
+          child: _JewelAreaChart(series: growth, color: palette.accent),
+        );
+        final distributionChart = _JewelPanel(
+          title: 'Units by type',
+          palette: palette,
+          child: _JewelBarList(series: distribution, color: palette.accent),
+        );
+        if (stacked) {
+          return Column(
+            children: [
+              growthChart,
+              const SizedBox(height: 12),
+              distributionChart,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 3, child: growthChart),
+            const SizedBox(width: 12),
+            Expanded(flex: 2, child: distributionChart),
+          ],
+        );
+      },
+    );
   }
 
   Widget _typeFilterPanel({bool compact = false}) => Material(

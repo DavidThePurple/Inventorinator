@@ -115,6 +115,68 @@ begin
 end;
 $$;
 
+-- A stale snapshot must not interpret an empty location that it never loaded
+-- as a deletion. Explicit entity tombstones remain authoritative.
+select public.apply_inventorinator_entity_changes(
+  '60000000-0000-0000-0000-000000000001',
+  'current-device',
+  '[{
+    "entityType":"locations",
+    "entityId":"LOC-EMPTY",
+    "fields":{"id":"LOC-EMPTY","name":"Empty shelf"},
+    "deleted":false
+  }]'::jsonb
+);
+
+select public.save_inventorinator_workshop_state(
+  '60000000-0000-0000-0000-000000000001',
+  '{"schemaVersion":8,"inventory":[{"id":"LEGACY-A","name":"Nut","quantity":5}]}'::jsonb
+);
+
+do $$
+begin
+  if not exists (
+    select 1 from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'locations' and entity_id = 'LOC-EMPTY' and not deleted
+  ) then
+    raise exception 'stale snapshot deleted an empty location entity';
+  end if;
+  if not exists (
+    select 1
+    from public.workshop_states state,
+         jsonb_array_elements(coalesce(state.state_json->'locations', '[]'::jsonb)) location
+    where state.workspace_id = '60000000-0000-0000-0000-000000000001'
+      and location->>'id' = 'LOC-EMPTY'
+  ) then
+    raise exception 'stale snapshot removed an empty location from compatibility state';
+  end if;
+end;
+$$;
+
+select public.apply_inventorinator_entity_changes(
+  '60000000-0000-0000-0000-000000000001',
+  'current-device',
+  '[{
+    "entityType":"locations",
+    "entityId":"LOC-EMPTY",
+    "fields":{},
+    "deleted":true
+  }]'::jsonb
+);
+
+do $$
+begin
+  if not exists (
+    select 1 from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'locations' and entity_id = 'LOC-EMPTY' and deleted
+  ) then
+    raise exception 'explicit location deletion was blocked';
+  end if;
+end;
+$$;
+
 -- Incremental writes must preserve the v1.1 role boundaries rather than
 -- bypassing them simply because a client sends one entity at a time.
 insert into auth.users(id) values

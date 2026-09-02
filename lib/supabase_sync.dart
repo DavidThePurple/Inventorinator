@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
 
-const requiredInventorinatorSchemaVersion = 12;
+const requiredInventorinatorSchemaVersion = 13;
 
 bool canManageWorkspaceDevices(String? role) =>
     role == 'owner' || role == 'admin' || role == 'manager';

@@ -21,6 +21,12 @@ All notable changes to Inventorinator will be recorded here.
 - Shared-inventory ownership now survives auth-user deletion, preserves stolen
   device blocks and audit history, and revokes stale pairing codes on recovery.
 
+### Fixed
+
+- Empty storage locations are no longer deleted when a stale snapshot-based
+  device synchronizes. Schema 13 also restores location tombstones previously
+  created by that compatibility path.
+
 ## [0.0.9-alpha] - 2026-08-28
 
 ### Added

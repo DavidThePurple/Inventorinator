@@ -15,8 +15,10 @@ extract full administrator access. Therefore:
 - an outdated server is rejected with its installed and required versions;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current required schema: **v12**. Schema v12 replaces whole-inventory snapshot
-transfers with per-record revisions, deletion markers, and client outboxes.
+Current development schema: **v13**. Schema v12 replaces whole-inventory
+snapshot transfers with per-record revisions, deletion markers, and client
+outboxes. Schema v13 prevents stale snapshot clients from deleting locations
+they never loaded and recovers location tombstones caused by that bug.
 
 Schema v8-v10 add owner recovery and durability. Save the recovery package
 when creating a shared inventory. It can transfer ownership to a replacement

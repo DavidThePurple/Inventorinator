@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/local_database.dart';
+import 'package:inventorinator/workshop_delta.dart';
 
 void main() {
   test('POSIX database and support directory are private', () async {
@@ -147,6 +149,136 @@ void main() {
     final reopened = await LocalDatabase.open(overridePath: path);
     expect(reopened.loadApiCache('filamentcolors:test'), '{"results":[]}');
     reopened.close();
+  });
+
+  test('entity updates persist and queue only changed fields', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-entity-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    database.saveState(
+      '{"schemaVersion":8,"inventory":[{"id":"A","name":"Bolt","quantity":2}],"vendors":[],"brands":[],"products":[]}',
+    );
+
+    database.saveEntityPayloadAndQueue('inventory', 'A', {
+      'id': 'A',
+      'name': 'Bolt',
+      'quantity': 3,
+    });
+
+    final pending = database.loadPendingWorkshopChanges();
+    expect(pending, hasLength(1));
+    expect(pending.single.change.fields, {'quantity': 3});
+    expect(database.loadState(), contains('"quantity":3'));
+    database.acknowledgePendingWorkshopChanges(pending);
+    expect(database.loadPendingWorkshopChanges(), isEmpty);
+    database.close();
+  });
+
+  test(
+    'full inventory images stay lazy while thumbnails load with cards',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'inventorinator-lazy-images-db-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final database = await LocalDatabase.open(
+        overridePath: '${directory.path}/inventory.sqlite3',
+      );
+      final image = Uint8List.fromList([1, 2, 3, 4]);
+      final label = Uint8List.fromList([5, 6, 7]);
+      final thumbnail = Uint8List.fromList([8, 9]);
+      database.saveState(
+        jsonEncode({
+          'schemaVersion': 8,
+          'inventory': [
+            {
+              'id': 'IMAGE-A',
+              'name': 'Filament',
+              'image': base64Encode(image),
+              'labelImage': base64Encode(label),
+              'thumbnail': base64Encode(thumbnail),
+            },
+          ],
+          'vendors': [],
+          'brands': [],
+          'products': [],
+        }),
+      );
+
+      final lightweight = jsonDecode(
+        database.loadState(includeFullImages: false)!,
+      ) as Map<String, dynamic>;
+      final lightweightItem = (lightweight['inventory'] as List).single as Map;
+      expect(lightweightItem.containsKey('image'), isFalse);
+      expect(lightweightItem.containsKey('labelImage'), isFalse);
+      expect(lightweightItem['thumbnail'], base64Encode(thumbnail));
+
+      final loaded = database.loadInventoryImages('IMAGE-A');
+      expect(loaded.imageBytes, image);
+      expect(loaded.labelImageBytes, label);
+      final complete = database.loadState()!;
+      expect(complete, contains(base64Encode(image)));
+      database.close();
+    },
+  );
+
+  test('remote entity updates do not enter the local outbox', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-remote-entity-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    database.saveState(
+      '{"schemaVersion":8,"inventory":[],"vendors":[],"brands":[],"products":[]}',
+    );
+    database.applyRemoteWorkshopChanges(const [
+      WorkshopEntityChange(
+        entityType: 'inventory',
+        entityId: 'A',
+        fields: {'id': 'A', 'name': 'Bolt', 'quantity': 2},
+      ),
+    ]);
+    expect(database.loadState(), contains('"name":"Bolt"'));
+    expect(database.loadPendingWorkshopChanges(), isEmpty);
+    database.close();
+  });
+
+  test('acknowledging an upload never discards a newer queued edit', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-outbox-version-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    database.saveState(
+      '{"schemaVersion":8,"inventory":[{"id":"A","name":"Bolt","quantity":2}],"vendors":[],"brands":[],"products":[]}',
+    );
+    database.saveEntityPayloadAndQueue('inventory', 'A', {
+      'id': 'A',
+      'name': 'Bolt',
+      'quantity': 3,
+    });
+    final uploading = database.loadPendingWorkshopChanges();
+
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+    database.saveEntityPayloadAndQueue('inventory', 'A', {
+      'id': 'A',
+      'name': 'Bolt',
+      'quantity': 4,
+    });
+    database.acknowledgePendingWorkshopChanges(uploading);
+
+    final remaining = database.loadPendingWorkshopChanges();
+    expect(remaining, hasLength(1));
+    expect(remaining.single.change.fields['quantity'], 4);
+    database.close();
   });
 
   test(

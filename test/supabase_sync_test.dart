@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:inventorinator/supabase_sync.dart';
+import 'package:inventorinator/workshop_delta.dart';
 
 void main() {
   const config = SupabaseConfig(
@@ -204,6 +205,92 @@ void main() {
       ],
     );
     expect(updated, DateTime.utc(2026, 8, 27, 12));
+  });
+
+  test(
+    'incremental download requests only rows after the local cursor',
+    () async {
+      final service = SupabaseSyncService(
+        config.copyWith(workspaceId: 'workspace-id'),
+        client: MockClient((request) async {
+          expect(request.url.path, '/rest/v1/inventorinator_entities');
+          expect(request.url.queryParameters['revision'], 'gt.41');
+          return http.Response(
+            jsonEncode([
+              {
+                'entity_type': 'inventory',
+                'entity_id': 'INV-1',
+                'payload': {'id': 'INV-1', 'quantity': 7},
+                'deleted': false,
+                'revision': 42,
+              },
+            ]),
+            200,
+          );
+        }),
+      );
+      final batch = await service.downloadChanges(
+        const SupabaseSession(
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          userId: 'user-id',
+        ),
+        afterRevision: 41,
+      );
+      expect(batch.revision, 42);
+      expect(batch.changes.single.entityId, 'INV-1');
+    },
+  );
+
+  test('incremental upload sends field patches and tombstones', () async {
+    final service = SupabaseSyncService(
+      config.copyWith(workspaceId: 'workspace-id'),
+      client: MockClient((request) async {
+        expect(
+          request.url.path,
+          '/rest/v1/rpc/apply_inventorinator_entity_changes',
+        );
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['source_device'], 'PHONE');
+        expect(body['entity_changes'], [
+          {
+            'entityType': 'inventory',
+            'entityId': 'INV-1',
+            'fields': {'quantity': 7},
+            'deleted': false,
+          },
+          {
+            'entityType': 'inventory',
+            'entityId': 'INV-2',
+            'fields': <String, dynamic>{},
+            'deleted': true,
+          },
+        ]);
+        return http.Response('43', 200);
+      }),
+    );
+    final revision = await service.uploadChanges(
+      const SupabaseSession(
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        userId: 'user-id',
+      ),
+      const [
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'INV-1',
+          fields: {'quantity': 7},
+        ),
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'INV-2',
+          fields: {},
+          deleted: true,
+        ),
+      ],
+      deviceId: 'PHONE',
+    );
+    expect(revision, 43);
   });
 
   test(

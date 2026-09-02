@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:http/http.dart' as http;
 
-const requiredInventorinatorSchemaVersion = 11;
+import 'workshop_delta.dart';
+
+const requiredInventorinatorSchemaVersion = 12;
 
 bool canManageWorkspaceDevices(String? role) =>
     role == 'owner' || role == 'admin' || role == 'manager';
@@ -119,6 +122,7 @@ class SupabaseConfig {
     String? refreshToken,
     DateTime? lastSyncedAt,
     String? lastSyncedStateJson,
+    bool clearLastSyncedStateJson = false,
   }) => SupabaseConfig(
     url: url ?? this.url,
     publishableKey: publishableKey ?? this.publishableKey,
@@ -131,7 +135,9 @@ class SupabaseConfig {
     accessTokenExpiresAt: accessTokenExpiresAt ?? this.accessTokenExpiresAt,
     refreshToken: refreshToken ?? this.refreshToken,
     lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
-    lastSyncedStateJson: lastSyncedStateJson ?? this.lastSyncedStateJson,
+    lastSyncedStateJson: clearLastSyncedStateJson
+        ? null
+        : lastSyncedStateJson ?? this.lastSyncedStateJson,
   );
 
   Map<String, Object?> toJson() => {
@@ -186,6 +192,13 @@ class CloudWorkshopState {
   const CloudWorkshopState({required this.stateJson, required this.updatedAt});
   final String stateJson;
   final DateTime updatedAt;
+}
+
+class WorkshopChangeBatch {
+  const WorkshopChangeBatch({required this.changes, required this.revision});
+
+  final List<WorkshopEntityChange> changes;
+  final int revision;
 }
 
 class WorkspaceRecovery {
@@ -460,6 +473,86 @@ class SupabaseSyncService {
       throw SupabaseSyncException(_message(response));
     }
     return DateTime.parse(jsonDecode(response.body) as String).toUtc();
+  }
+
+  Future<WorkshopChangeBatch> downloadChanges(
+    SupabaseSession session, {
+    required int afterRevision,
+  }) async {
+    final workspaceId = config.workspaceId;
+    if (workspaceId == null) {
+      throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    final response = await _request(
+      _client.get(
+        _uri('/rest/v1/inventorinator_entities', {
+          'select': 'entity_type,entity_id,payload,deleted,revision',
+          'workspace_id': 'eq.$workspaceId',
+          'revision': 'gt.$afterRevision',
+          'order': 'revision.asc',
+        }),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      ),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SupabaseSyncException(_message(response));
+    }
+    final decodedBody = await Isolate.run(() => jsonDecode(response.body));
+    final rows = (decodedBody as List<dynamic>).cast<Map<String, dynamic>>();
+    var revision = afterRevision;
+    final changes = <WorkshopEntityChange>[];
+    for (final row in rows) {
+      final rowRevision = (row['revision'] as num).toInt();
+      if (rowRevision > revision) revision = rowRevision;
+      changes.add(
+        WorkshopEntityChange(
+          entityType: row['entity_type'] as String,
+          entityId: row['entity_id'] as String,
+          fields: Map<String, dynamic>.from(
+            row['payload'] as Map<String, dynamic>? ?? const {},
+          ),
+          deleted: row['deleted'] as bool? ?? false,
+          revision: rowRevision,
+        ),
+      );
+    }
+    return WorkshopChangeBatch(changes: changes, revision: revision);
+  }
+
+  Future<int> uploadChanges(
+    SupabaseSession session,
+    Iterable<WorkshopEntityChange> changes, {
+    required String deviceId,
+    List<Map<String, Object?>> auditEvents = const [],
+  }) async {
+    final workspaceId = config.workspaceId;
+    if (workspaceId == null) {
+      throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    final requestPayload = {
+      'target_workspace': workspaceId,
+      'source_device': deviceId,
+      'entity_changes': changes.map((change) => change.toJson()).toList(),
+      'audit_events': auditEvents,
+    };
+    final requestBody = await Isolate.run(() => jsonEncode(requestPayload));
+    final response = await _request(
+      _client.post(
+        _uri('/rest/v1/rpc/apply_inventorinator_entity_changes'),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+        body: requestBody,
+      ),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SupabaseSyncException(_message(response));
+    }
+    return (jsonDecode(response.body) as num).toInt();
   }
 
   Future<String> createWorkspace(SupabaseSession session) async {

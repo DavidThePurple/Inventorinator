@@ -2,7 +2,7 @@
 set -eu
 
 release_tag=${INVENTORINATOR_RELEASE_TAG:-v1.1.0}
-required_version=11
+required_version=12
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 migrations_dir=$script_dir/migrations
 temporary_dir=
@@ -58,7 +58,7 @@ download_migrations() {
   migrations_dir=$temporary_dir/migrations
   mkdir -p "$migrations_dir"
   base_url="https://raw.githubusercontent.com/DavidThePurple/Inventorinator/$release_tag/supabase/migrations"
-  migration_names='001_workshop_state.sql 002_anonymous_workspaces.sql 003_device_roles.sql 004_owner_devices.sql 005_team_roles_audit.sql 006_shared_build_permissions.sql 007_builder_quantity_integrity.sql 008_owner_recovery.sql 009_owner_durability.sql 010_owner_resilience.sql 011_device_role_management.sql'
+  migration_names='001_workshop_state.sql 002_anonymous_workspaces.sql 003_device_roles.sql 004_owner_devices.sql 005_team_roles_audit.sql 006_shared_build_permissions.sql 007_builder_quantity_integrity.sql 008_owner_recovery.sql 009_owner_durability.sql 010_owner_resilience.sql 011_device_role_management.sql 012_incremental_entity_sync.sql'
 
   echo "Downloading Inventorinator migrations from $release_tag..."
   for migration_name in $migration_names; do

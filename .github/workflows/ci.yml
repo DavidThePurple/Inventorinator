@@ -45,13 +45,15 @@ jobs:
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
           ./supabase/install-or-update.sh --hosted
           ./supabase/install-or-update.sh --hosted
-          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "11"
+          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "12"
       - name: Verify builder quantity enforcement
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
       - name: Verify role and owner boundaries
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/role_boundaries.sql
       - name: Verify owner recovery
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
+      - name: Verify incremental record sync
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/incremental_entity_sync.sql
       - name: Build connector image
         run: docker build -f supabase/connector/Dockerfile supabase
 

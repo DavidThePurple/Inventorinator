@@ -11,6 +11,7 @@ import 'device_name_dialog.dart';
 import 'qr_scanner.dart';
 import 'supabase_sync.dart';
 import 'workshop_merge.dart';
+import 'workshop_delta.dart';
 
 enum _SyncChoice { device, cloud }
 
@@ -20,11 +21,13 @@ class CloudSyncDialog extends StatefulWidget {
     required this.database,
     required this.localStateJson,
     required this.onCloudState,
+    this.onCloudChanges,
     this.initialPairingCode,
   });
   final LocalDatabase database;
   final String localStateJson;
   final ValueChanged<String> onCloudState;
+  final ValueChanged<List<WorkshopEntityChange>>? onCloudChanges;
   final String? initialPairingCode;
   @override
   State<CloudSyncDialog> createState() => _CloudSyncDialogState();
@@ -221,6 +224,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       ),
     );
     await SupabaseSyncService(config).registerDevice(session, registrationName);
+    if (widget.onCloudChanges != null) {
+      widget.database.queueAllEntitiesForSync();
+    }
     if (mounted) {
       setState(() {
         isWorkspaceOwner = true;
@@ -297,8 +303,12 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       refreshToken: session.refreshToken,
     );
     _save(recovered);
-    final cloud = await SupabaseSyncService(recovered).download(session);
-    if (cloud != null) {
+    final recoveredService = SupabaseSyncService(recovered);
+    if (widget.onCloudChanges != null) {
+      await _syncEntities(recoveredService, session);
+    } else {
+      final cloud = await recoveredService.download(session);
+      if (cloud == null) return 'Ownership recovered.';
       final state = canonicalWorkshopState(cloud.stateJson);
       widget.onCloudState(state);
       _save(
@@ -373,24 +383,28 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final joinedService = SupabaseSyncService(joined);
     await joinedService.registerDevice(session, registrationName);
     if (mounted) setState(() => isWorkspaceOwner = false);
-    final cloud = await joinedService.download(session);
-    if (cloud == null) {
-      final state = _canonicalJson(widget.localStateJson);
-      final updatedAt = await joinedService.upload(session, state);
-      _save(
-        joined.copyWith(lastSyncedAt: updatedAt, lastSyncedStateJson: state),
-      );
+    if (widget.onCloudChanges != null) {
+      await _syncEntities(joinedService, session, replaceLocal: true);
     } else {
-      // Joining an existing shared inventory must never upload starter/local
-      // rows over it. The existing workspace is authoritative at pairing time.
-      final state = canonicalWorkshopState(cloud.stateJson);
-      widget.onCloudState(state);
-      _save(
-        joined.copyWith(
-          lastSyncedAt: cloud.updatedAt,
-          lastSyncedStateJson: state,
-        ),
-      );
+      final cloud = await joinedService.download(session);
+      if (cloud == null) {
+        final state = _canonicalJson(widget.localStateJson);
+        final updatedAt = await joinedService.upload(session, state);
+        _save(
+          joined.copyWith(lastSyncedAt: updatedAt, lastSyncedStateJson: state),
+        );
+      } else {
+        // Joining an existing shared inventory must never upload starter/local
+        // rows over it. The existing workspace is authoritative at pairing time.
+        final state = canonicalWorkshopState(cloud.stateJson);
+        widget.onCloudState(state);
+        _save(
+          joined.copyWith(
+            lastSyncedAt: cloud.updatedAt,
+            lastSyncedStateJson: state,
+          ),
+        );
+      }
     }
     pairingController.clear();
     if (mounted) setState(() => sessionNeedsReconnect = false);
@@ -788,8 +802,100 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     ),
   );
 
+  Future<String> _syncEntities(
+    SupabaseSyncService service,
+    SupabaseSession session, {
+    bool replaceLocal = false,
+  }) async {
+    final workspaceId = config.workspaceId!;
+    var cursor = replaceLocal ? 0 : widget.database.loadSyncCursor(workspaceId);
+    final incoming = await service.downloadChanges(
+      session,
+      afterRevision: cursor,
+    );
+    if (replaceLocal) {
+      final applied = widget.database.replaceWithRemoteEntities(
+        incoming.changes,
+      );
+      widget.onCloudChanges?.call(applied);
+    } else if (incoming.changes.isNotEmpty) {
+      final localByKey = {
+        for (final entry in widget.database.loadPendingWorkshopChanges())
+          '${entry.change.entityType}\u0000${entry.change.entityId}':
+              entry.change,
+      };
+      final merged = incoming.changes.map((change) {
+        final local =
+            localByKey['${change.entityType}\u0000${change.entityId}'];
+        if (local == null) return change;
+        if (local.deleted) return local;
+        return WorkshopEntityChange(
+          entityType: change.entityType,
+          entityId: change.entityId,
+          fields: {...change.fields, ...local.fields},
+          revision: change.revision,
+        );
+      }).toList();
+      widget.database.applyRemoteWorkshopChanges(merged);
+      widget.onCloudChanges?.call(merged);
+    }
+    cursor = incoming.revision;
+    widget.database.saveSyncCursor(workspaceId, cursor);
+
+    final pending = widget.database.loadPendingWorkshopChanges();
+    if (pending.isNotEmpty) {
+      await service.uploadChanges(
+        session,
+        pending.map((entry) => entry.change),
+        deviceId: widget.database.loadStringPreference(
+          'device_id',
+          fallback: '',
+        ),
+      );
+      widget.database.acknowledgePendingWorkshopChanges(pending);
+    }
+    final confirmed = await service.downloadChanges(
+      session,
+      afterRevision: cursor,
+    );
+    if (confirmed.changes.isNotEmpty) {
+      final localByKey = {
+        for (final entry in widget.database.loadPendingWorkshopChanges())
+          '${entry.change.entityType}\u0000${entry.change.entityId}':
+              entry.change,
+      };
+      final merged = confirmed.changes.map((change) {
+        final local =
+            localByKey['${change.entityType}\u0000${change.entityId}'];
+        if (local == null) return change;
+        if (local.deleted) return local;
+        return WorkshopEntityChange(
+          entityType: change.entityType,
+          entityId: change.entityId,
+          fields: {...change.fields, ...local.fields},
+          revision: change.revision,
+        );
+      }).toList();
+      widget.database.applyRemoteWorkshopChanges(merged);
+      widget.onCloudChanges?.call(merged);
+    }
+    widget.database.saveSyncCursor(workspaceId, confirmed.revision);
+    _save(
+      config.copyWith(
+        lastSyncedAt: DateTime.now().toUtc(),
+        clearLastSyncedStateJson: true,
+      ),
+    );
+    return pending.isEmpty && incoming.changes.isEmpty
+        ? 'Already up to date.'
+        : 'Synced changed records.';
+  }
+
   Future<String> _sync() async {
     final (service, session) = await _session();
+    if (widget.onCloudChanges != null) {
+      return _syncEntities(service, session);
+    }
     final cloud = await service.download(session);
     final localJson = _canonicalJson(widget.localStateJson);
     if (cloud == null) {
@@ -909,14 +1015,22 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     restored = restored.copyWith(workspaceRole: role);
     service = SupabaseSyncService(restored);
     await service.registerDevice(session, _deviceName);
-    final cloud = await service.download(session);
-    if (cloud != null) {
-      final state = canonicalWorkshopState(cloud.stateJson);
-      widget.onCloudState(state);
-      restored = restored.copyWith(
-        lastSyncedAt: cloud.updatedAt,
-        lastSyncedStateJson: state,
-      );
+    CloudWorkshopState? cloud;
+    if (widget.onCloudChanges != null) {
+      _save(restored);
+      await _syncEntities(service, session);
+    } else {
+      cloud = await service.download(session);
+      if (cloud == null) {
+        // Keep the refreshed connection even when the shared inventory is empty.
+      } else {
+        final state = canonicalWorkshopState(cloud.stateJson);
+        widget.onCloudState(state);
+        restored = restored.copyWith(
+          lastSyncedAt: cloud.updatedAt,
+          lastSyncedStateJson: state,
+        );
+      }
     }
     urlController.text = restored.url;
     keyController.text = restored.publishableKey;
@@ -928,7 +1042,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         sessionNeedsReconnect = false;
       });
     }
-    return cloud == null
+    return widget.onCloudChanges != null
+        ? 'Connected to the selected inventory.'
+        : cloud == null
         ? 'Connected. This shared inventory is empty.'
         : 'Connected to the selected inventory.';
   }

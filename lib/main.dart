@@ -27,7 +27,7 @@ import 'qr_scanner.dart';
 import 'cloud_sync_dialog.dart';
 import 'supabase_sync.dart';
 import 'sync_onboarding_dialog.dart';
-import 'workshop_merge.dart';
+import 'workshop_delta.dart';
 
 // A single explicit very-dark violet canvas across every platform. Keeping the
 // green channel lowest prevents the background from drifting teal/green.
@@ -370,7 +370,10 @@ Future<void> main() async {
     exit(0);
   }
   runApp(
-    InventorinatorApp(database: database, persistedState: database.loadState()),
+    InventorinatorApp(
+      database: database,
+      persistedState: database.loadState(includeFullImages: false),
+    ),
   );
 }
 
@@ -1804,6 +1807,7 @@ class InventoryItem {
     this.deploymentLocation = '',
     this.lastDriedAt,
     this.imageBytes,
+    this.thumbnailBytes,
     this.labelImageBytes,
     this.barcode = '',
     this.productUrl = '',
@@ -1859,6 +1863,7 @@ class InventoryItem {
   final String deploymentLocation;
   final DateTime? lastDriedAt;
   final Uint8List? imageBytes;
+  final Uint8List? thumbnailBytes;
   final Uint8List? labelImageBytes;
   final String barcode;
   final String productUrl;
@@ -1915,6 +1920,7 @@ class InventoryItem {
     String? deploymentLocation,
     DateTime? lastDriedAt,
     Uint8List? imageBytes,
+    Uint8List? thumbnailBytes,
     Uint8List? labelImageBytes,
     String? barcode,
     String? productUrl,
@@ -1940,6 +1946,8 @@ class InventoryItem {
     bool clearFilamentData = false,
     bool clearPrintingData = false,
     bool clearCatalogProductId = false,
+    bool clearImageBytes = false,
+    bool clearLabelImageBytes = false,
   }) => InventoryItem(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -1991,8 +1999,11 @@ class InventoryItem {
     storageLocationId: storageLocationId ?? this.storageLocationId,
     deploymentLocation: deploymentLocation ?? this.deploymentLocation,
     lastDriedAt: clearFilamentData ? null : lastDriedAt ?? this.lastDriedAt,
-    imageBytes: imageBytes ?? this.imageBytes,
-    labelImageBytes: labelImageBytes ?? this.labelImageBytes,
+    imageBytes: clearImageBytes ? null : imageBytes ?? this.imageBytes,
+    thumbnailBytes: thumbnailBytes ?? this.thumbnailBytes,
+    labelImageBytes: clearLabelImageBytes
+        ? null
+        : labelImageBytes ?? this.labelImageBytes,
     barcode: barcode ?? this.barcode,
     productUrl: productUrl ?? this.productUrl,
     compatibleMachineIds: compatibleMachineIds ?? this.compatibleMachineIds,
@@ -3119,6 +3130,27 @@ String? _bytesToJson(Uint8List? bytes) =>
 Uint8List? _bytesFromJson(Object? value) =>
     value is String && value.isNotEmpty ? base64Decode(value) : null;
 
+Uint8List? _createCardThumbnail(Uint8List? source) {
+  if (source == null || source.isEmpty) return null;
+  try {
+    final decoded = img.decodeImage(source);
+    if (decoded == null) return null;
+    const maximumEdge = 360;
+    final scale = maximumEdge / math.max(decoded.width, decoded.height);
+    final thumbnail = scale < 1
+        ? img.copyResize(
+            decoded,
+            width: math.max(1, (decoded.width * scale).round()),
+            height: math.max(1, (decoded.height * scale).round()),
+            interpolation: img.Interpolation.average,
+          )
+        : decoded;
+    return Uint8List.fromList(img.encodeJpg(thumbnail, quality: 80));
+  } catch (_) {
+    return null;
+  }
+}
+
 bool _looksLikeFastener(String name) =>
     !name.toLowerCase().contains('printed part') &&
     RegExp(
@@ -3153,6 +3185,67 @@ MaterialRecord? _inferStarterMaterial(
   }).firstOrNull;
 }
 
+Map<String, dynamic> _inventoryItemJson(
+  InventoryItem item, {
+  bool includeBinary = true,
+}) => {
+  'id': item.id,
+  'name': item.name,
+  'type': item.type.name,
+  'compatibility': item.compatibility,
+  'added': item.added.toIso8601String(),
+  'cost': item.cost,
+  'color': item.color.toARGB32(),
+  'itemColorName': item.itemColorName,
+  'itemColorLabel': item.itemColorLabel,
+  'quantity': item.quantity,
+  'quantityAlertThreshold': item.quantityAlertThreshold,
+  'dryingMinutes': item.dryingMinutes,
+  'dryingRemaining': item.dryingRemaining,
+  'dryingStartedAt': item.dryingStartedAt?.toIso8601String(),
+  'moistureLifespanMinutes': item.moistureLifespanMinutes,
+  'moistureTimeUnit': item.moistureTimeUnit.name,
+  'moistureAlertEnabled': item.moistureAlertEnabled,
+  'moistureAlertThresholdMinutes': item.moistureAlertThresholdMinutes,
+  'deployed': item.deployed,
+  'vendor': item.vendor,
+  'printingInstructions': item.printingInstructions,
+  'dryingInstructions': item.dryingInstructions,
+  'storageInstructions': item.storageInstructions,
+  'archived': item.archived,
+  'archiveDisposition': item.archiveDisposition.name,
+  'filamentStatus': item.filamentStatus.name,
+  'brand': item.brand,
+  'storageLocation': item.storageLocation,
+  'storageLocationId': item.storageLocationId,
+  'deploymentLocation': item.deploymentLocation,
+  'lastDriedAt': item.lastDriedAt?.toIso8601String(),
+  if (includeBinary) 'image': _bytesToJson(item.imageBytes),
+  if (includeBinary) 'thumbnail': _bytesToJson(item.thumbnailBytes),
+  if (includeBinary) 'labelImage': _bytesToJson(item.labelImageBytes),
+  'barcode': item.barcode,
+  'productUrl': item.productUrl,
+  'compatibleMachineIds': item.compatibleMachineIds,
+  'spoolTypeId': item.spoolTypeId,
+  'amsCompatible': item.amsCompatible,
+  'spoolTareWeightGrams': item.spoolTareWeightGrams,
+  'spoolOuterDiameterMm': item.spoolOuterDiameterMm,
+  'spoolWidthMm': item.spoolWidthMm,
+  'spoolHoleDiameterMm': item.spoolHoleDiameterMm,
+  'refill': item.refill,
+  'masterSpool': item.masterSpool,
+  'catalogProductId': item.catalogProductId,
+  'customTypeId': item.customTypeId,
+  'customTypeName': item.customTypeName,
+  'customFieldValues': item.customFieldValues,
+  'materialId': item.materialId,
+  'materialName': item.materialName,
+  'spoolMaterialId': item.spoolMaterialId,
+  'spoolMaterialName': item.spoolMaterialName,
+  'masterSpoolMaterialId': item.masterSpoolMaterialId,
+  'masterSpoolMaterialName': item.masterSpoolMaterialName,
+};
+
 String encodeWorkshopState({
   required List<InventoryItem> inventory,
   required List<VendorRecord> vendors,
@@ -3177,66 +3270,7 @@ String encodeWorkshopState({
   int historyLimit = 100,
 }) => jsonEncode({
   'schemaVersion': 8,
-  'inventory': inventory
-      .map(
-        (item) => {
-          'id': item.id,
-          'name': item.name,
-          'type': item.type.name,
-          'compatibility': item.compatibility,
-          'added': item.added.toIso8601String(),
-          'cost': item.cost,
-          'color': item.color.toARGB32(),
-          'itemColorName': item.itemColorName,
-          'itemColorLabel': item.itemColorLabel,
-          'quantity': item.quantity,
-          'quantityAlertThreshold': item.quantityAlertThreshold,
-          'dryingMinutes': item.dryingMinutes,
-          'dryingRemaining': item.dryingRemaining,
-          'dryingStartedAt': item.dryingStartedAt?.toIso8601String(),
-          'moistureLifespanMinutes': item.moistureLifespanMinutes,
-          'moistureTimeUnit': item.moistureTimeUnit.name,
-          'moistureAlertEnabled': item.moistureAlertEnabled,
-          'moistureAlertThresholdMinutes': item.moistureAlertThresholdMinutes,
-          'deployed': item.deployed,
-          'vendor': item.vendor,
-          'printingInstructions': item.printingInstructions,
-          'dryingInstructions': item.dryingInstructions,
-          'storageInstructions': item.storageInstructions,
-          'archived': item.archived,
-          'archiveDisposition': item.archiveDisposition.name,
-          'filamentStatus': item.filamentStatus.name,
-          'brand': item.brand,
-          'storageLocation': item.storageLocation,
-          'storageLocationId': item.storageLocationId,
-          'deploymentLocation': item.deploymentLocation,
-          'lastDriedAt': item.lastDriedAt?.toIso8601String(),
-          'image': _bytesToJson(item.imageBytes),
-          'labelImage': _bytesToJson(item.labelImageBytes),
-          'barcode': item.barcode,
-          'productUrl': item.productUrl,
-          'compatibleMachineIds': item.compatibleMachineIds,
-          'spoolTypeId': item.spoolTypeId,
-          'amsCompatible': item.amsCompatible,
-          'spoolTareWeightGrams': item.spoolTareWeightGrams,
-          'spoolOuterDiameterMm': item.spoolOuterDiameterMm,
-          'spoolWidthMm': item.spoolWidthMm,
-          'spoolHoleDiameterMm': item.spoolHoleDiameterMm,
-          'refill': item.refill,
-          'masterSpool': item.masterSpool,
-          'catalogProductId': item.catalogProductId,
-          'customTypeId': item.customTypeId,
-          'customTypeName': item.customTypeName,
-          'customFieldValues': item.customFieldValues,
-          'materialId': item.materialId,
-          'materialName': item.materialName,
-          'spoolMaterialId': item.spoolMaterialId,
-          'spoolMaterialName': item.spoolMaterialName,
-          'masterSpoolMaterialId': item.masterSpoolMaterialId,
-          'masterSpoolMaterialName': item.masterSpoolMaterialName,
-        },
-      )
-      .toList(),
+  'inventory': inventory.map(_inventoryItemJson).toList(),
   'customItemTypes': customItemTypes
       .map(
         (type) => {
@@ -3434,6 +3468,52 @@ String encodeWorkshopState({
   'historyLimit': historyLimit,
 });
 
+Map<String, dynamic> encodeWorkshopEntityPayload(
+  String entityType,
+  Object record,
+) {
+  final root = jsonDecode(
+    encodeWorkshopState(
+      inventory: entityType == 'inventory'
+          ? [record as InventoryItem]
+          : const [],
+      vendors: entityType == 'vendors' ? [record as VendorRecord] : const [],
+      brands: entityType == 'brands' ? [record as BrandRecord] : const [],
+      spoolTypes: entityType == 'spoolTypes'
+          ? [record as SpoolTypeRecord]
+          : const [],
+      materials: entityType == 'materials'
+          ? [record as MaterialRecord]
+          : const [],
+      customItemTypes: entityType == 'customItemTypes'
+          ? [record as CustomItemTypeRecord]
+          : const [],
+      products: entityType == 'products'
+          ? [record as CatalogProduct]
+          : const [],
+      machineTypes: entityType == 'machineTypes'
+          ? [record as MachineTypeRecord]
+          : const [],
+      machines: entityType == 'machines' ? [record as MachineRecord] : const [],
+      kits: entityType == 'kits' ? [record as KitRecord] : const [],
+      builds: entityType == 'builds' ? [record as BuildRecord] : const [],
+      locations: entityType == 'locations'
+          ? [record as StockLocationRecord]
+          : const [],
+      shoppingList: entityType == 'shoppingList'
+          ? [record as ShoppingListEntry]
+          : const [],
+      auditLog: entityType == 'auditLog' ? [record as AuditEntry] : const [],
+      additionHistory: entityType == 'additionHistory'
+          ? [record as AdditionHistoryEntry]
+          : const [],
+    ),
+  ) as Map<String, dynamic>;
+  return Map<String, dynamic>.from(
+    (root[entityType] as List<dynamic>).single as Map,
+  );
+}
+
 WorkshopState? decodeWorkshopState(String? source) {
   if (source == null || source.isEmpty) return null;
   try {
@@ -3498,6 +3578,7 @@ WorkshopState? decodeWorkshopState(String? source) {
                 ? null
                 : DateTime.parse(item['lastDriedAt'] as String),
             imageBytes: _bytesFromJson(item['image']),
+            thumbnailBytes: _bytesFromJson(item['thumbnail']),
             labelImageBytes: _bytesFromJson(item['labelImage']),
             barcode: item['barcode'] as String? ?? '',
             productUrl: item['productUrl'] as String? ?? '',
@@ -4938,10 +5019,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   int _localStateRevision = 0;
   int _lastSyncedLocalRevision = 0;
   bool _syncRequestedWhileBusy = false;
+  bool _thumbnailBackfillRunning = false;
   Timer? _clockTick;
   bool _syncing = false;
   bool _autoSyncPausedForAuthentication = false;
-  String? _lastSyncConflict;
   bool _applyingCloudState = false;
   final List<Map<String, Object?>> _pendingAuditEvents = [];
   WorkspaceRole currentRole = WorkspaceRole.admin;
@@ -4953,6 +5034,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   static final RegExp _searchNormalizationPattern = RegExp(r'[^a-z0-9]');
   int _searchDataRevision = 0;
   final Map<String, (InventoryItem, String)> _inventorySearchTextCache = {};
+  final Map<String, ValueNotifier<InventoryItem>> _inventoryItemNotifiers = {};
+  final Map<String, Map<String, Object>> _persistedEntityReferences = {};
+  Map<String, dynamic> _persistedMetadata = const {};
+  bool _incrementalPersistenceReady = false;
   final Map<Object, String> _catalogSearchTextCache = Map.identity();
   Object? _visibleItemsCacheKey;
   List<InventoryItem>? _visibleItemsCache;
@@ -5040,6 +5125,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     locations = restored?.locations ?? [];
     shoppingList = restored?.shoppingList ?? [];
     final initializedLocations = _initializeLegacyLocations();
+    for (final item in inventory) {
+      _inventoryItemNotifiers[item.id] = ValueNotifier(item);
+    }
     auditLog = restored?.auditLog ?? [];
     additionHistory =
         restored?.additionHistory ??
@@ -5180,11 +5268,18 @@ class _InventoryHomeState extends State<InventoryHome> {
       const Duration(seconds: 10),
       (_) => _advanceDryingTimers(),
     );
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_backfillInventoryThumbnails()),
+    );
     if (initializedDryingTimers ||
         initializedKitSections ||
         initializedMaterials ||
         initializedLocations) {
       _persist();
+    }
+    if (!firstLaunch) {
+      _capturePersistedEntityReferences();
+      _incrementalPersistenceReady = true;
     }
     if (firstLaunch) {
       WidgetsBinding.instance.addPostFrameCallback(
@@ -5241,6 +5336,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
     }
     _persist();
+    _capturePersistedEntityReferences();
+    _incrementalPersistenceReady = true;
     if (_needsSyncOnboarding) {
       await _openSyncOnboarding();
     } else {
@@ -5303,12 +5400,24 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     if (_quantityCommitOriginals.isNotEmpty) {
       for (final entry in _quantityCommitOriginals.entries) {
-        _recordPendingQuantityAudit(entry.key, entry.value);
+        if (!_recordPendingQuantityAudit(entry.key, entry.value)) continue;
+        final current = inventory
+            .where((item) => item.id == entry.key)
+            .firstOrNull;
+        if (current != null && widget.database != null) {
+          _saveInventoryEntity(
+            widget.database!,
+            current,
+            previous: entry.value,
+          );
+        }
       }
-      widget.database?.saveState(_currentStateJson());
     }
     _inventoryOverlayRestore?.cancel();
     _inventoryIsScrolling.dispose();
+    for (final notifier in _inventoryItemNotifiers.values) {
+      notifier.dispose();
+    }
     if (_ownsFilamentColorsClient) _filamentColorsClient.close();
     inventorySearchController.dispose();
     inventorySearchFocusNode.dispose();
@@ -5546,7 +5655,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (completedItems.isNotEmpty) {
       setState(() {
         for (final entry in completedItems.entries) {
-          inventory[entry.key] = entry.value;
+          _publishInventoryItem(entry.value);
         }
       });
       _persist();
@@ -6165,6 +6274,18 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (record is! InventoryItem) {
       return _catalogRecordCard(record, list: list);
     }
+    final notifier = _inventoryItemNotifiers.putIfAbsent(
+      record.id,
+      () => ValueNotifier(record),
+    );
+    return ValueListenableBuilder<InventoryItem>(
+      key: ValueKey('inventory-cell-${record.id}'),
+      valueListenable: notifier,
+      builder: (_, item, _) => _inventoryItemWidget(item, list: list),
+    );
+  }
+
+  Widget _inventoryItemWidget(InventoryItem record, {required bool list}) {
     final common = (
       selected: selectedInventoryIds.contains(record.id),
       typeLabel: _itemTypeDisplayLabel(record),
@@ -6189,6 +6310,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
+        scrollingListenable: _inventoryIsScrolling,
         canEdit: currentRole.canEditInventory,
         canCreate: currentRole.canCreateInventory,
         canArchive: currentRole.canArchiveInventory,
@@ -6213,6 +6335,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
+        scrollingListenable: _inventoryIsScrolling,
         canEdit: currentRole.canEditInventory,
         canCreate: currentRole.canCreateInventory,
         canArchive: currentRole.canArchiveInventory,
@@ -6224,6 +6347,45 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
     }
     return card;
+  }
+
+  void _publishInventoryItem(InventoryItem item) {
+    final index = inventory.indexWhere((candidate) => candidate.id == item.id);
+    if (index < 0) return;
+    inventory[index] = item;
+    final notifier = _inventoryItemNotifiers.putIfAbsent(
+      item.id,
+      () => ValueNotifier(item),
+    );
+    if (!identical(notifier.value, item)) notifier.value = item;
+  }
+
+  void _addInventoryItem(InventoryItem item) {
+    inventory.add(item);
+    _inventoryItemNotifiers.remove(item.id)?.dispose();
+    _inventoryItemNotifiers[item.id] = ValueNotifier(item);
+  }
+
+  void _removeInventoryItem(String itemId) {
+    inventory.removeWhere((item) => item.id == itemId);
+    _inventoryItemNotifiers.remove(itemId)?.dispose();
+  }
+
+  void _synchronizeInventoryNotifiers() {
+    final activeIds = inventory.map((item) => item.id).toSet();
+    for (final staleId
+        in _inventoryItemNotifiers.keys
+            .where((id) => !activeIds.contains(id))
+            .toList()) {
+      _inventoryItemNotifiers.remove(staleId)?.dispose();
+    }
+    for (final item in inventory) {
+      final notifier = _inventoryItemNotifiers.putIfAbsent(
+        item.id,
+        () => ValueNotifier(item),
+      );
+      if (!identical(notifier.value, item)) notifier.value = item;
+    }
   }
 
   List<InventoryItem> get _selectedInventoryItems => inventory
@@ -6513,10 +6675,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (!item.compatibleMachineIds.any(selectedMachineIds.contains)) {
           continue;
         }
-        inventory[index] = item.copyWith(
-          compatibleMachineIds: item.compatibleMachineIds
-              .where((id) => !selectedMachineIds.contains(id))
-              .toList(),
+        _publishInventoryItem(
+          item.copyWith(
+            compatibleMachineIds: item.compatibleMachineIds
+                .where((id) => !selectedMachineIds.contains(id))
+                .toList(),
+          ),
         );
       }
       _clearCatalogSelection();
@@ -6734,9 +6898,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (var index = 0; index < inventory.length; index++) {
         final item = inventory[index];
         if (!selectedInventoryIds.contains(item.id)) continue;
-        inventory[index] = item.copyWith(
-          archived: !restore,
-          archiveDisposition: ArchiveDisposition.archived,
+        _publishInventoryItem(
+          item.copyWith(
+            archived: !restore,
+            archiveDisposition: ArchiveDisposition.archived,
+          ),
         );
         _recordAudit(restore ? 'restore' : 'archive', 'inventory', item.id, {
           'name': item.name,
@@ -6780,7 +6946,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           'bulk': 'true',
         });
       }
-      inventory.removeWhere((item) => selectedInventoryIds.contains(item.id));
+      for (final id in selectedInventoryIds.toList()) {
+        _removeInventoryItem(id);
+      }
       selectedInventoryIds.clear();
     });
     _persist();
@@ -6839,18 +7007,20 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (var index = 0; index < inventory.length; index++) {
         final item = inventory[index];
         if (!selectedInventoryIds.contains(item.id)) continue;
-        inventory[index] = item.copyWith(
-          type: choice.type,
-          customTypeId: choice.customType?.id ?? '',
-          customTypeName: choice.customType?.name ?? '',
-          customFieldValues: const {},
-          materialId: '',
-          materialName: '',
-          clearFilamentData:
-              item.type == InventoryType.filament &&
-              choice.type != InventoryType.filament,
-          clearPrintingData: !choice.type.supportsPrinting,
-          clearCatalogProductId: true,
+        _publishInventoryItem(
+          item.copyWith(
+            type: choice.type,
+            customTypeId: choice.customType?.id ?? '',
+            customTypeName: choice.customType?.name ?? '',
+            customFieldValues: const {},
+            materialId: '',
+            materialName: '',
+            clearFilamentData:
+                item.type == InventoryType.filament &&
+                choice.type != InventoryType.filament,
+            clearPrintingData: !choice.type.supportsPrinting,
+            clearCatalogProductId: true,
+          ),
         );
         _recordAudit('change type', 'inventory', item.id, {
           'type': '${_itemTypeDisplayLabel(item)} → $targetLabel',
@@ -6896,11 +7066,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (item != null && mounted) {
       setState(() {
-        inventory.add(item);
+        _addInventoryItem(item);
         _recordAddition(item);
         _recordAudit('create', 'inventory', item.id, {'name': item.name});
       });
       _persist();
+      _discardLoadedFullImages([item]);
     }
   }
 
@@ -7185,8 +7356,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         }
         vendors.addAll(prepared.newVendors);
         brands.addAll(prepared.newBrands);
-        inventory.addAll(importedItems);
         for (final item in importedItems) {
+          _addInventoryItem(item);
           _recordAddition(item);
           _recordAudit('import', 'inventory', item.id, {
             'name': item.name,
@@ -7196,6 +7367,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         currentPage = 0;
       });
       _persist();
+      _discardLoadedFullImages(importedItems);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -7469,9 +7641,34 @@ class _InventoryHomeState extends State<InventoryHome> {
         .firstOrNull;
   }
 
-  Future<void> _openDetails(InventoryItem item) {
+  InventoryItem _withFullInventoryImages(InventoryItem item) {
+    final images = widget.database?.loadInventoryImages(item.id);
+    if (images == null) return item;
+    return item.copyWith(
+      imageBytes: images.imageBytes,
+      labelImageBytes: images.labelImageBytes,
+    );
+  }
+
+  InventoryItem _withoutFullInventoryImages(InventoryItem item) =>
+      item.copyWith(clearImageBytes: true, clearLabelImageBytes: true);
+
+  void _discardLoadedFullImages(Iterable<InventoryItem> items) {
+    for (final item in items) {
+      if (item.imageBytes == null && item.labelImageBytes == null) continue;
+      final lightweight = _withoutFullInventoryImages(item);
+      _publishInventoryItem(lightweight);
+      _persistedEntityReferences.putIfAbsent(
+        'inventory',
+        () => {},
+      )[lightweight.id] = lightweight;
+    }
+  }
+
+  Future<void> _openDetails(InventoryItem item) async {
+    final detailedItem = _withFullInventoryImages(item);
     final storageLocation = _itemStorageLocation(item);
-    return showGeneralDialog<void>(
+    await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close item details',
@@ -7480,16 +7677,19 @@ class _InventoryHomeState extends State<InventoryHome> {
       pageBuilder: (context, _, _) => Align(
         alignment: Alignment.centerRight,
         child: ItemDetailsPanel(
-          item: item,
-          typeLabel: _itemTypeDisplayLabel(item),
-          typeIcon: _itemTypeIcon(item),
-          typeIconImageBytes: _iconImageBytesFromKey(_itemTypeIconKey(item)),
+          item: detailedItem,
+          typeLabel: _itemTypeDisplayLabel(detailedItem),
+          typeIcon: _itemTypeIcon(detailedItem),
+          typeIconImageBytes: _iconImageBytesFromKey(
+            _itemTypeIconKey(detailedItem),
+          ),
           initialWidth: itemDetailsPanelWidth,
           onWidthChanged: (width) => itemDetailsPanelWidth = width,
           machines: machines,
           machineTypes: machineTypes,
           spoolTypes: spoolTypes,
-          onChanged: _updateItemById,
+          onChanged: (updated) =>
+              _updateItemById(_withoutFullInventoryImages(updated)),
           onEdit: currentRole.canEditInventory
               ? (item) => _handleAction(item, ItemAction.edit)
               : null,
@@ -7540,10 +7740,14 @@ class _InventoryHomeState extends State<InventoryHome> {
       return;
     }
 
-    final splitItem = current.copyWith(id: _newInventoryId(), quantity: 1);
+    final detailedSource = _withFullInventoryImages(current);
+    final splitItem = detailedSource.copyWith(
+      id: _newInventoryId(),
+      quantity: 1,
+    );
     setState(() {
-      inventory[index] = current.copyWith(quantity: current.quantity - 1);
-      inventory.add(splitItem);
+      _publishInventoryItem(current.copyWith(quantity: current.quantity - 1));
+      _addInventoryItem(splitItem);
       _recordAudit('split', 'inventory', splitItem.id, {
         'source': current.id,
         'name': splitItem.name,
@@ -7551,7 +7755,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
     });
     _persist();
-    if (mounted) await _openDetails(splitItem);
+    _discardLoadedFullImages([splitItem]);
+    final lightweightSplit = inventory
+        .where((item) => item.id == splitItem.id)
+        .first;
+    if (mounted) await _openDetails(lightweightSplit);
   }
 
   Future<void> _handleAction(InventoryItem item, ItemAction action) async {
@@ -7614,14 +7822,14 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
         if (edited != null) _replaceItem(item, edited);
       case ItemAction.duplicate:
+        final duplicate = _withFullInventoryImages(item).copyWith(
+          id: _newInventoryId(),
+          name: '${item.name} copy',
+          added: DateTime.now(),
+          archived: false,
+        );
         setState(() {
-          final duplicate = item.copyWith(
-            id: _newInventoryId(),
-            name: '${item.name} copy',
-            added: DateTime.now(),
-            archived: false,
-          );
-          inventory.add(duplicate);
+          _addInventoryItem(duplicate);
           _recordAddition(duplicate);
           _recordAudit('duplicate', 'inventory', duplicate.id, {
             'source': item.id,
@@ -7629,6 +7837,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           });
         });
         _persist();
+        _discardLoadedFullImages([duplicate]);
       case ItemAction.archive:
         _replaceItem(
           item,
@@ -7657,7 +7866,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
         if (confirmed == true && mounted) {
           setState(() {
-            inventory.remove(item);
+            _removeInventoryItem(item.id);
             selectedInventoryIds.remove(item.id);
             _recordAudit('delete', 'inventory', item.id, {'name': item.name});
           });
@@ -7708,7 +7917,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       // A cloud poll can rebuild the inventory with fresh object instances
       // while an Edit dialog is open. Match the stable ID so Save still
       // updates the current in-memory item instead of silently doing nothing.
-      replaceInventoryItemById(inventory, oldItem.id, newItem);
+      _publishInventoryItem(newItem);
       final changes = <String, String>{};
       if (oldItem.name != newItem.name) {
         changes['name'] = '${oldItem.name} → ${newItem.name}';
@@ -7732,6 +7941,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       }
     });
     _persist();
+    _discardLoadedFullImages([newItem]);
     _checkMoistureThresholdAnimations();
   }
 
@@ -7747,10 +7957,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final enteredLowStock =
         previous != null && !_isLowStock(previous) && _isLowStock(item);
     setState(() {
-      final index = inventory.indexWhere(
-        (candidate) => candidate.id == item.id,
-      );
-      if (index >= 0) inventory[index] = item;
+      _publishInventoryItem(item);
       if (previous != null) {
         final changes = <String, String>{};
         if (previous.name != item.name) {
@@ -7789,13 +7996,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final quantity = math.max(0, current.quantity + delta).toDouble();
     if (quantity == current.quantity) return;
     _quantityCommitOriginals.putIfAbsent(item.id, () => current);
-    setState(() {
-      replaceInventoryItemById(
-        inventory,
-        current.id,
-        current.copyWith(quantity: quantity),
-      );
-    });
+    _publishInventoryItem(current.copyWith(quantity: quantity));
     _invalidateSearchCaches();
     _quantityCommitTimers.remove(item.id)?.cancel();
     _quantityCommitTimers[item.id] = Timer(
@@ -7808,10 +8009,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     _quantityCommitTimers.remove(itemId)?.cancel();
     final original = _quantityCommitOriginals.remove(itemId);
     if (original == null || !mounted) return;
-    var changed = false;
-    setState(() => changed = _recordPendingQuantityAudit(itemId, original));
+    final changed = _recordPendingQuantityAudit(itemId, original);
     if (!changed) return;
-    _persist();
+    final current = inventory
+        .where((candidate) => candidate.id == itemId)
+        .firstOrNull;
+    if (current != null) _publishInventoryItem(current.copyWith());
+    if (current != null) _persistInventoryItem(current);
     _checkMoistureThresholdAnimations();
   }
 
@@ -9775,8 +9979,235 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _persist() {
     _reconcileReadInventoryAlerts();
     _invalidateSearchCaches();
-    widget.database?.saveState(_currentStateJson());
+    _synchronizeInventoryNotifiers();
+    final database = widget.database;
+    if (database != null) {
+      if (_incrementalPersistenceReady) {
+        _persistChangedEntities(database);
+      } else {
+        final previous = database.loadState();
+        final current = _currentStateJson();
+        database.saveStateAndQueueChanges(
+          current,
+          diffWorkshopStates(previous, current),
+        );
+      }
+    }
     if (!_applyingCloudState) {
+      _localStateRevision++;
+      _scheduleAutomaticSync();
+    }
+  }
+
+  Map<String, List<Object>> _entityCollections() => {
+    'inventory': inventory,
+    'customItemTypes': customItemTypes,
+    'machineTypes': machineTypes,
+    'machines': machines,
+    'kits': kits,
+    'builds': builds,
+    'locations': locations,
+    'shoppingList': shoppingList,
+    'auditLog': auditLog,
+    'vendors': vendors,
+    'brands': brands,
+    'spoolTypes': spoolTypes,
+    'materials': materials,
+    'products': products,
+    'additionHistory': additionHistory,
+  };
+
+  String _entityId(Object record) => switch (record) {
+    InventoryItem value => value.id,
+    CustomItemTypeRecord value => value.id,
+    MachineTypeRecord value => value.id,
+    MachineRecord value => value.id,
+    KitRecord value => value.id,
+    BuildRecord value => value.id,
+    StockLocationRecord value => value.id,
+    ShoppingListEntry value => value.id,
+    AuditEntry value => value.id,
+    VendorRecord value => value.id,
+    BrandRecord value => value.id,
+    SpoolTypeRecord value => value.id,
+    MaterialRecord value => value.id,
+    CatalogProduct value => value.id,
+    AdditionHistoryEntry value => value.id,
+    _ => throw ArgumentError.value(record, 'record', 'Unknown entity type'),
+  };
+
+  Map<String, dynamic> _workshopMetadata() => {
+    'schemaVersion': 8,
+    'typeLabelOverrides': typeLabelOverrides,
+    'typeIconOverrides': typeIconOverrides,
+    'typeDepletionSettings': typeDepletionSettings,
+    'typeStatusSettings': typeStatusSettings,
+    'deletedTypeKeys': deletedTypeKeys.toList(),
+    'historyLimit': historyLimit,
+  };
+
+  void _capturePersistedEntityReferences() {
+    _persistedEntityReferences
+      ..clear()
+      ..addEntries(
+        _entityCollections().entries.map(
+          (entry) => MapEntry(entry.key, {
+            for (final record in entry.value) _entityId(record): record,
+          }),
+        ),
+      );
+    _persistedMetadata = Map<String, dynamic>.from(
+      jsonDecode(jsonEncode(_workshopMetadata())) as Map,
+    );
+  }
+
+  void _persistChangedEntities(LocalDatabase database) {
+    for (final collection in _entityCollections().entries) {
+      final previous = _persistedEntityReferences[collection.key] ?? const {};
+      final current = <String, Object>{
+        for (final record in collection.value) _entityId(record): record,
+      };
+      for (final entry in current.entries) {
+        if (identical(previous[entry.key], entry.value)) continue;
+        if (collection.key == 'inventory') {
+          _saveInventoryEntity(
+            database,
+            entry.value as InventoryItem,
+            previous: previous[entry.key] as InventoryItem?,
+          );
+        } else {
+          database.saveEntityPayloadAndQueue(
+            collection.key,
+            entry.key,
+            encodeWorkshopEntityPayload(collection.key, entry.value),
+          );
+        }
+      }
+      for (final removedId in previous.keys.where(
+        (id) => !current.containsKey(id),
+      )) {
+        database.deleteEntityAndQueue(collection.key, removedId);
+      }
+      _persistedEntityReferences[collection.key] = current;
+    }
+    final metadata = _workshopMetadata();
+    if (jsonEncode(metadata) != jsonEncode(_persistedMetadata)) {
+      database.saveEntityPayloadAndQueue(
+        workshopMetadataEntityType,
+        workshopMetadataEntityId,
+        metadata,
+      );
+      _persistedMetadata = Map<String, dynamic>.from(
+        jsonDecode(jsonEncode(metadata)) as Map,
+      );
+    }
+  }
+
+  Map<String, dynamic> _changedInventoryFields(
+    InventoryItem? previous,
+    InventoryItem current,
+  ) {
+    if (previous == null) return _inventoryItemJson(current);
+    final fields = changedWorkshopEntityFields(
+      _inventoryItemJson(previous, includeBinary: false),
+      _inventoryItemJson(current, includeBinary: false),
+    );
+    if (!listEquals(previous.imageBytes, current.imageBytes)) {
+      fields['image'] = _bytesToJson(current.imageBytes);
+    }
+    if (!listEquals(previous.thumbnailBytes, current.thumbnailBytes)) {
+      fields['thumbnail'] = _bytesToJson(current.thumbnailBytes);
+    }
+    if (!listEquals(previous.labelImageBytes, current.labelImageBytes)) {
+      fields['labelImage'] = _bytesToJson(current.labelImageBytes);
+    }
+    return fields;
+  }
+
+  void _saveInventoryEntity(
+    LocalDatabase database,
+    InventoryItem item, {
+    InventoryItem? previous,
+  }) {
+    final fields = _changedInventoryFields(previous, item);
+    if (fields.isEmpty) return;
+    database.applyAndQueueWorkshopChanges([
+      WorkshopEntityChange(
+        entityType: 'inventory',
+        entityId: item.id,
+        fields: fields,
+      ),
+    ]);
+  }
+
+  void _persistInventoryItem(InventoryItem item) {
+    _reconcileReadInventoryAlerts();
+    _invalidateSearchCaches();
+    final database = widget.database;
+    if (database != null) {
+      _saveInventoryEntity(
+        database,
+        item,
+        previous:
+            _persistedEntityReferences['inventory']?[item.id] as InventoryItem?,
+      );
+    }
+    _persistedEntityReferences.putIfAbsent('inventory', () => {})[item.id] =
+        item;
+    if (!_applyingCloudState) {
+      _localStateRevision++;
+      _scheduleAutomaticSync();
+    }
+  }
+
+  Future<void> _backfillInventoryThumbnails() async {
+    if (_thumbnailBackfillRunning || widget.database == null) return;
+    _thumbnailBackfillRunning = true;
+    var changed = false;
+    try {
+      final idsWithImages = widget.database!.inventoryIdsWithFullImages();
+      final candidates = inventory
+          .where(
+            (item) =>
+                item.thumbnailBytes == null && idsWithImages.contains(item.id),
+          )
+          .map((item) => item.id)
+          .toList();
+      for (final id in candidates) {
+        if (!mounted) return;
+        final current = inventory.where((item) => item.id == id).firstOrNull;
+        final source =
+            current?.imageBytes ??
+            widget.database!.loadInventoryImages(id).imageBytes;
+        if (current == null ||
+            source == null ||
+            current.thumbnailBytes != null) {
+          continue;
+        }
+        final thumbnail = await compute(_createCardThumbnail, source);
+        if (thumbnail == null || !mounted) continue;
+        while (mounted && _inventoryIsScrolling.value) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+        }
+        if (!mounted) return;
+        final latest = inventory.where((item) => item.id == id).firstOrNull;
+        final latestSource =
+            latest?.imageBytes ??
+            widget.database!.loadInventoryImages(id).imageBytes;
+        if (latest == null || !listEquals(latestSource, source)) continue;
+        final updated = latest.copyWith(thumbnailBytes: thumbnail);
+        _publishInventoryItem(updated);
+        _saveInventoryEntity(widget.database!, updated, previous: latest);
+        _persistedEntityReferences.putIfAbsent(
+          'inventory',
+          () => {},
+        )[updated.id] = updated;
+        changed = true;
+      }
+    } finally {
+      _thumbnailBackfillRunning = false;
+    }
+    if (changed && mounted) {
       _localStateRevision++;
       _scheduleAutomaticSync();
     }
@@ -9880,6 +10311,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     auditLog.insert(0, entry);
     if (auditLog.length > 2000) auditLog.removeRange(2000, auditLog.length);
+    widget.database?.saveEntityPayloadAndQueue('auditLog', entry.id, {
+      'id': entry.id,
+      'timestamp': entry.timestamp.toIso8601String(),
+      'actor': entry.actor,
+      'action': entry.action,
+      'entityType': entry.entityType,
+      'entityId': entry.entityId,
+      'changes': entry.changes,
+    });
     _pendingAuditEvents.add({
       'action': action,
       'entityType': entityType,
@@ -10011,6 +10451,331 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (inventoryChanged) unawaited(_playSyncChime());
   }
 
+  void _applyRemoteEntityChanges(List<WorkshopEntityChange> changes) {
+    var rebuildRoot = false;
+    var inventoryChanged = false;
+
+    T? decodedEntity<T>(
+      WorkshopEntityChange change,
+      T? Function(WorkshopState) pick,
+    ) {
+      if (change.deleted) return null;
+      final root = <String, dynamic>{
+        'schemaVersion': 8,
+        'historyLimit': historyLimit,
+        for (final type in workshopEntityCollections) type: <Object?>[],
+      };
+      root[change.entityType] = [
+        {'id': change.entityId, ...change.fields},
+      ];
+      final decoded = decodeWorkshopState(jsonEncode(root));
+      return decoded == null ? null : pick(decoded);
+    }
+
+    void replaceById<T>(
+      List<T> target,
+      String id,
+      T value,
+      String Function(T) idOf,
+    ) {
+      final index = target.indexWhere((entry) => idOf(entry) == id);
+      if (index < 0) {
+        target.add(value);
+      } else {
+        target[index] = value;
+      }
+    }
+
+    void rememberAppliedChange(WorkshopEntityChange change) {
+      if (change.entityType == workshopMetadataEntityType) {
+        _persistedMetadata = Map<String, dynamic>.from(
+          jsonDecode(jsonEncode(_workshopMetadata())) as Map,
+        );
+        return;
+      }
+      final references = _persistedEntityReferences.putIfAbsent(
+        change.entityType,
+        () => {},
+      );
+      if (change.deleted) {
+        references.remove(change.entityId);
+        return;
+      }
+      final record = _entityCollections()[change.entityType]
+          ?.where((entry) => _entityId(entry) == change.entityId)
+          .firstOrNull;
+      if (record != null) references[change.entityId] = record;
+    }
+
+    for (final change in changes) {
+      if (change.entityType == workshopMetadataEntityType) {
+        final fields = change.fields;
+        if (fields['historyLimit'] is num) {
+          historyLimit = (fields['historyLimit'] as num).toInt();
+        }
+        if (fields['typeLabelOverrides'] is Map) {
+          typeLabelOverrides
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(fields['typeLabelOverrides'] as Map)
+                  .map((key, value) => MapEntry(key, value.toString())),
+            );
+        }
+        if (fields['typeIconOverrides'] is Map) {
+          typeIconOverrides
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(fields['typeIconOverrides'] as Map)
+                  .map((key, value) => MapEntry(key, value.toString())),
+            );
+        }
+        if (fields['typeDepletionSettings'] is Map) {
+          typeDepletionSettings
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(fields['typeDepletionSettings'] as Map)
+                  .map((key, value) => MapEntry(key, value == true)),
+            );
+        }
+        if (fields['typeStatusSettings'] is Map) {
+          typeStatusSettings
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(fields['typeStatusSettings'] as Map)
+                  .map((key, value) => MapEntry(key, value == true)),
+            );
+        }
+        if (fields['deletedTypeKeys'] is List) {
+          deletedTypeKeys
+            ..clear()
+            ..addAll((fields['deletedTypeKeys'] as List).cast<String>());
+        }
+        rebuildRoot = true;
+        rememberAppliedChange(change);
+        continue;
+      }
+
+      if (change.entityType == 'inventory') {
+        inventoryChanged = true;
+        final index = inventory.indexWhere(
+          (item) => item.id == change.entityId,
+        );
+        if (change.deleted) {
+          if (index >= 0) inventory.removeAt(index);
+          _inventoryItemNotifiers.remove(change.entityId)?.dispose();
+          rebuildRoot = true;
+          rememberAppliedChange(change);
+          continue;
+        }
+        final item = decodedEntity<InventoryItem>(
+          change,
+          (state) => state.inventory.singleOrNull,
+        );
+        if (item == null) continue;
+        final lightweightItem = _withoutFullInventoryImages(item);
+        if (index < 0) {
+          _addInventoryItem(lightweightItem);
+          rebuildRoot = true;
+        } else {
+          final previous = inventory[index];
+          _publishInventoryItem(lightweightItem);
+          if (previous.name != lightweightItem.name ||
+              previous.type != lightweightItem.type ||
+              previous.archived != lightweightItem.archived ||
+              previous.itemColorName != lightweightItem.itemColorName ||
+              sort == InventorySort.quantity &&
+                  previous.quantity != lightweightItem.quantity ||
+              hideZeroQuantityItems &&
+                  (previous.quantity == 0) != (lightweightItem.quantity == 0)) {
+            rebuildRoot = true;
+          }
+        }
+        rememberAppliedChange(change);
+        continue;
+      }
+
+      rebuildRoot = true;
+      switch (change.entityType) {
+        case 'vendors':
+          if (change.deleted) {
+            vendors.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<VendorRecord>(
+              change,
+              (s) => s.vendors.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(vendors, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'brands':
+          if (change.deleted) {
+            brands.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<BrandRecord>(
+              change,
+              (s) => s.brands.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(brands, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'spoolTypes':
+          if (change.deleted) {
+            spoolTypes.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<SpoolTypeRecord>(
+              change,
+              (s) => s.spoolTypes
+                  .where((e) => e.id == change.entityId)
+                  .firstOrNull,
+            );
+            if (value != null) {
+              replaceById(spoolTypes, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'materials':
+          if (change.deleted) {
+            materials.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<MaterialRecord>(
+              change,
+              (s) =>
+                  s.materials.where((e) => e.id == change.entityId).firstOrNull,
+            );
+            if (value != null) {
+              replaceById(materials, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'customItemTypes':
+          if (change.deleted) {
+            customItemTypes.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<CustomItemTypeRecord>(
+              change,
+              (s) => s.customItemTypes.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(customItemTypes, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'products':
+          if (change.deleted) {
+            products.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<CatalogProduct>(
+              change,
+              (s) => s.products.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(products, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'machineTypes':
+          if (change.deleted) {
+            machineTypes.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<MachineTypeRecord>(
+              change,
+              (s) => s.machineTypes.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(machineTypes, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'machines':
+          if (change.deleted) {
+            machines.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<MachineRecord>(
+              change,
+              (s) => s.machines.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(machines, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'kits':
+          if (change.deleted) {
+            kits.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<KitRecord>(
+              change,
+              (s) => s.kits.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(kits, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'builds':
+          if (change.deleted) {
+            builds.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<BuildRecord>(
+              change,
+              (s) => s.builds.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(builds, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'locations':
+          if (change.deleted) {
+            locations.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<StockLocationRecord>(
+              change,
+              (s) => s.locations.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(locations, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'shoppingList':
+          if (change.deleted) {
+            shoppingList.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<ShoppingListEntry>(
+              change,
+              (s) => s.shoppingList.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(shoppingList, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'auditLog':
+          if (change.deleted) {
+            auditLog.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<AuditEntry>(
+              change,
+              (s) => s.auditLog.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(auditLog, change.entityId, value, (e) => e.id);
+            }
+          }
+        case 'additionHistory':
+          if (change.deleted) {
+            additionHistory.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<AdditionHistoryEntry>(
+              change,
+              (s) => s.additionHistory.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(additionHistory, change.entityId, value, (e) => e.id);
+            }
+          }
+      }
+      rememberAppliedChange(change);
+    }
+
+    _invalidateSearchCaches();
+    if (rebuildRoot && mounted) setState(() {});
+    if (inventoryChanged) unawaited(_playSyncChime());
+  }
+
   Future<void> _playSyncChime() async {
     if (!syncChimeEnabled) return;
     try {
@@ -10085,9 +10850,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     return value;
   }
-
-  String _canonicalJson(String source) =>
-      jsonEncode(_sortedJson(jsonDecode(source)));
 
   bool _sameJson(Object? a, Object? b) =>
       jsonEncode(_sortedJson(a)) == jsonEncode(_sortedJson(b));
@@ -10261,92 +11023,98 @@ class _InventoryHomeState extends State<InventoryHome> {
         debugPrint('Device registration failed; continuing sync: $error');
       }
 
-      final remoteUpdatedAt = await service.latestUpdatedAt(session);
-      final remoteUnchanged =
-          remoteUpdatedAt != null &&
-          config.lastSyncedAt != null &&
-          remoteUpdatedAt.isAtSameMomentAs(config.lastSyncedAt!);
-      if (remoteUnchanged && _localStateRevision == _lastSyncedLocalRevision) {
-        syncSucceeded = true;
+      var cursor = database.loadSyncCursor(config.workspaceId!);
+      final incoming = await service.downloadChanges(
+        session,
+        afterRevision: cursor,
+      );
+      if (_quantityCommitTimers.isNotEmpty) {
+        _syncRequestedWhileBusy = true;
         return;
       }
-
-      if (remoteUnchanged) {
-        final syncingRevision = _localStateRevision;
-        final local = _canonicalJson(_currentStateJson());
-        final auditBatch = _pendingAuditBatch();
-        final updated = await service.upload(
-          session,
-          local,
-          auditEvents: auditBatch,
-        );
-        config = config.copyWith(
-          lastSyncedAt: updated,
-          lastSyncedStateJson: local,
-        );
-        database.saveSyncConfig(jsonEncode(config.toJson()));
-        _lastSyncedLocalRevision = syncingRevision;
-        _acknowledgeAuditBatch(auditBatch);
-        _lastSyncConflict = null;
-        syncSucceeded = true;
-        return;
-      }
-
-      final cloud = await service.download(session);
-      // Capture local state only after the download. Any edit made while the
-      // network request was in flight is therefore part of this merge/upload.
-      final syncingRevision = _localStateRevision;
-      final local = _canonicalJson(_currentStateJson());
-      final auditBatch = _pendingAuditBatch();
-      var uploadedAuditBatch = false;
-      if (cloud == null) {
-        final updated = await service.upload(
-          session,
-          local,
-          auditEvents: auditBatch,
-        );
-        uploadedAuditBatch = true;
-        config = config.copyWith(
-          lastSyncedAt: updated,
-          lastSyncedStateJson: local,
-        );
-      } else {
-        final remote = _canonicalJson(cloud.stateJson);
-        final previous = config.lastSyncedStateJson == null
-            ? remote
-            : _canonicalJson(config.lastSyncedStateJson!);
-        final merged = mergeWorkshopStates(previous, local, remote);
-        if (merged != local && mounted) _applyRemoteCloudState(merged);
-        if (merged != remote) {
-          final updated = await service.upload(
-            session,
-            merged,
-            auditEvents: auditBatch,
+      var pending = database.loadPendingWorkshopChanges();
+      var pendingByKey = {
+        for (final entry in pending)
+          '${entry.change.entityType}\u0000${entry.change.entityId}':
+              entry.change,
+      };
+      if (incoming.changes.isNotEmpty && mounted) {
+        await _waitForInventoryScrollIdle();
+        if (!mounted) return;
+        final mergedIncoming = incoming.changes.map((change) {
+          final local =
+              pendingByKey['${change.entityType}\u0000${change.entityId}'];
+          if (local == null) return change;
+          if (local.deleted) return local;
+          return WorkshopEntityChange(
+            entityType: change.entityType,
+            entityId: change.entityId,
+            fields: {...change.fields, ...local.fields},
+            revision: change.revision,
           );
-          uploadedAuditBatch = true;
-          config = config.copyWith(lastSyncedAt: updated);
-        } else {
-          config = config.copyWith(lastSyncedAt: cloud.updatedAt);
-        }
-        config = config.copyWith(lastSyncedStateJson: merged);
+        }).toList();
+        database.applyRemoteWorkshopChanges(mergedIncoming);
+        _applyRemoteEntityChanges(mergedIncoming);
       }
+      cursor = incoming.revision;
+      database.saveSyncCursor(config.workspaceId!, cursor);
+
+      final syncingRevision = _localStateRevision;
+      final auditBatch = _pendingAuditBatch();
+      if (pending.isNotEmpty) {
+        await service.uploadChanges(
+          session,
+          pending.map((entry) => entry.change),
+          deviceId: deviceId,
+          auditEvents: auditBatch,
+        );
+        database.acknowledgePendingWorkshopChanges(pending);
+        _acknowledgeAuditBatch(auditBatch);
+      }
+
+      // Pull again from the previous cursor. This includes our confirmed rows
+      // and any concurrent device writes; advancing directly to the RPC's
+      // revision could otherwise skip an interleaved change.
+      final confirmed = await service.downloadChanges(
+        session,
+        afterRevision: cursor,
+      );
+      if (confirmed.changes.isNotEmpty && mounted) {
+        await _waitForInventoryScrollIdle();
+        if (!mounted) return;
+        if (_quantityCommitTimers.isNotEmpty) {
+          _syncRequestedWhileBusy = true;
+          return;
+        }
+        pending = database.loadPendingWorkshopChanges();
+        pendingByKey = {
+          for (final entry in pending)
+            '${entry.change.entityType}\u0000${entry.change.entityId}':
+                entry.change,
+        };
+        final mergedConfirmed = confirmed.changes.map((change) {
+          final local =
+              pendingByKey['${change.entityType}\u0000${change.entityId}'];
+          if (local == null) return change;
+          if (local.deleted) return local;
+          return WorkshopEntityChange(
+            entityType: change.entityType,
+            entityId: change.entityId,
+            fields: {...change.fields, ...local.fields},
+            revision: change.revision,
+          );
+        }).toList();
+        database.applyRemoteWorkshopChanges(mergedConfirmed);
+        _applyRemoteEntityChanges(mergedConfirmed);
+      }
+      database.saveSyncCursor(config.workspaceId!, confirmed.revision);
+      config = config.copyWith(
+        lastSyncedAt: DateTime.now().toUtc(),
+        clearLastSyncedStateJson: true,
+      );
       database.saveSyncConfig(jsonEncode(config.toJson()));
       _lastSyncedLocalRevision = syncingRevision;
-      if (uploadedAuditBatch) _acknowledgeAuditBatch(auditBatch);
-      _lastSyncConflict = null;
       syncSucceeded = true;
-    } on WorkshopMergeConflict catch (error) {
-      if (mounted && _lastSyncConflict != error.path) {
-        _lastSyncConflict = error.path;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Sync paused: ${error.toString()} Open Remote Sync to choose which version to keep.',
-            ),
-            duration: const Duration(seconds: 8),
-          ),
-        );
-      }
     } on SupabaseSyncException catch (error) {
       if (error.isInvalidRefreshToken) {
         retryAfterRecovery = await _recoverExpiredOwnerSession(
@@ -10394,6 +11162,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
+  Future<void> _waitForInventoryScrollIdle() async {
+    while (mounted && _inventoryIsScrolling.value) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    // Let the first settled frame render before applying incoming records.
+    if (mounted) await SchedulerBinding.instance.endOfFrame;
+  }
+
   Future<void> _openCloudSync({String? initialPairingCode}) async {
     final database = widget.database;
     if (database == null) return;
@@ -10413,6 +11189,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         database: database,
         localStateJson: _currentStateJson(),
         onCloudState: _applyRemoteCloudState,
+        onCloudChanges: _applyRemoteEntityChanges,
         initialPairingCode: initialPairingCode,
       ),
     );
@@ -11814,14 +12591,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       final item = inventory[index];
       if (item.storageLocationId.isEmpty) continue;
       if (!validIds.contains(item.storageLocationId)) {
-        inventory[index] = item.copyWith(
-          storageLocationId: '',
-          storageLocation: '',
+        _publishInventoryItem(
+          item.copyWith(storageLocationId: '', storageLocation: ''),
         );
         continue;
       }
-      inventory[index] = item.copyWith(
-        storageLocation: _locationPath(item.storageLocationId),
+      _publishInventoryItem(
+        item.copyWith(storageLocation: _locationPath(item.storageLocationId)),
       );
     }
   }
@@ -11946,9 +12722,11 @@ class _InventoryHomeState extends State<InventoryHome> {
     for (var index = 0; index < inventory.length; index++) {
       final item = inventory[index];
       if (item.storageLocationId != location.id) continue;
-      inventory[index] = item.copyWith(
-        storageLocationId: parent?.id ?? '',
-        storageLocation: parent == null ? '' : _locationPath(parent.id),
+      _publishInventoryItem(
+        item.copyWith(
+          storageLocationId: parent?.id ?? '',
+          storageLocation: parent == null ? '' : _locationPath(parent.id),
+        ),
       );
     }
     locations.removeWhere((entry) => entry.id == location.id);
@@ -11965,9 +12743,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   void _moveInventoryItem(InventoryItem item, StockLocationRecord location) {
     setState(() {
-      replaceInventoryItemById(
-        inventory,
-        item.id,
+      _publishInventoryItem(
         item.copyWith(
           storageLocationId: location.id,
           storageLocation: _locationPath(location.id),
@@ -12170,9 +12946,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
     if (amount == null || amount <= 0 || !mounted) return;
     setState(() {
-      replaceInventoryItemById(
-        inventory,
-        matched.id,
+      _publishInventoryItem(
         matched.copyWith(quantity: matched.quantity + amount),
       );
       final index = shoppingList.indexWhere((value) => value.id == entry.id);
@@ -19776,6 +20550,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   late bool amsCompatible;
   late bool refill;
   Uint8List? itemImage;
+  Uint8List? itemThumbnail;
   Uint8List? labelImage;
   Uint8List? barcodeImage;
   bool importingProductPage = false;
@@ -19962,6 +20737,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     amsCompatible = item?.amsCompatible ?? false;
     refill = item?.refill ?? false;
     itemImage = item?.imageBytes;
+    itemThumbnail = item?.thumbnailBytes;
     labelImage = item?.labelImageBytes ?? label?.imageBytes;
     compatibleMachineIds = {...?item?.compatibleMachineIds};
     if (item == null && inferredFilament != null) {
@@ -20885,8 +21661,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           label: 'Item icon / image',
                           bytes: itemImage,
                           fallbackIcon: _displayTypeIcon(type),
-                          onChanged: (bytes) =>
-                              setState(() => itemImage = bytes),
+                          onChanged: (bytes) => unawaited(_setItemImage(bytes)),
                         ),
                         const SizedBox(height: 10),
                         _ImagePickerButton(
@@ -21474,6 +22249,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
             widget.initialItem?.lastDriedAt ??
             (type == InventoryType.filament ? DateTime.now() : null),
         imageBytes: itemImage,
+        thumbnailBytes: itemThumbnail,
         labelImageBytes: labelImage,
         barcode: barcodeController.text.trim(),
         productUrl: productUrlController.text.trim(),
@@ -21846,6 +22622,11 @@ class _AddItemDialogState extends State<AddItemDialog> {
         extractedInstructions,
         template,
       );
+      final downloadedThumbnail = await compute(
+        _createCardThumbnail,
+        downloadedImage,
+      );
+      if (!mounted) return;
       setState(() {
         nameController.text =
             product!['name']?.toString() ?? nameController.text;
@@ -21883,7 +22664,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
           storageController.text = instructions.storage;
         }
         if (template != null) type = InventoryType.filament;
-        itemImage = downloadedImage ?? itemImage;
+        if (downloadedImage != null) {
+          itemImage = downloadedImage;
+          itemThumbnail = downloadedThumbnail;
+        }
         importingProductPage = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -22079,6 +22863,15 @@ class _AddItemDialogState extends State<AddItemDialog> {
     });
   }
 
+  Future<void> _setItemImage(Uint8List? bytes) async {
+    final thumbnail = await compute(_createCardThumbnail, bytes);
+    if (!mounted) return;
+    setState(() {
+      itemImage = bytes;
+      itemThumbnail = thumbnail;
+    });
+  }
+
   void _selectProduct(CatalogProduct product) {
     setState(() {
       productId = product.id;
@@ -22096,8 +22889,8 @@ class _AddItemDialogState extends State<AddItemDialog> {
         dryingController.text = settings.durationMinutes.toString();
       }
       storageController.text = product.storageInstructions;
-      itemImage = product.imageBytes;
     });
+    unawaited(_setItemImage(product.imageBytes));
   }
 }
 
@@ -22468,8 +23261,10 @@ Future<InventoryJsonImageImportResult> downloadInventoryJsonImages(
             img.decodeImage(imageBytes) == null) {
           throw const FormatException('Response is not a supported image.');
         }
+        final thumbnail = await compute(_createCardThumbnail, imageBytes);
         hydrated[itemIndex] = hydrated[itemIndex].copyWith(
           imageBytes: imageBytes,
+          thumbnailBytes: thumbnail,
         );
         imported++;
       } catch (_) {
@@ -22751,13 +23546,14 @@ class _ItemVisual extends StatelessWidget {
   Widget build(BuildContext context) {
     final typeColor = _typeColor(item.type);
     final colorSwatch = _itemColorSwatch(item.itemColorName);
+    final previewBytes = item.thumbnailBytes ?? item.imageBytes;
     return ClipRRect(
       borderRadius: BorderRadius.circular(size * .3),
       child: SizedBox.square(
         dimension: size,
-        child: item.imageBytes != null
+        child: previewBytes != null
             ? Image.memory(
-                item.imageBytes!,
+                previewBytes,
                 key: Key('item-product-image-${item.id}'),
                 fit: BoxFit.cover,
                 cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
@@ -24956,6 +25752,7 @@ class LowStockPulseEffect extends StatefulWidget {
     required this.active,
     required this.durationPercent,
     required this.recurrenceSeconds,
+    this.playWhenFirstVisible = true,
     required this.child,
   });
   final String itemId;
@@ -24963,6 +25760,7 @@ class LowStockPulseEffect extends StatefulWidget {
   final bool active;
   final int durationPercent;
   final int recurrenceSeconds;
+  final bool playWhenFirstVisible;
   final Widget child;
 
   @override
@@ -24982,7 +25780,6 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
   @override
   void initState() {
     super.initState();
-    if (widget.trigger > 0) controller.forward(from: 0);
     _restartVisibilityTracking();
   }
 
@@ -25019,7 +25816,9 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
 
   void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
-    wasVisible = false;
+    // Mounting a recycled sliver child is not a new alert. Starting an effect
+    // here made every low-stock card animate as it entered the viewport.
+    wasVisible = widget.active && !widget.playWhenFirstVisible;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
     if (widget.recurrenceSeconds > 0) {
@@ -25124,6 +25923,7 @@ class MoistureDropletWaveEffect extends StatefulWidget {
     required this.active,
     required this.durationPercent,
     required this.recurrenceSeconds,
+    this.playWhenFirstVisible = true,
     required this.child,
   });
   final String itemId;
@@ -25131,6 +25931,7 @@ class MoistureDropletWaveEffect extends StatefulWidget {
   final bool active;
   final int durationPercent;
   final int recurrenceSeconds;
+  final bool playWhenFirstVisible;
   final Widget child;
 
   @override
@@ -25152,7 +25953,6 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
   @override
   void initState() {
     super.initState();
-    if (widget.trigger > 0) controller.forward(from: 0);
     _restartVisibilityTracking();
   }
 
@@ -25189,7 +25989,8 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
 
   void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
-    wasVisible = false;
+    // Do not replay an old moisture alert just because scrolling remounted it.
+    wasVisible = widget.active && !widget.playWhenFirstVisible;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
     if (widget.recurrenceSeconds > 0) {
@@ -25308,6 +26109,7 @@ class ItemCardEffects extends StatelessWidget {
     required this.moistureActive,
     required this.durationPercent,
     required this.recurrenceSeconds,
+    this.scrollingListenable,
     required this.child,
   });
   final String itemId;
@@ -25318,29 +26120,44 @@ class ItemCardEffects extends StatelessWidget {
   final bool moistureActive;
   final int durationPercent;
   final int recurrenceSeconds;
+  final ValueListenable<bool>? scrollingListenable;
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => MoistureDropletWaveEffect(
-    itemId: itemId,
-    trigger: moistureVersion,
-    active: moistureActive,
-    durationPercent: durationPercent,
-    recurrenceSeconds: recurrenceSeconds,
-    child: LowStockPulseEffect(
+  Widget build(BuildContext context) {
+    final staticChild = RepaintBoundary(child: child);
+    final playWhenFirstVisible = scrollingListenable == null;
+    Widget effects(Widget effectChild) => MoistureDropletWaveEffect(
       itemId: itemId,
-      trigger: lowStockVersion,
-      active: lowStockActive,
+      trigger: moistureVersion,
+      active: moistureActive,
       durationPercent: durationPercent,
       recurrenceSeconds: recurrenceSeconds,
-      child: RemoteQuantityChangeEffect(
+      playWhenFirstVisible: playWhenFirstVisible,
+      child: LowStockPulseEffect(
         itemId: itemId,
-        trigger: quantitySyncVersion,
+        trigger: lowStockVersion,
+        active: lowStockActive,
         durationPercent: durationPercent,
-        child: child,
+        recurrenceSeconds: recurrenceSeconds,
+        playWhenFirstVisible: playWhenFirstVisible,
+        child: RemoteQuantityChangeEffect(
+          itemId: itemId,
+          trigger: quantitySyncVersion,
+          durationPercent: durationPercent,
+          child: effectChild,
+        ),
       ),
-    ),
-  );
+    );
+    final scrolling = scrollingListenable;
+    if (scrolling == null) return effects(staticChild);
+    return ValueListenableBuilder<bool>(
+      valueListenable: scrolling,
+      child: staticChild,
+      builder: (context, isScrolling, cachedChild) =>
+          isScrolling ? cachedChild! : effects(cachedChild!),
+    );
+  }
 }
 
 class _PhotoInventoryCardContent extends StatelessWidget {
@@ -25374,7 +26191,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         _CardPhotoBackground(
-          bytes: item.imageBytes!,
+          bytes: item.thumbnailBytes ?? item.imageBytes!,
           imageKey: Key('photo-card-background-${item.id}'),
         ),
         if (swatch != null) ColoredBox(color: swatch.withValues(alpha: .12)),
@@ -25568,6 +26385,7 @@ class InventoryCard extends StatelessWidget {
     this.moistureAnimationVersion = 0,
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
+    this.scrollingListenable,
     this.photoCard = false,
     this.showStatus = true,
     this.canEdit = true,
@@ -25590,6 +26408,7 @@ class InventoryCard extends StatelessWidget {
   final int moistureAnimationVersion;
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
+  final ValueListenable<bool>? scrollingListenable;
   final bool photoCard;
   final bool showStatus;
   final bool canEdit;
@@ -25640,6 +26459,7 @@ class InventoryCard extends StatelessWidget {
           moistureActive: _hasMoistureVisualAlert(item),
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
+          scrollingListenable: scrollingListenable,
           child: photoCard && item.imageBytes != null
               ? _PhotoInventoryCardContent(
                   item: item,
@@ -25834,6 +26654,7 @@ class InventoryRow extends StatelessWidget {
     this.moistureAnimationVersion = 0,
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
+    this.scrollingListenable,
     this.showStatus = true,
     this.canEdit = true,
     this.canCreate = true,
@@ -25855,6 +26676,7 @@ class InventoryRow extends StatelessWidget {
   final int moistureAnimationVersion;
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
+  final ValueListenable<bool>? scrollingListenable;
   final bool showStatus;
   final bool canEdit;
   final bool canCreate;
@@ -26077,6 +26899,7 @@ class InventoryRow extends StatelessWidget {
           moistureActive: _hasMoistureVisualAlert(item),
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
+          scrollingListenable: scrollingListenable,
           child: LayoutBuilder(
             builder: (_, constraints) =>
                 constraints.maxWidth < 600 ? _mobileLayout() : _desktopLayout(),

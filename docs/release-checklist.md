@@ -287,7 +287,9 @@ For failures, record the test ID, platform, screenshot/log, and exact build.
   - Resize desktop slowly from minimum width to ultrawide. Rotate Android
     portrait → landscape → portrait.
   - Pass: controls reflow without clipping, overlap, upside-down dialogs, or
-    inaccessible actions.
+    inaccessible actions. At narrow desktop widths, the Alerts/New Items group
+    and the right-side top-bar button group remain vertically aligned on the
+    same row with consistent height, spacing, and bar padding.
 
 - [ ] **UI-04 — Bottom action bar**
   - Shrink through full labels, wide icon buttons, and compact icon buttons.
@@ -303,6 +305,15 @@ For failures, record the test ID, platform, screenshot/log, and exact build.
   - Hover cards and every major button on desktop.
   - Pass: buttons use the magenta-then-purple glass effect; cards use the dimmer
     highlight and do not flash as brightly as buttons.
+
+- [ ] **UI-07 — Light-mode detail readability (required before final v1.1)**
+  - In light mode open an item with a product image, color, moisture tracking,
+    printing instructions, spool data, and brand data. Inspect Item Name, color
+    name/hex, the Instructions/Spool/Brand tabs, and all detail text.
+  - Open a populated Stockroom location and scroll through its item list.
+  - Pass: all item-detail text uses dark foregrounds on light/off-white surfaces;
+    inactive tab labels are clearly darker than their current grey; and the
+    location item-list scrollbar has a clearly visible light-mode thumb and track.
 
 ## 9. Performance
 

@@ -1387,7 +1387,9 @@ Bed Temperature: 80°C
       expect(images.imported, 1);
       expect(images.failed, 0);
       expect(images.items.first.imageBytes, pngBytes);
+      expect(images.items.first.thumbnailBytes, isNotEmpty);
       expect(images.items.last.imageBytes, isNull);
+      expect(images.items.last.thumbnailBytes, isNull);
     },
   );
 
@@ -2687,6 +2689,38 @@ Bed Temperature: 80°C
     }
     expect(recurred, isTrue);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('card effect layers are removed while inventory is scrolling', (
+    tester,
+  ) async {
+    final scrolling = ValueNotifier(false);
+    addTearDown(scrolling.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ItemCardEffects(
+          itemId: 'SCROLL-EFFECTS',
+          quantitySyncVersion: 1,
+          lowStockVersion: 1,
+          moistureVersion: 1,
+          lowStockActive: true,
+          moistureActive: true,
+          durationPercent: 100,
+          recurrenceSeconds: 5,
+          scrollingListenable: scrolling,
+          child: const SizedBox(width: 200, height: 200),
+        ),
+      ),
+    );
+    expect(find.byType(LowStockPulseEffect), findsOneWidget);
+    expect(find.byType(MoistureDropletWaveEffect), findsOneWidget);
+    expect(find.byType(RemoteQuantityChangeEffect), findsOneWidget);
+
+    scrolling.value = true;
+    await tester.pump();
+    expect(find.byType(LowStockPulseEffect), findsNothing);
+    expect(find.byType(MoistureDropletWaveEffect), findsNothing);
+    expect(find.byType(RemoteQuantityChangeEffect), findsNothing);
   });
 
   testWidgets('moisture droplets travel vertically down the card', (

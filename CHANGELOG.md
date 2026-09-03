@@ -2,7 +2,7 @@
 
 All notable changes to Inventorinator will be recorded here.
 
-## [0.2.0-alpha] - Unreleased
+## [0.1.1-alpha] - Unreleased
 
 ### Added
 

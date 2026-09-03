@@ -12260,57 +12260,32 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _sameJson(Object? a, Object? b) =>
       jsonEncode(_sortedJson(a)) == jsonEncode(_sortedJson(b));
 
+  // A dead refresh token usually means a concurrent window or another
+  // install on this device already refreshed and saved a newer session,
+  // not that this device's identity is actually gone. Recovering via the
+  // owner recovery key is a destructive ownership transfer -- it locks out
+  // every other device claiming ownership and rotates the shared recovery
+  // key -- so it must never fire automatically just because one of
+  // several racing sync attempts lost a refresh-token race. Only adopt an
+  // already-fresher session here; genuine recovery stays a deliberate,
+  // user-initiated action in the Remote Sync dialog.
   Future<bool> _recoverExpiredOwnerSession(
     LocalDatabase database,
     SupabaseConfig failedConfig,
   ) async {
     final workspaceId = failedConfig.workspaceId;
-    if (failedConfig.workspaceRole != 'owner' || workspaceId == null) {
-      return false;
-    }
-    final recoveryKey = database.loadWorkspaceRecoveryKey(workspaceId);
-    if (recoveryKey == null) return false;
+    if (workspaceId == null) return false;
+    final source = database.loadSyncConfig();
+    if (source == null) return false;
     try {
-      return await database.withSyncSessionLock(() async {
-        final source = database.loadSyncConfig();
-        final latest = source == null
-            ? failedConfig
-            : SupabaseConfig.fromJson(
-                jsonDecode(source) as Map<String, dynamic>,
-              );
-        final service = SupabaseSyncService(latest);
-        final session = await service.signInAnonymously();
-        await service.requireCurrentSchema(session);
-        final replacement = await service.recoverWorkspace(
-          session,
-          workspaceId: workspaceId,
-          recoveryKey: recoveryKey,
-          deviceName: deviceName,
-        );
-        final recovered = latest.copyWith(
-          userId: session.userId,
-          workspaceId: replacement.workspaceId,
-          workspaceRole: 'owner',
-          accessToken: session.accessToken,
-          accessTokenExpiresAt: session.expiresAt,
-          refreshToken: session.refreshToken,
-        );
-        database.saveWorkspaceRecoveryKey(
-          replacement.workspaceId,
-          replacement.key,
-        );
-        database.saveSyncConfig(jsonEncode(recovered.toJson()));
-        if (mounted) {
-          setState(() {
-            currentRole = WorkspaceRole.admin;
-            workspaceOwner = true;
-            currentUserId = session.userId;
-          });
-        }
-        return true;
-      });
+      final latest = SupabaseConfig.fromJson(
+        jsonDecode(source) as Map<String, dynamic>,
+      );
+      return latest.workspaceId == workspaceId &&
+          latest.refreshToken != null &&
+          latest.refreshToken != failedConfig.refreshToken;
     } catch (error) {
-      debugPrint('Automatic owner-session recovery failed: $error');
+      debugPrint('Could not read the latest sync config: $error');
       return false;
     }
   }

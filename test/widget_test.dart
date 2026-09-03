@@ -1378,6 +1378,102 @@ Bed Temperature: 80°C
     ]);
   });
 
+  test('filament style entries survive export and import', () {
+    final item = sampleInventory.first.copyWith(
+      type: InventoryType.filament,
+      styleEntries: const [
+        FilamentStyleEntry(style: 'glitter'),
+        FilamentStyleEntry(
+          style: 'coextruded',
+          colors: ['#FF0000', '#00FF00', '#0000FF'],
+        ),
+      ],
+    );
+    final decoded = decodeWorkshopState(
+      encodeWorkshopState(
+        inventory: [item],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      ),
+    )!;
+
+    final styleEntries = decoded.inventory.single.styleEntries;
+    expect(styleEntries, hasLength(2));
+    expect(styleEntries[0].style, 'glitter');
+    expect(styleEntries[0].colors, isEmpty);
+    expect(styleEntries[1].style, 'coextruded');
+    expect(styleEntries[1].colors, ['#FF0000', '#00FF00', '#0000FF']);
+  });
+
+  test('carbon fiber style entries keep their form on export and import', () {
+    final item = sampleInventory.first.copyWith(
+      type: InventoryType.filament,
+      styleEntries: const [
+        FilamentStyleEntry(style: 'carbonFiber', carbonFiberForm: 'ground'),
+      ],
+    );
+    final decoded = decodeWorkshopState(
+      encodeWorkshopState(
+        inventory: [item],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      ),
+    )!;
+
+    expect(decoded.inventory.single.styleEntries.single.carbonFiberForm, 'ground');
+  });
+
+  testWidgets('filament style editor supports coextruded colors and a second style', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.tap(find.byKey(const Key('add-item')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('item-type')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Filament').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('add-filament-style')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('filament-style-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Coextruded').last);
+    await tester.pumpAndSettle();
+
+    // Coextruded starts at a single strand/color.
+    expect(find.byKey(const Key('filament-style-color-0-0')), findsOneWidget);
+    expect(find.byKey(const Key('filament-style-color-0-2')), findsNothing);
+    await tester.tap(find.byKey(const Key('filament-style-count-0-3')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
+
+    // A second style can be added and configured independently.
+    await tester.tap(find.byKey(const Key('add-filament-style')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('add-filament-style')), findsNothing);
+    await tester.tap(find.byKey(const Key('filament-style-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Carbon Fiber').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('filament-style-carbon-form-1')),
+      findsOneWidget,
+    );
+    // The first style's color count is unaffected by the second entry.
+    expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('remove-filament-style-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('add-filament-style')), findsOneWidget);
+    expect(find.byKey(const Key('filament-style-1')), findsNothing);
+  });
+
   testWidgets('kit package import plan creates zero stock and is idempotent', (
     tester,
   ) async {
@@ -5205,6 +5301,11 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(find.text('Filament').last);
     await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('add-item-form-scroll')),
+      const Offset(0, -300),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('brand-picker-null')));
     await tester.pumpAndSettle();
     expect(find.text('E3D'), findsNothing);
@@ -6196,6 +6297,11 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('item-type')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Filament').last);
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('add-item-form-scroll')),
+      const Offset(0, -300),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('brand-picker-null')));
     await tester.pumpAndSettle();

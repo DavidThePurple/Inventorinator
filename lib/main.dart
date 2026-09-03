@@ -2233,6 +2233,101 @@ class AdditionHistoryEntry {
   );
 }
 
+/// A single filament style tag (e.g. Matte, Glitter, Coextruded) plus
+/// whatever extra data that style needs. Most styles carry no extra data;
+/// [carbonFiberForm] only applies to `carbonFiber`, and [colors] only
+/// applies to `gradient`/`coextruded` (ordered, one hex string per strand).
+class FilamentStyleEntry {
+  const FilamentStyleEntry({
+    required this.style,
+    this.carbonFiberForm,
+    this.colors = const [],
+  });
+
+  final String style;
+  final String? carbonFiberForm;
+  final List<String> colors;
+
+  FilamentStyleEntry copyWith({
+    String? style,
+    String? carbonFiberForm,
+    List<String>? colors,
+  }) => FilamentStyleEntry(
+    style: style ?? this.style,
+    carbonFiberForm: carbonFiberForm ?? this.carbonFiberForm,
+    colors: colors ?? this.colors,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'style': style,
+    if (carbonFiberForm != null) 'carbonFiberForm': carbonFiberForm,
+    if (colors.isNotEmpty) 'colors': colors,
+  };
+
+  factory FilamentStyleEntry.fromJson(Map<String, dynamic> json) =>
+      FilamentStyleEntry(
+        style: json['style'] as String? ?? '',
+        carbonFiberForm: json['carbonFiberForm'] as String?,
+        colors:
+            (json['colors'] as List<dynamic>?)
+                ?.map((value) => value as String)
+                .toList() ??
+            const [],
+      );
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! FilamentStyleEntry ||
+        other.style != style ||
+        other.carbonFiberForm != carbonFiberForm ||
+        other.colors.length != colors.length) {
+      return false;
+    }
+    for (var i = 0; i < colors.length; i++) {
+      if (other.colors[i] != colors[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(style, carbonFiberForm, Object.hashAll(colors));
+}
+
+/// The fixed catalog of selectable filament styles and what extra input
+/// each one needs in the editor.
+enum FilamentStyleInput { none, carbonFiberForm, colors }
+
+class FilamentStyleOption {
+  const FilamentStyleOption(this.key, this.label, this.input);
+  final String key;
+  final String label;
+  final FilamentStyleInput input;
+}
+
+const filamentStyleOptions = <FilamentStyleOption>[
+  FilamentStyleOption('flat', 'Flat', FilamentStyleInput.none),
+  FilamentStyleOption('matte', 'Matte', FilamentStyleInput.none),
+  FilamentStyleOption('silk', 'Silk', FilamentStyleInput.none),
+  FilamentStyleOption('galaxy', 'Galaxy', FilamentStyleInput.none),
+  FilamentStyleOption('glitter', 'Glitter', FilamentStyleInput.none),
+  FilamentStyleOption('glow', 'Glow', FilamentStyleInput.none),
+  FilamentStyleOption(
+    'carbonFiber',
+    'Carbon Fiber',
+    FilamentStyleInput.carbonFiberForm,
+  ),
+  FilamentStyleOption('glassFiber', 'Glass Fiber', FilamentStyleInput.none),
+  FilamentStyleOption('gradient', 'Gradient', FilamentStyleInput.colors),
+  FilamentStyleOption('coextruded', 'Coextruded', FilamentStyleInput.colors),
+];
+
+String filamentStyleLabel(String key) =>
+    filamentStyleOptions.where((option) => option.key == key).firstOrNull?.label ??
+    key;
+
+const _maxFilamentStyleEntries = 2;
+const _maxFilamentStyleColors = 4;
+
 class InventoryItem {
   const InventoryItem({
     required this.id,
@@ -2240,6 +2335,7 @@ class InventoryItem {
     required this.type,
     required this.compatibility,
     this.purposeTags = const [],
+    this.styleEntries = const [],
     required this.added,
     required this.cost,
     required this.color,
@@ -2297,6 +2393,7 @@ class InventoryItem {
   final InventoryType type;
   final List<String> compatibility;
   final List<String> purposeTags;
+  final List<FilamentStyleEntry> styleEntries;
   final DateTime added;
   final double cost;
   final Color color;
@@ -2355,6 +2452,7 @@ class InventoryItem {
     InventoryType? type,
     List<String>? compatibility,
     List<String>? purposeTags,
+    List<FilamentStyleEntry>? styleEntries,
     DateTime? added,
     double? cost,
     Color? color,
@@ -2417,6 +2515,9 @@ class InventoryItem {
     type: type ?? this.type,
     compatibility: compatibility ?? this.compatibility,
     purposeTags: clearFilamentData ? const [] : purposeTags ?? this.purposeTags,
+    styleEntries: clearFilamentData
+        ? const []
+        : styleEntries ?? this.styleEntries,
     added: added ?? this.added,
     cost: cost ?? this.cost,
     color: color ?? this.color,
@@ -3658,6 +3759,7 @@ Map<String, dynamic> _inventoryItemJson(
   'type': item.type.name,
   'compatibility': item.compatibility,
   'purposeTags': item.purposeTags,
+  'styleEntries': item.styleEntries.map((entry) => entry.toJson()).toList(),
   'added': item.added.toIso8601String(),
   'cost': item.cost,
   'color': item.color.toARGB32(),
@@ -3997,6 +4099,14 @@ WorkshopState? decodeWorkshopState(String? source) {
             compatibility: (item['compatibility'] as List).cast<String>(),
             purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
                 .cast<String>(),
+            styleEntries:
+                (item['styleEntries'] as List<dynamic>? ?? const [])
+                    .map(
+                      (entry) => FilamentStyleEntry.fromJson(
+                        (entry as Map).cast<String, dynamic>(),
+                      ),
+                    )
+                    .toList(),
             added: DateTime.parse(item['added'] as String),
             cost: (item['cost'] as num).toDouble(),
             color: Color(item['color'] as int),
@@ -22832,6 +22942,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   String? saveError;
   ProductSearchProvider searchProvider = ProductSearchProvider.google;
   late final Set<String> compatibleMachineIds;
+  late List<FilamentStyleEntry> styleEntryDrafts;
   String? customTypeId;
   String? materialId;
   String? spoolMaterialId;
@@ -23016,6 +23127,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     itemThumbnail = item?.thumbnailBytes;
     labelImage = item?.labelImageBytes ?? label?.imageBytes;
     compatibleMachineIds = {...?item?.compatibleMachineIds};
+    styleEntryDrafts = [...?item?.styleEntries];
     if (item == null && inferredFilament != null) {
       final settings = parseDryingSettings(inferredFilament.drying);
       dryingTemperatureController.text =
@@ -23087,6 +23199,222 @@ class _AddItemDialogState extends State<AddItemDialog> {
     if (text.isEmpty) return null;
     final parsed = double.tryParse(text);
     return parsed == null || parsed <= 0 ? 'Enter a positive number' : null;
+  }
+
+  static const _defaultStyleColor = '#9E9E9E';
+
+  void _addStyleEntry() {
+    if (styleEntryDrafts.length >= _maxFilamentStyleEntries) return;
+    setState(
+      () => styleEntryDrafts.add(const FilamentStyleEntry(style: '')),
+    );
+  }
+
+  void _removeStyleEntry(int index) {
+    setState(() => styleEntryDrafts.removeAt(index));
+  }
+
+  void _setStyleEntryStyle(int index, String styleKey) {
+    final input =
+        filamentStyleOptions
+            .where((option) => option.key == styleKey)
+            .firstOrNull
+            ?.input ??
+        FilamentStyleInput.none;
+    setState(() {
+      styleEntryDrafts[index] = FilamentStyleEntry(
+        style: styleKey,
+        carbonFiberForm: input == FilamentStyleInput.carbonFiberForm
+            ? 'chopped'
+            : null,
+        colors: input == FilamentStyleInput.colors
+            ? List.filled(
+                styleKey == 'gradient' ? 2 : 1,
+                _defaultStyleColor,
+              )
+            : const [],
+      );
+    });
+  }
+
+  void _setStyleCarbonFiberForm(int index, String form) {
+    setState(
+      () => styleEntryDrafts[index] = styleEntryDrafts[index].copyWith(
+        carbonFiberForm: form,
+      ),
+    );
+  }
+
+  void _setStyleColorCount(int index, int count) {
+    final entry = styleEntryDrafts[index];
+    final colors = [...entry.colors];
+    if (count > colors.length) {
+      colors.addAll(
+        List.filled(count - colors.length, _defaultStyleColor),
+      );
+    } else {
+      colors.removeRange(count, colors.length);
+    }
+    setState(
+      () => styleEntryDrafts[index] = entry.copyWith(colors: colors),
+    );
+  }
+
+  Future<void> _pickStyleColor(int index, int colorIndex) async {
+    final entry = styleEntryDrafts[index];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          ItemColorPickerDialog(initialValue: entry.colors[colorIndex]),
+    );
+    if (!mounted || selected == null || selected.isEmpty) return;
+    final colors = [...entry.colors];
+    colors[colorIndex] = selected;
+    setState(
+      () => styleEntryDrafts[index] = entry.copyWith(colors: colors),
+    );
+  }
+
+  Widget _filamentStyleSection() => InputDecorator(
+    decoration: const InputDecoration(
+      labelText: 'Style',
+      border: OutlineInputBorder(),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < styleEntryDrafts.length; i++) ...[
+          if (i > 0) const Divider(height: 20),
+          _filamentStyleEntryRow(i),
+        ],
+        if (styleEntryDrafts.length < _maxFilamentStyleEntries)
+          Padding(
+            padding: EdgeInsets.only(top: styleEntryDrafts.isEmpty ? 0 : 10),
+            child: TextButton.icon(
+              key: const Key('add-filament-style'),
+              onPressed: _addStyleEntry,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(
+                styleEntryDrafts.isEmpty ? 'Add style' : 'Add second style',
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  Widget _filamentStyleEntryRow(int index) {
+    final entry = styleEntryDrafts[index];
+    final option = filamentStyleOptions
+        .where((candidate) => candidate.key == entry.style)
+        .firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                key: Key('filament-style-$index'),
+                initialValue: entry.style.isEmpty ? null : entry.style,
+                decoration: const InputDecoration(
+                  labelText: 'Style',
+                  isDense: true,
+                ),
+                hint: const Text('Select style'),
+                items: [
+                  for (final choice in filamentStyleOptions)
+                    DropdownMenuItem(
+                      value: choice.key,
+                      child: Text(choice.label),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) _setStyleEntryStyle(index, value);
+                },
+              ),
+            ),
+            IconButton(
+              key: Key('remove-filament-style-$index'),
+              onPressed: () => _removeStyleEntry(index),
+              icon: const Icon(Icons.close_rounded, size: 18),
+              tooltip: 'Remove style',
+            ),
+          ],
+        ),
+        if (option?.input == FilamentStyleInput.carbonFiberForm) ...[
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: Key('filament-style-carbon-form-$index'),
+            initialValue: entry.carbonFiberForm ?? 'chopped',
+            decoration: const InputDecoration(
+              labelText: 'Form',
+              isDense: true,
+            ),
+            items: const [
+              DropdownMenuItem(value: 'chopped', child: Text('Chopped')),
+              DropdownMenuItem(value: 'ground', child: Text('Ground')),
+            ],
+            onChanged: (value) {
+              if (value != null) _setStyleCarbonFiberForm(index, value);
+            },
+          ),
+        ],
+        if (option?.input == FilamentStyleInput.colors) ...[
+          const SizedBox(height: 10),
+          Text(
+            entry.style == 'gradient' ? 'Colors in gradient' : 'Strand count',
+            style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            children: [
+              for (
+                var count = entry.style == 'gradient' ? 2 : 1;
+                count <= _maxFilamentStyleColors;
+                count++
+              )
+                ChoiceChip(
+                  key: Key('filament-style-count-$index-$count'),
+                  label: Text('$count'),
+                  selected: entry.colors.length == count,
+                  onSelected: (_) => _setStyleColorCount(index, count),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (
+                var colorIndex = 0;
+                colorIndex < entry.colors.length;
+                colorIndex++
+              )
+                InkWell(
+                  key: Key('filament-style-color-$index-$colorIndex'),
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _pickStyleColor(index, colorIndex),
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _hexColor(entry.colors[colorIndex]),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xff5d5970)),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 
   Future<void> _pickItemColor() async {
@@ -23298,6 +23626,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                 const Divider(height: 1),
                 Expanded(
                   child: SingleChildScrollView(
+                    key: const Key('add-item-form-scroll'),
                     padding: EdgeInsets.all(compact ? 16 : 24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -23367,12 +23696,14 @@ class _AddItemDialogState extends State<AddItemDialog> {
                         ),
                         if (type == InventoryType.filament) ...[
                           const SizedBox(height: 14),
+                          _filamentStyleSection(),
+                          const SizedBox(height: 14),
                           TextFormField(
                             key: const Key('filament-purpose-tags'),
                             controller: purposeTagsController,
                             decoration: const InputDecoration(
                               labelText: 'Purpose tags',
-                              hintText: 'Coextruded, Use first, Engineering…',
+                              hintText: 'Use first, Engineering, Beauty prints only…',
                               helperText: 'Separate tags with commas',
                             ),
                           ),
@@ -24484,6 +24815,11 @@ class _AddItemDialogState extends State<AddItemDialog> {
         type: type,
         compatibility: compatibility,
         purposeTags: type == InventoryType.filament ? purposeTags : const [],
+        styleEntries: type == InventoryType.filament
+            ? styleEntryDrafts
+                  .where((entry) => entry.style.isNotEmpty)
+                  .toList()
+            : const [],
         added: widget.initialItem?.added ?? DateTime.now(),
         cost: double.parse(costController.text),
         quantity: double.parse(quantityController.text),
@@ -26432,6 +26768,8 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
           title: 'AMS compatibility',
           text: item.amsCompatible ? 'Compatible' : 'Not marked compatible',
         ),
+        if (item.styleEntries.isNotEmpty)
+          _FilamentStyleDetailSection(entries: item.styleEntries),
       ],
       _FilamentSidebarTab.brand => <Widget>[
         _DetailSection(
@@ -27405,6 +27743,78 @@ class _DetailSection extends StatelessWidget {
                 text.isEmpty ? 'No instructions recorded.' : text,
                 style: const TextStyle(color: Color(0xffa2a9b9), height: 1.45),
               ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+String _filamentStyleEntryLabel(FilamentStyleEntry entry) {
+  final base = filamentStyleLabel(entry.style);
+  if (entry.carbonFiberForm != null) {
+    return '$base (${entry.carbonFiberForm == 'ground' ? 'Ground' : 'Chopped'})';
+  }
+  if (entry.colors.isNotEmpty) return '$base · ${entry.colors.length} colors';
+  return base;
+}
+
+class _FilamentStyleDetailSection extends StatelessWidget {
+  const _FilamentStyleDetailSection({required this.entries});
+  final List<FilamentStyleEntry> entries;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 24),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.auto_awesome_outlined,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Style', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 5),
+              for (final entry in entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        _filamentStyleEntryLabel(entry),
+                        style: const TextStyle(
+                          color: Color(0xffa2a9b9),
+                          height: 1.45,
+                        ),
+                      ),
+                      if (entry.colors.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        for (final hex in entry.colors)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: _hexColor(hex),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xff5d5970),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
             ],
           ),
         ),

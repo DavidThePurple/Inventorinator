@@ -56,9 +56,36 @@ class WorkshopEntityChange {
       );
 }
 
+/// A field a locally-queued edit and an incoming remote change both touched,
+/// with different values. The local value always wins (see
+/// [mergeRemoteChangesWithPending]) -- this just makes that collision
+/// visible instead of resolving it silently.
+class WorkshopFieldConflict {
+  const WorkshopFieldConflict({
+    required this.entityType,
+    required this.entityId,
+    required this.field,
+    required this.localValue,
+    required this.remoteValue,
+  });
+
+  final String entityType;
+  final String entityId;
+  final String field;
+  final Object? localValue;
+  final Object? remoteValue;
+}
+
+class WorkshopMergeResult {
+  const WorkshopMergeResult({required this.changes, required this.conflicts});
+
+  final List<WorkshopEntityChange> changes;
+  final List<WorkshopFieldConflict> conflicts;
+}
+
 /// Keeps fields edited locally from being replaced by an incoming version of
 /// the same entity while those edits are still waiting in the sync outbox.
-List<WorkshopEntityChange> mergeRemoteChangesWithPending(
+WorkshopMergeResult mergeRemoteChangesWithPending(
   Iterable<WorkshopEntityChange> remoteChanges,
   Iterable<WorkshopEntityChange> pendingChanges,
 ) {
@@ -66,10 +93,38 @@ List<WorkshopEntityChange> mergeRemoteChangesWithPending(
     for (final change in pendingChanges)
       '${change.entityType}\u0000${change.entityId}': change,
   };
-  return remoteChanges.map((remote) {
+  final conflicts = <WorkshopFieldConflict>[];
+  final changes = remoteChanges.map((remote) {
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
-    if (local.deleted) return local;
+    if (local.deleted) {
+      if (remote.fields.isNotEmpty) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: remote.entityType,
+            entityId: remote.entityId,
+            field: '(deleted)',
+            localValue: null,
+            remoteValue: remote.fields,
+          ),
+        );
+      }
+      return local;
+    }
+    for (final key in local.fields.keys) {
+      if (remote.fields.containsKey(key) &&
+          !_sameJson(remote.fields[key], local.fields[key])) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: remote.entityType,
+            entityId: remote.entityId,
+            field: key,
+            localValue: local.fields[key],
+            remoteValue: remote.fields[key],
+          ),
+        );
+      }
+    }
     return WorkshopEntityChange(
       entityType: remote.entityType,
       entityId: remote.entityId,
@@ -77,6 +132,7 @@ List<WorkshopEntityChange> mergeRemoteChangesWithPending(
       revision: remote.revision,
     );
   }).toList();
+  return WorkshopMergeResult(changes: changes, conflicts: conflicts);
 }
 
 Map<String, dynamic> _metadata(Map<String, dynamic> root) => {

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -6,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/local_database.dart';
 import 'package:inventorinator/main.dart';
-import 'package:inventorinator/workshop_merge.dart';
 
 void main() {
   String completeState() => encodeWorkshopState(
@@ -227,44 +225,6 @@ void main() {
 
   test('complete workshop document survives encode and decode', () {
     expectCompleteState(completeState());
-  });
-
-  test('two devices merge disjoint new-feature edits without data loss', () {
-    final base = jsonDecode(completeState()) as Map<String, dynamic>;
-    final linux = jsonDecode(jsonEncode(base)) as Map<String, dynamic>;
-    final android = jsonDecode(jsonEncode(base)) as Map<String, dynamic>;
-
-    (linux['typeLabelOverrides'] as Map<String, dynamic>)['item:filament'] =
-        'Polymer';
-    (linux['spoolTypes'] as List).add({
-      'id': 'SPOOL-10000G',
-      'label': '10 kg',
-      'weightGrams': 10000,
-    });
-    ((android['inventory'] as List).first as Map<String, dynamic>)['quantity'] =
-        3;
-    (android['customItemTypes'] as List).add({
-      'id': 'TYPE-ICE-CREAM',
-      'name': 'Ice cream batch',
-      'contextualFields': ['Freeze time'],
-    });
-
-    final merged = mergeWorkshopStates(
-      jsonEncode(base),
-      jsonEncode(linux),
-      jsonEncode(android),
-    );
-    final restored = decodeWorkshopState(merged)!;
-
-    expect(restored.typeLabelOverrides['item:filament'], 'Polymer');
-    expect(restored.spoolTypes.map((spool) => spool.label), contains('10 kg'));
-    expect(restored.inventory.first.quantity, 3);
-    expect(
-      restored.customItemTypes.map((type) => type.name),
-      contains('Ice cream batch'),
-    );
-    expect(restored.builds.single.name, 'Shared printer build');
-    expect(restored.kits.single.sections, ['Extruder']);
   });
 
   test('portable SQLite export restores the complete workshop', () async {

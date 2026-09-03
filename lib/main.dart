@@ -2242,26 +2242,41 @@ class FilamentStyleEntry {
     required this.style,
     this.carbonFiberForm,
     this.colors = const [],
+    this.gradientName = '',
+    this.colorNames = const [],
   });
 
   final String style;
   final String? carbonFiberForm;
   final List<String> colors;
+  final String gradientName;
+  // One name per entry in [colors], for `coextruded` strands (e.g. "Black",
+  // "White"). Not used by `gradient`, which has a single [gradientName].
+  final List<String> colorNames;
+
+  String colorNameAt(int index) =>
+      index < colorNames.length ? colorNames[index] : '';
 
   FilamentStyleEntry copyWith({
     String? style,
     String? carbonFiberForm,
     List<String>? colors,
+    String? gradientName,
+    List<String>? colorNames,
   }) => FilamentStyleEntry(
     style: style ?? this.style,
     carbonFiberForm: carbonFiberForm ?? this.carbonFiberForm,
     colors: colors ?? this.colors,
+    gradientName: gradientName ?? this.gradientName,
+    colorNames: colorNames ?? this.colorNames,
   );
 
   Map<String, dynamic> toJson() => {
     'style': style,
     if (carbonFiberForm != null) 'carbonFiberForm': carbonFiberForm,
     if (colors.isNotEmpty) 'colors': colors,
+    if (gradientName.isNotEmpty) 'gradientName': gradientName,
+    if (colorNames.any((name) => name.isNotEmpty)) 'colorNames': colorNames,
   };
 
   factory FilamentStyleEntry.fromJson(Map<String, dynamic> json) =>
@@ -2273,6 +2288,12 @@ class FilamentStyleEntry {
                 ?.map((value) => value as String)
                 .toList() ??
             const [],
+        gradientName: json['gradientName'] as String? ?? '',
+        colorNames:
+            (json['colorNames'] as List<dynamic>?)
+                ?.map((value) => value as String)
+                .toList() ??
+            const [],
       );
 
   @override
@@ -2280,17 +2301,28 @@ class FilamentStyleEntry {
     if (other is! FilamentStyleEntry ||
         other.style != style ||
         other.carbonFiberForm != carbonFiberForm ||
-        other.colors.length != colors.length) {
+        other.gradientName != gradientName ||
+        other.colors.length != colors.length ||
+        other.colorNames.length != colorNames.length) {
       return false;
     }
     for (var i = 0; i < colors.length; i++) {
       if (other.colors[i] != colors[i]) return false;
     }
+    for (var i = 0; i < colorNames.length; i++) {
+      if (other.colorNames[i] != colorNames[i]) return false;
+    }
     return true;
   }
 
   @override
-  int get hashCode => Object.hash(style, carbonFiberForm, Object.hashAll(colors));
+  int get hashCode => Object.hash(
+    style,
+    carbonFiberForm,
+    gradientName,
+    Object.hashAll(colors),
+    Object.hashAll(colorNames),
+  );
 }
 
 /// The fixed catalog of selectable filament styles and what extra input
@@ -2719,6 +2751,100 @@ Color? _itemColorSwatch(String name) {
     if (normalized.contains(entry.key.toLowerCase())) return entry.value;
   }
   return null;
+}
+
+List<Color>? _itemGradientColors(InventoryItem item) {
+  final entry = item.styleEntries
+      .where((entry) => entry.style == 'gradient' && entry.colors.length >= 2)
+      .firstOrNull;
+  if (entry == null) return null;
+  return [
+    for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff8c929f),
+  ];
+}
+
+String _itemGradientName(InventoryItem item) => item.styleEntries
+    .where((entry) => entry.style == 'gradient')
+    .firstOrNull
+    ?.gradientName
+    .trim() ??
+    '';
+
+List<Color>? _itemCoextrudedColors(InventoryItem item) {
+  final entry = item.styleEntries
+      .where(
+        (entry) => entry.style == 'coextruded' && entry.colors.length >= 2,
+      )
+      .firstOrNull;
+  if (entry == null) return null;
+  return [
+    for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff8c929f),
+  ];
+}
+
+/// A short "Black + White" style summary of named coextruded strands, for a
+/// hover tooltip. Empty if no strand has been named.
+String _itemCoextrudedName(InventoryItem item) {
+  final entry = item.styleEntries
+      .where((entry) => entry.style == 'coextruded')
+      .firstOrNull;
+  if (entry == null) return '';
+  final names = [
+    for (var i = 0; i < entry.colors.length; i++) entry.colorNameAt(i).trim(),
+  ].where((name) => name.isNotEmpty);
+  return names.join(' + ');
+}
+
+/// A circular chicklet split into equal wedges, one per strand color, for
+/// coextruded filament. Distinct from the gradient's blended strip since
+/// coextruded strands are discrete materials, not a blend.
+class _PieColorChicklet extends StatelessWidget {
+  const _PieColorChicklet({
+    super.key,
+    required this.colors,
+    required this.size,
+  });
+  final List<Color> colors;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CustomPaint(painter: _PieColorPainter(colors)),
+  );
+}
+
+class _PieColorPainter extends CustomPainter {
+  const _PieColorPainter(this.colors);
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2;
+    final sweep = 2 * math.pi / colors.length;
+    for (var i = 0; i < colors.length; i++) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -math.pi / 2 + i * sweep,
+        sweep,
+        true,
+        Paint()..color = colors[i],
+      );
+    }
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = const Color(0xff5d5970)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PieColorPainter oldDelegate) =>
+      !listEquals(oldDelegate.colors, colors);
 }
 
 class ItemColorPickerDialog extends StatefulWidget {
@@ -4925,10 +5051,15 @@ class InventorinatorApp extends StatefulWidget {
     this.database,
     this.persistedState,
     this.filamentColorsClient,
+    this.supabaseHttpClient,
   });
   final LocalDatabase? database;
   final String? persistedState;
   final FilamentColorsClient? filamentColorsClient;
+  // Test-only injection point for Remote Sync's HTTP client, so a test can
+  // control timing/ordering of Supabase responses. Null in production, which
+  // leaves SupabaseSyncService's own default (a fresh http.Client()) intact.
+  final http.Client? supabaseHttpClient;
 
   @override
   State<InventorinatorApp> createState() => _InventorinatorAppState();
@@ -5277,6 +5408,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         database: widget.database,
         persistedState: widget.persistedState,
         filamentColorsClient: widget.filamentColorsClient,
+        supabaseHttpClient: widget.supabaseHttpClient,
         colorTheme: colorTheme,
         brightnessMode: brightnessMode,
         customThemeColor: customThemeColor,
@@ -5498,6 +5630,7 @@ class InventoryHome extends StatefulWidget {
     this.database,
     this.persistedState,
     this.filamentColorsClient,
+    this.supabaseHttpClient,
     this.colorTheme = AppColorTheme.darkPurple,
     this.brightnessMode = AppBrightnessMode.dark,
     this.customThemeColor = const Color(0xff8e75ff),
@@ -5508,6 +5641,7 @@ class InventoryHome extends StatefulWidget {
   final LocalDatabase? database;
   final String? persistedState;
   final FilamentColorsClient? filamentColorsClient;
+  final http.Client? supabaseHttpClient;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
   final Color customThemeColor;
@@ -11387,22 +11521,37 @@ class _InventoryHomeState extends State<InventoryHome> {
     _invalidateSearchCaches();
     _synchronizeInventoryNotifiers();
     final database = widget.database;
+    var wroteChange = false;
     if (database != null) {
       if (_incrementalPersistenceReady) {
-        _persistChangedEntities(database);
+        wroteChange = _persistChangedEntities(database);
       } else {
         final previous = database.loadState();
         final current = _currentStateJson();
-        database.saveStateAndQueueChanges(
-          current,
-          diffWorkshopStates(previous, current),
-        );
+        final changes = diffWorkshopStates(previous, current);
+        wroteChange = changes.isNotEmpty;
+        database.saveStateAndQueueChanges(current, changes);
       }
     }
+    if (wroteChange) _pulseLocalSaveFeedback();
     if (!_applyingCloudState) {
       _localStateRevision++;
       _scheduleAutomaticSync();
     }
+  }
+
+  // Quantity edits own the indicator during their debounce window (see
+  // _adjustItemQuantity/_commitPendingQuantityChange) -- every other
+  // save-triggering edit (status, location, lifecycle, item-detail fields)
+  // funnels through _persist(), so a single pulse here covers all of them
+  // without a dedicated debounce, since local persistence is synchronous.
+  void _pulseLocalSaveFeedback() {
+    if (_quantityCommitTimers.isNotEmpty) return;
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.value = LocalSaveFeedback.saved;
+    _localSaveFeedbackTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) _localSaveFeedback.value = LocalSaveFeedback.idle;
+    });
   }
 
   Map<String, List<Object>> _entityCollections() => {
@@ -11467,7 +11616,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  void _persistChangedEntities(LocalDatabase database) {
+  bool _persistChangedEntities(LocalDatabase database) {
+    var wroteChange = false;
     for (final collection in _entityCollections().entries) {
       final previous = _persistedEntityReferences[collection.key] ?? const {};
       final current = <String, Object>{
@@ -11476,23 +11626,27 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final entry in current.entries) {
         if (identical(previous[entry.key], entry.value)) continue;
         if (collection.key == 'inventory') {
-          _saveInventoryEntity(
+          if (_saveInventoryEntity(
             database,
             entry.value as InventoryItem,
             previous: previous[entry.key] as InventoryItem?,
-          );
+          )) {
+            wroteChange = true;
+          }
         } else {
           database.saveEntityPayloadAndQueue(
             collection.key,
             entry.key,
             encodeWorkshopEntityPayload(collection.key, entry.value),
           );
+          wroteChange = true;
         }
       }
       for (final removedId in previous.keys.where(
         (id) => !current.containsKey(id),
       )) {
         database.deleteEntityAndQueue(collection.key, removedId);
+        wroteChange = true;
       }
       _persistedEntityReferences[collection.key] = current;
     }
@@ -11506,7 +11660,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       _persistedMetadata = Map<String, dynamic>.from(
         jsonDecode(jsonEncode(metadata)) as Map,
       );
+      wroteChange = true;
     }
+    return wroteChange;
   }
 
   Map<String, dynamic> _changedInventoryFields(
@@ -11530,13 +11686,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     return fields;
   }
 
-  void _saveInventoryEntity(
+  bool _saveInventoryEntity(
     LocalDatabase database,
     InventoryItem item, {
     InventoryItem? previous,
   }) {
     final fields = _changedInventoryFields(previous, item);
-    if (fields.isEmpty) return;
+    if (fields.isEmpty) return false;
     database.applyAndQueueWorkshopChanges([
       WorkshopEntityChange(
         entityType: 'inventory',
@@ -11544,6 +11700,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         fields: fields,
       ),
     ]);
+    return true;
   }
 
   void _persistInventoryItem(InventoryItem item) {
@@ -11698,6 +11855,24 @@ class _InventoryHomeState extends State<InventoryHome> {
       AdditionHistoryEntry.fromItem(item, deviceName: deviceName),
     );
     _trimAdditionHistory();
+  }
+
+  // A field a locally-queued edit and an incoming remote change both
+  // touched, with different values. The local value always wins (see
+  // mergeRemoteChangesWithPending) -- this just puts the collision on
+  // record instead of resolving it silently.
+  void _recordSyncConflicts(List<WorkshopFieldConflict> conflicts) {
+    for (final conflict in conflicts) {
+      _recordAudit(
+        'sync_conflict_kept_local',
+        conflict.entityType,
+        conflict.entityId,
+        {
+          conflict.field:
+              'kept local value pending sync; another device changed this field too',
+        },
+      );
+    }
   }
 
   void _recordAudit(
@@ -12350,7 +12525,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (cachedSession != null) {
           return (config: latest, session: cachedSession);
         }
-        final nextSession = await SupabaseSyncService(latest).refresh();
+        final nextSession = await SupabaseSyncService(
+          latest,
+          client: widget.supabaseHttpClient,
+        ).refresh();
         final nextConfig = latest.copyWith(
           userId: nextSession.userId,
           accessToken: nextSession.accessToken,
@@ -12365,7 +12543,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
       config = refreshed.config;
       final session = refreshed.session;
-      var service = SupabaseSyncService(config);
+      var service = SupabaseSyncService(
+        config,
+        client: widget.supabaseHttpClient,
+      );
       await service.requireCurrentSchema(session);
       try {
         final role = await service.currentRole(session);
@@ -12395,7 +12576,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             currentUserId = session.userId;
           });
         }
-        service = SupabaseSyncService(config);
+        service = SupabaseSyncService(
+          config,
+          client: widget.supabaseHttpClient,
+        );
       } catch (error) {
         debugPrint('Could not refresh workspace role: $error');
       }
@@ -12424,12 +12608,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         // Re-read after the await. A user can edit this item while the remote
         // request or scroll-settle wait is in flight.
         final latestPending = database.loadPendingWorkshopChanges();
-        final mergedIncoming = mergeRemoteChangesWithPending(
+        final incomingMerge = mergeRemoteChangesWithPending(
           incoming.changes,
           latestPending.map((entry) => entry.change),
         );
-        database.applyRemoteWorkshopChanges(mergedIncoming);
-        _applyRemoteEntityChanges(mergedIncoming);
+        _recordSyncConflicts(incomingMerge.conflicts);
+        database.applyRemoteWorkshopChanges(incomingMerge.changes);
+        _applyRemoteEntityChanges(incomingMerge.changes);
       }
       cursor = incoming.revision;
       database.saveSyncCursor(config.workspaceId!, cursor);
@@ -12478,12 +12663,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           return;
         }
         pending = database.loadPendingWorkshopChanges();
-        final mergedConfirmed = mergeRemoteChangesWithPending(
+        final confirmedMerge = mergeRemoteChangesWithPending(
           confirmed.changes,
           pending.map((entry) => entry.change),
         );
-        database.applyRemoteWorkshopChanges(mergedConfirmed);
-        _applyRemoteEntityChanges(mergedConfirmed);
+        _recordSyncConflicts(confirmedMerge.conflicts);
+        database.applyRemoteWorkshopChanges(confirmedMerge.changes);
+        _applyRemoteEntityChanges(confirmedMerge.changes);
       }
       database.saveSyncCursor(config.workspaceId!, confirmed.revision);
       config = config.copyWith(
@@ -22918,6 +23104,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
   ProductSearchProvider searchProvider = ProductSearchProvider.google;
   late final Set<String> compatibleMachineIds;
   late List<FilamentStyleEntry> styleEntryDrafts;
+  bool get _styleHasOwnColors => styleEntryDrafts.any(
+    (entry) => entry.style == 'gradient' || entry.style == 'coextruded',
+  );
   String? customTypeId;
   String? materialId;
   String? spoolMaterialId;
@@ -23203,10 +23392,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
             ? 'chopped'
             : null,
         colors: input == FilamentStyleInput.colors
-            ? List.filled(
-                styleKey == 'gradient' ? 2 : 1,
-                _defaultStyleColor,
-              )
+            ? List.filled(2, _defaultStyleColor)
             : const [],
       );
     });
@@ -23220,9 +23406,16 @@ class _AddItemDialogState extends State<AddItemDialog> {
     );
   }
 
+  void _setStyleGradientName(int index, String name) {
+    styleEntryDrafts[index] = styleEntryDrafts[index].copyWith(
+      gradientName: name,
+    );
+  }
+
   void _setStyleColorCount(int index, int count) {
     final entry = styleEntryDrafts[index];
     final colors = [...entry.colors];
+    final colorNames = [...entry.colorNames];
     if (count > colors.length) {
       colors.addAll(
         List.filled(count - colors.length, _defaultStyleColor),
@@ -23230,9 +23423,27 @@ class _AddItemDialogState extends State<AddItemDialog> {
     } else {
       colors.removeRange(count, colors.length);
     }
+    if (colorNames.length > count) {
+      colorNames.removeRange(count, colorNames.length);
+    }
     setState(
-      () => styleEntryDrafts[index] = entry.copyWith(colors: colors),
+      () => styleEntryDrafts[index] = entry.copyWith(
+        colors: colors,
+        colorNames: colorNames,
+      ),
     );
+  }
+
+  void _setStyleColorName(int index, int colorIndex, String name) {
+    final entry = styleEntryDrafts[index];
+    final colorNames = [...entry.colorNames];
+    if (colorNames.length <= colorIndex) {
+      colorNames.addAll(
+        List.filled(colorIndex + 1 - colorNames.length, ''),
+      );
+    }
+    colorNames[colorIndex] = name;
+    styleEntryDrafts[index] = entry.copyWith(colorNames: colorNames);
   }
 
   Future<void> _pickStyleColor(int index, int colorIndex) async {
@@ -23286,6 +23497,20 @@ class _AddItemDialogState extends State<AddItemDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (entry.style == 'gradient') ...[
+          TextFormField(
+            key: Key('filament-style-gradient-name-$index'),
+            initialValue: entry.gradientName,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Gradient name',
+              hintText: 'Sunset Fade',
+              isDense: true,
+            ),
+            onChanged: (value) => _setStyleGradientName(index, value),
+          ),
+          const SizedBox(height: 10),
+        ],
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -23346,11 +23571,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
           Wrap(
             spacing: 6,
             children: [
-              for (
-                var count = entry.style == 'gradient' ? 2 : 1;
-                count <= _maxFilamentStyleColors;
-                count++
-              )
+              for (var count = 2; count <= _maxFilamentStyleColors; count++)
                 ChoiceChip(
                   key: Key('filament-style-count-$index-$count'),
                   label: Text('$count'),
@@ -23362,15 +23583,26 @@ class _AddItemDialogState extends State<AddItemDialog> {
             ],
           ),
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (
-                var colorIndex = 0;
-                colorIndex < entry.colors.length;
-                colorIndex++
-              )
+          if (entry.style == 'gradient')
+            _filamentGradientEditor(index, entry)
+          else
+            _filamentCoextrudedEditor(index, entry),
+        ],
+      ],
+    );
+  }
+
+  Widget _filamentCoextrudedEditor(int index, FilamentStyleEntry entry) =>
+      Column(
+        children: [
+          for (
+            var colorIndex = 0;
+            colorIndex < entry.colors.length;
+            colorIndex++
+          ) ...[
+            if (colorIndex > 0) const SizedBox(height: 8),
+            Row(
+              children: [
                 InkWell(
                   key: Key('filament-style-color-$index-$colorIndex'),
                   borderRadius: BorderRadius.circular(8),
@@ -23385,10 +23617,78 @@ class _AddItemDialogState extends State<AddItemDialog> {
                     ),
                   ),
                 ),
-            ],
-          ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextFormField(
+                    key: Key('filament-style-color-name-$index-$colorIndex'),
+                    initialValue: entry.colorNameAt(colorIndex),
+                    textInputAction: TextInputAction.next,
+                    decoration: InputDecoration(
+                      labelText: 'Strand ${colorIndex + 1} name',
+                      hintText: 'Black',
+                      isDense: true,
+                    ),
+                    onChanged: (value) =>
+                        _setStyleColorName(index, colorIndex, value),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
-      ],
+      );
+
+  Widget _filamentGradientEditor(int index, FilamentStyleEntry entry) {
+    final colors = [
+      for (final hex in entry.colors)
+        _hexColor(hex) ?? const Color(0xff5d5970),
+    ];
+    return SizedBox(
+      height: 44,
+      width: double.infinity,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: colors),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xff5d5970)),
+              ),
+            ),
+          ),
+          for (var colorIndex = 0; colorIndex < colors.length; colorIndex++)
+            Align(
+              alignment: Alignment(
+                colors.length == 1
+                    ? 0
+                    : -1 + 2 * colorIndex / (colors.length - 1),
+                0,
+              ),
+              child: InkWell(
+                key: Key('filament-style-color-$index-$colorIndex'),
+                customBorder: const CircleBorder(),
+                onTap: () => _pickStyleColor(index, colorIndex),
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: colors[colorIndex],
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black45,
+                        blurRadius: 3,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -23671,8 +23971,6 @@ class _AddItemDialogState extends State<AddItemDialog> {
                         ),
                         if (type == InventoryType.filament) ...[
                           const SizedBox(height: 14),
-                          _filamentStyleSection(),
-                          const SizedBox(height: 14),
                           TextFormField(
                             key: const Key('filament-purpose-tags'),
                             controller: purposeTagsController,
@@ -23826,70 +24124,79 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             ),
                           ],
                         ],
-                        const SizedBox(height: 16),
-                        _responsiveFieldPair(
-                          compact,
-                          TextFormField(
-                            key: const Key('item-color-name'),
-                            controller: itemColorLabelController,
-                            textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
-                              labelText: 'Color name',
-                              hintText: 'Galaxy Red',
-                              helperText: 'Optional display name',
-                            ),
-                          ),
-                          TextFormField(
-                            key: const Key('item-color'),
-                            controller: itemColorController,
-                            textInputAction: TextInputAction.next,
-                            autocorrect: false,
-                            textCapitalization: TextCapitalization.characters,
-                            decoration: InputDecoration(
-                              labelText: 'Color value',
-                              hintText: '#8E75FF',
-                              helperText: 'Hex value or color picker',
-                              suffixIcon: IconButton(
-                                key: const Key('open-item-color-picker'),
-                                tooltip: 'Choose color',
-                                onPressed: _pickItemColor,
-                                icon: Container(
-                                  width: 24,
-                                  height: 24,
-                                  decoration: BoxDecoration(
-                                    color:
-                                        selectedItemColor ??
-                                        const Color(0xff252a36),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: const Color(0xff687185),
-                                    ),
-                                  ),
-                                  child: selectedItemColor == null
-                                      ? const Icon(
-                                          Icons.palette_outlined,
-                                          size: 16,
-                                        )
-                                      : null,
-                                ),
+                        if (type == InventoryType.filament) ...[
+                          const SizedBox(height: 16),
+                          _filamentStyleSection(),
+                        ],
+                        if (!(type == InventoryType.filament &&
+                            _styleHasOwnColors)) ...[
+                          const SizedBox(height: 16),
+                          _responsiveFieldPair(
+                            compact,
+                            TextFormField(
+                              key: const Key('item-color-name'),
+                              controller: itemColorLabelController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Color name',
+                                hintText: 'Galaxy Red',
+                                helperText: 'Optional display name',
                               ),
                             ),
-                            validator: (value) {
-                              final text = value?.trim() ?? '';
-                              if (text.isEmpty &&
-                                  itemColorLabelController.text
-                                      .trim()
-                                      .isNotEmpty) {
-                                return 'Choose the color for this name';
-                              }
-                              if (text.isNotEmpty && _hexColor(text) == null) {
-                                return 'Use #RGB, #RRGGBB, or #AARRGGBB';
-                              }
-                              return null;
-                            },
-                            onChanged: (_) => setState(() {}),
+                            TextFormField(
+                              key: const Key('item-color'),
+                              controller: itemColorController,
+                              textInputAction: TextInputAction.next,
+                              autocorrect: false,
+                              textCapitalization:
+                                  TextCapitalization.characters,
+                              decoration: InputDecoration(
+                                labelText: 'Color value',
+                                hintText: '#8E75FF',
+                                helperText: 'Hex value or color picker',
+                                suffixIcon: IconButton(
+                                  key: const Key('open-item-color-picker'),
+                                  tooltip: 'Choose color',
+                                  onPressed: _pickItemColor,
+                                  icon: Container(
+                                    width: 24,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      color:
+                                          selectedItemColor ??
+                                          const Color(0xff252a36),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xff687185),
+                                      ),
+                                    ),
+                                    child: selectedItemColor == null
+                                        ? const Icon(
+                                            Icons.palette_outlined,
+                                            size: 16,
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                              validator: (value) {
+                                final text = value?.trim() ?? '';
+                                if (text.isEmpty &&
+                                    itemColorLabelController.text
+                                        .trim()
+                                        .isNotEmpty) {
+                                  return 'Choose the color for this name';
+                                }
+                                if (text.isNotEmpty &&
+                                    _hexColor(text) == null) {
+                                  return 'Use #RGB, #RRGGBB, or #AARRGGBB';
+                                }
+                                return null;
+                              },
+                              onChanged: (_) => setState(() {}),
+                            ),
                           ),
-                        ),
+                        ],
                         const SizedBox(height: 16),
                         if (widget.brands.isNotEmpty) ...[
                           const Text(
@@ -26169,49 +26476,77 @@ class _ItemVisual extends StatelessWidget {
   Widget build(BuildContext context) {
     final typeColor = _typeColor(item.type);
     final colorSwatch = _itemColorSwatch(item.itemColorName);
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
     final previewBytes = item.thumbnailBytes ?? item.imageBytes;
+
+    Widget swatch;
+    if (previewBytes != null) {
+      swatch = Image.memory(
+        previewBytes,
+        key: Key('item-product-image-${item.id}'),
+        fit: BoxFit.cover,
+        cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
+            .round()
+            .clamp(96, 512),
+      );
+    } else if (coextrudedColors != null) {
+      swatch = Center(
+        child: _PieColorChicklet(
+          key: Key('item-color-swatch-${item.id}'),
+          colors: coextrudedColors,
+          size: size * .62,
+        ),
+      );
+    } else if (gradientColors != null || item.itemColorName.isNotEmpty) {
+      swatch = Center(
+        child: Container(
+          key: Key('item-color-swatch-${item.id}'),
+          width: size * .62,
+          height: size * .62,
+          decoration: BoxDecoration(
+            color: gradientColors == null
+                ? (colorSwatch ?? const Color(0xff8c929f))
+                : null,
+            gradient: gradientColors == null
+                ? null
+                : LinearGradient(colors: gradientColors),
+            borderRadius: BorderRadius.circular(size * .18),
+          ),
+        ),
+      );
+    } else {
+      swatch = ColoredBox(
+        key: Key('item-type-fallback-${item.id}'),
+        color: typeColor.withValues(alpha: .16),
+        child: typeIconImageBytes == null
+            ? Icon(typeIcon ?? item.icon, color: typeColor)
+            : Padding(
+                padding: EdgeInsets.all(size * .16),
+                child: _CustomTypeImage(
+                  bytes: typeIconImageBytes!,
+                  imageKey: Key('item-type-image-${item.id}'),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) =>
+                      Icon(typeIcon ?? item.icon, color: typeColor),
+                ),
+              ),
+      );
+    }
+
+    // Coextruded strands each get their own name, so those only surface on
+    // hover to avoid crowding the card. A gradient has one name, same as a
+    // regular color -- that stays inline, rendered by the caller.
+    if (previewBytes == null && coextrudedColors != null) {
+      final tooltipMessage = _itemCoextrudedName(item);
+      if (tooltipMessage.isNotEmpty) {
+        swatch = Tooltip(message: tooltipMessage, child: swatch);
+      }
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(size * .3),
-      child: SizedBox.square(
-        dimension: size,
-        child: previewBytes != null
-            ? Image.memory(
-                previewBytes,
-                key: Key('item-product-image-${item.id}'),
-                fit: BoxFit.cover,
-                cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
-                    .round()
-                    .clamp(96, 512),
-              )
-            : item.itemColorName.isNotEmpty
-            ? Center(
-                child: Container(
-                  key: Key('item-color-swatch-${item.id}'),
-                  width: size * .62,
-                  height: size * .62,
-                  decoration: BoxDecoration(
-                    color: colorSwatch ?? const Color(0xff8c929f),
-                    borderRadius: BorderRadius.circular(size * .18),
-                  ),
-                ),
-              )
-            : ColoredBox(
-                key: Key('item-type-fallback-${item.id}'),
-                color: typeColor.withValues(alpha: .16),
-                child: typeIconImageBytes == null
-                    ? Icon(typeIcon ?? item.icon, color: typeColor)
-                    : Padding(
-                        padding: EdgeInsets.all(size * .16),
-                        child: _CustomTypeImage(
-                          bytes: typeIconImageBytes!,
-                          imageKey: Key('item-type-image-${item.id}'),
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, _, _) =>
-                              Icon(typeIcon ?? item.icon, color: typeColor),
-                        ),
-                      ),
-              ),
-      ),
+      child: SizedBox.square(dimension: size, child: swatch),
     );
   }
 }
@@ -27727,11 +28062,22 @@ class _DetailSection extends StatelessWidget {
 }
 
 String _filamentStyleEntryLabel(FilamentStyleEntry entry) {
-  final base = filamentStyleLabel(entry.style);
+  final base = entry.style == 'gradient' && entry.gradientName.trim().isNotEmpty
+      ? entry.gradientName.trim()
+      : filamentStyleLabel(entry.style);
   if (entry.carbonFiberForm != null) {
     return '$base (${entry.carbonFiberForm == 'ground' ? 'Ground' : 'Chopped'})';
   }
-  if (entry.colors.isNotEmpty) return '$base · ${entry.colors.length} colors';
+  if (entry.colors.isNotEmpty) {
+    if (entry.style == 'coextruded') {
+      final names = [
+        for (var i = 0; i < entry.colors.length; i++)
+          entry.colorNameAt(i).trim(),
+      ].where((name) => name.isNotEmpty).toList();
+      if (names.isNotEmpty) return '$base · ${names.join(' + ')}';
+    }
+    return '$base · ${entry.colors.length} colors';
+  }
   return base;
 }
 
@@ -27771,21 +28117,40 @@ class _FilamentStyleDetailSection extends StatelessWidget {
                       ),
                       if (entry.colors.isNotEmpty) ...[
                         const SizedBox(width: 8),
-                        for (final hex in entry.colors)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: _hexColor(hex),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: const Color(0xff5d5970),
+                        if (entry.style == 'gradient')
+                          Container(
+                            width: 28,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  for (final hex in entry.colors)
+                                    _hexColor(hex) ??
+                                        const Color(0xff5d5970),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: const Color(0xff5d5970),
+                              ),
+                            ),
+                          )
+                        else
+                          for (final hex in entry.colors)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Container(
+                                width: 14,
+                                height: 14,
+                                decoration: BoxDecoration(
+                                  color: _hexColor(hex),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xff5d5970),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
                       ],
                     ],
                   ),
@@ -29004,6 +29369,15 @@ class _PhotoInventoryCardContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final swatch = _itemColorSwatch(item.itemColorName);
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
+    final hasSpecialColors = gradientColors != null || coextrudedColors != null;
+    // Coextruded has one name per strand, so it only surfaces on hover. A
+    // gradient has a single name and is shown inline, same as a plain color.
+    final coextrudedTooltip = _itemCoextrudedName(item);
+    final inlineColorLabel = item.itemColorLabel.isNotEmpty
+        ? item.itemColorLabel
+        : _itemGradientName(item);
     final metadata = [if (spoolSizeLabel.isNotEmpty) spoolSizeLabel]
         .join('  •  ');
     return LayoutBuilder(
@@ -29018,8 +29392,12 @@ class _PhotoInventoryCardContent extends StatelessWidget {
               bytes: item.thumbnailBytes ?? item.imageBytes!,
               imageKey: Key('photo-card-background-${item.id}'),
             ),
-            if (swatch != null)
-              ColoredBox(color: swatch.withValues(alpha: .12)),
+            if (swatch != null || hasSpecialColors)
+              ColoredBox(
+                color:
+                    (swatch ?? coextrudedColors?.first ?? gradientColors!.first)
+                        .withValues(alpha: .12),
+              ),
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -29110,24 +29488,54 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                         ],
                         if (!compact &&
                             (swatch != null ||
+                                hasSpecialColors ||
                                 item.materialName.isNotEmpty)) ...[
                           const SizedBox(height: 9),
                           Row(
                             children: [
-                              if (swatch != null) ...[
-                                Container(
-                                  width: 24,
-                                  height: 24,
-                                  decoration: BoxDecoration(
-                                    color: swatch,
-                                    borderRadius: BorderRadius.circular(7),
-                                  ),
+                              if (swatch != null || hasSpecialColors) ...[
+                                Builder(
+                                  builder: (context) {
+                                    final chip = coextrudedColors != null
+                                        ? _PieColorChicklet(
+                                            colors: coextrudedColors,
+                                            size: 24,
+                                          )
+                                        : Container(
+                                            width: 24,
+                                            height: 24,
+                                            decoration: BoxDecoration(
+                                              color: gradientColors == null
+                                                  ? swatch
+                                                  : null,
+                                              gradient: gradientColors == null
+                                                  ? null
+                                                  : LinearGradient(
+                                                      colors: gradientColors,
+                                                    ),
+                                              borderRadius:
+                                                  BorderRadius.circular(7),
+                                            ),
+                                          );
+                                    // Coextruded has one name per strand, so
+                                    // it only appears on hover -- inline text
+                                    // here would crowd the card. A gradient's
+                                    // single name is shown inline below.
+                                    return coextrudedColors != null &&
+                                            coextrudedTooltip.isNotEmpty
+                                        ? Tooltip(
+                                            message: coextrudedTooltip,
+                                            child: chip,
+                                          )
+                                        : chip;
+                                  },
                                 ),
-                                if (item.itemColorLabel.isNotEmpty) ...[
+                                if (coextrudedColors == null &&
+                                    inlineColorLabel.isNotEmpty) ...[
                                   const SizedBox(width: 7),
                                   Expanded(
                                     child: Text(
-                                      item.itemColorLabel,
+                                      inlineColorLabel,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -29378,6 +29786,30 @@ class InventoryCard extends StatelessWidget {
                                   typeIcon: typeIcon,
                                   typeIconImageBytes: typeIconImageBytes,
                                 ),
+                                // A gradient has one name, shown inline just
+                                // like a regular color name. Coextruded has
+                                // one name per strand, so those only surface
+                                // on hover (see _ItemVisual's tooltip).
+                                if (!compact &&
+                                    _itemCoextrudedColors(item) == null &&
+                                    (item.itemColorLabel.isNotEmpty ||
+                                        _itemGradientName(
+                                          item,
+                                        ).isNotEmpty)) ...[
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      item.itemColorLabel.isNotEmpty
+                                          ? item.itemColorLabel
+                                          : _itemGradientName(item),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                                 const Spacer(),
                                 if (item.materialName.isNotEmpty) ...[
                                   ConstrainedBox(

@@ -441,6 +441,9 @@ class _InventoryMetrics {
     required this.totalUnits,
     required this.filamentSpools,
     required this.lowStockRecords,
+    required this.topFilamentMaterials,
+    required this.topFilamentColors,
+    required this.topFilamentBrands,
   });
 
   /// Number of inventory rows, i.e. distinct items/stacks (not units).
@@ -454,6 +457,27 @@ class _InventoryMetrics {
   final double filamentSpools;
 
   final int lowStockRecords;
+
+  /// Top filament material buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentMaterials;
+
+  /// Top filament color buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentColors;
+
+  /// Top filament brand buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentBrands;
+}
+
+class _MetricBucket {
+  const _MetricBucket({
+    required this.label,
+    required this.value,
+    required this.filterValue,
+  });
+
+  final String label;
+  final double value;
+  final String filterValue;
 }
 
 class _MetricStat {
@@ -5421,6 +5445,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   InventoryType? type;
   String? customTypeFilterId;
   String? itemColorFilter;
+  String? filamentMaterialFilter;
+  String? filamentBrandFilter;
   final TextEditingController inventorySearchController =
       TextEditingController();
   final FocusNode inventorySearchFocusNode = FocusNode(
@@ -6663,6 +6689,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       archivedOnly,
       type,
       customTypeFilterId,
+      filamentMaterialFilter,
+      filamentBrandFilter,
     );
     if (_availableItemColorFiltersCacheKey == cacheKey) {
       return _availableItemColorFiltersCache!;
@@ -6674,9 +6702,11 @@ class _InventoryHomeState extends State<InventoryHome> {
           (type == null || item.type == type) &&
           (customTypeFilterId == null ||
               item.customTypeId == customTypeFilterId) &&
-          item.itemColorName.isNotEmpty,
+          _matchesMaterialFilter(item) &&
+          _matchesBrandFilter(item) &&
+          _itemColorFilterValue(item).isNotEmpty,
     )) {
-      final value = item.itemColorName;
+      final value = _itemColorFilterValue(item);
       colors.putIfAbsent(
         value,
         () => (
@@ -6708,6 +6738,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       type,
       customTypeFilterId,
       itemColorFilter,
+      filamentMaterialFilter,
+      filamentBrandFilter,
       sort,
       sortAscending,
     );
@@ -6720,7 +6752,17 @@ class _InventoryHomeState extends State<InventoryHome> {
           type != null && item.type != type ||
           customTypeFilterId != null &&
               item.customTypeId != customTypeFilterId ||
-          itemColorFilter != null && item.itemColorName != itemColorFilter) {
+          itemColorFilter != null &&
+              ((itemColorFilter == _unspecifiedItemColorKey &&
+                      _itemColorFilterValue(item).isNotEmpty) ||
+                  (itemColorFilter != _unspecifiedItemColorKey &&
+                      _itemColorFilterValue(item) != itemColorFilter)) ||
+          filamentMaterialFilter != null &&
+              (item.type != InventoryType.filament ||
+                  !_matchesMaterialFilter(item)) ||
+          filamentBrandFilter != null &&
+              (item.type != InventoryType.filament ||
+                  !_matchesBrandFilter(item))) {
         return false;
       }
       if (needle.isEmpty) return true;
@@ -6777,11 +6819,30 @@ class _InventoryHomeState extends State<InventoryHome> {
     var totalUnits = 0.0;
     var filamentSpools = 0.0;
     var lowStockRecords = 0;
+    final filamentMaterials = <String, double>{};
+    final filamentColors = <String, double>{};
+    final filamentColorLabels = <String, String>{};
+    final filamentBrands = <String, double>{};
     for (final item in inventory) {
       if (item.archived || !_isMetricsTracked(item)) continue;
       itemRecords++;
       totalUnits += item.quantity;
-      if (item.type == InventoryType.filament) filamentSpools += item.quantity;
+      if (item.type == InventoryType.filament) {
+        filamentSpools += item.quantity;
+        final materialKey = _metricsFilamentMaterialFilterValue(item);
+        final colorKey = _metricsFilamentColorFilterValue(item);
+        final colorLabel = _metricsFilamentColorLabel(item);
+        final brandKey = _metricsFilamentBrandFilterValue(item);
+        filamentMaterials[materialKey] =
+            (filamentMaterials[materialKey] ?? 0.0) + item.quantity;
+        if (colorKey.isNotEmpty) {
+          filamentColors[colorKey] =
+              (filamentColors[colorKey] ?? 0.0) + item.quantity;
+          filamentColorLabels[colorKey] = colorLabel;
+        }
+        filamentBrands[brandKey] =
+            (filamentBrands[brandKey] ?? 0.0) + item.quantity;
+      }
       if (item.quantityAlertThreshold != null &&
           item.quantity <= item.quantityAlertThreshold!) {
         lowStockRecords++;
@@ -6792,7 +6853,84 @@ class _InventoryHomeState extends State<InventoryHome> {
       totalUnits: totalUnits,
       filamentSpools: filamentSpools,
       lowStockRecords: lowStockRecords,
+      topFilamentMaterials: _topEntriesFromTotals(
+        filamentMaterials,
+        max: 6,
+        labelForFilter: (key) =>
+            key == _unspecifiedMaterialKey ? 'Unspecified material' : key,
+      ),
+      topFilamentColors: _topEntriesFromTotals(
+        filamentColors,
+        max: 6,
+        labelForFilter: (key) => filamentColorLabels[key] ?? key,
+      ),
+      topFilamentBrands: _topEntriesFromTotals(
+        filamentBrands,
+        max: 6,
+        labelForFilter: (key) =>
+            key == _unspecifiedBrandKey ? 'Unspecified brand' : key,
+      ),
     );
+  }
+
+  static const String _unspecifiedItemColorKey = '__unspecified_item_color__';
+  static const String _unspecifiedMaterialKey = '__unspecified_material__';
+  static const String _unspecifiedBrandKey = '__unspecified_brand__';
+
+  String _metricsFilamentColorFilterValue(InventoryItem item) =>
+      _itemColorFilterValue(item).isNotEmpty
+          ? _itemColorFilterValue(item)
+          : _unspecifiedItemColorKey;
+
+  String _metricsFilamentMaterialFilterValue(InventoryItem item) =>
+      item.materialName.trim().isNotEmpty
+          ? item.materialName.trim()
+          : _unspecifiedMaterialKey;
+
+  String _metricsFilamentBrandFilterValue(InventoryItem item) =>
+      item.brand.trim().isNotEmpty ? item.brand.trim() : _unspecifiedBrandKey;
+
+  bool _matchesMaterialFilter(InventoryItem item) =>
+      filamentMaterialFilter == null ||
+      _metricsFilamentMaterialFilterValue(item) == filamentMaterialFilter;
+
+  bool _matchesBrandFilter(InventoryItem item) =>
+      filamentBrandFilter == null ||
+      _metricsFilamentBrandFilterValue(item) == filamentBrandFilter;
+
+  String _metricsFilamentColorLabel(InventoryItem item) {
+    final colorLabel = item.itemColorLabel.trim();
+    final colorValue = _itemColorFilterValue(item).trim();
+    if (colorValue.isEmpty) return 'Unspecified color';
+    final visibleLabel = colorLabel.isNotEmpty && colorValue.isNotEmpty &&
+            colorValue.toUpperCase() != colorLabel.toUpperCase()
+        ? '$colorLabel · $colorValue'
+        : colorLabel.isNotEmpty
+            ? colorLabel
+            : colorValue;
+    return visibleLabel.isNotEmpty ? visibleLabel : 'Unspecified color';
+  }
+
+  String _itemColorFilterValue(InventoryItem item) {
+    if (item.itemColorName.isNotEmpty) return item.itemColorName.trim();
+    return item.itemColorLabel.trim();
+  }
+
+  List<_MetricBucket> _topEntriesFromTotals(
+    Map<String, double> totals, {
+    int max = 6,
+    String Function(String)? labelForFilter,
+  }) {
+    final items = totals.entries.where((entry) => entry.value > 0).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return [
+      for (final entry in items.take(max))
+        _MetricBucket(
+          label: labelForFilter?.call(entry.key) ?? entry.key,
+          value: entry.value,
+          filterValue: entry.key,
+        ),
+    ];
   }
 
   static const _monthAbbreviations = [
@@ -6896,7 +7034,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         !archivedOnly &&
         type == null &&
         customTypeFilterId == null &&
-        itemColorFilter == null;
+        itemColorFilter == null &&
+        filamentMaterialFilter == null &&
+        filamentBrandFilter == null;
     final allRecords = showingCatalog
         ? allCatalogRecords
         : showingEverything
@@ -12583,6 +12723,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       type = null;
       customTypeFilterId = null;
       itemColorFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
     });
     _persist();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -12937,7 +13079,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ? '${visibleItems.length} archived'
                   : type == null &&
                         customTypeFilterId == null &&
-                        itemColorFilter == null
+                        itemColorFilter == null &&
+                        filamentMaterialFilter == null &&
+                        filamentBrandFilter == null
                   ? '${visibleItems.length + visibleEverythingCatalogRecords.length} records'
                   : '${visibleItems.length} items'
             : '${visibleCatalogRecords.length} ${_catalogViewDisplayLabel(catalogFilter!).toLowerCase()}',
@@ -15070,6 +15214,26 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (catalogFilter case final filter?) {
       return _catalogViewDisplayLabel(filter);
     }
+    if (filamentBrandFilter != null) {
+      return filamentBrandFilter == _unspecifiedBrandKey
+          ? 'Brand · Unspecified brand'
+          : 'Brand · ${filamentBrandFilter!}';
+    }
+    if (filamentMaterialFilter != null) {
+      return filamentMaterialFilter == _unspecifiedMaterialKey
+          ? 'Material · Unspecified material'
+          : 'Material · ${filamentMaterialFilter!}';
+    }
+    if (itemColorFilter != null) {
+      if (itemColorFilter == _unspecifiedItemColorKey) {
+        return 'Color · Unspecified color';
+      }
+      final selected = availableItemColorFilters
+          .where((color) => color.value == itemColorFilter)
+          .firstOrNull;
+      if (selected != null) return 'Color · ${selected.label}';
+      return 'Color filter';
+    }
     if (customTypeFilterId case final id?) {
       return customItemTypes
               .where((candidate) => candidate.id == id)
@@ -15091,6 +15255,15 @@ class _InventoryHomeState extends State<InventoryHome> {
         _catalogViewIcon(selected),
         size: 20,
       );
+    }
+    if (filamentBrandFilter != null) {
+      return const Icon(Icons.storefront_outlined, size: 20);
+    }
+    if (filamentMaterialFilter != null) {
+      return const Icon(Icons.layers_outlined, size: 20);
+    }
+    if (itemColorFilter != null) {
+      return const Icon(Icons.palette_outlined, size: 20);
     }
     if (customTypeFilterId case final id?) {
       final custom = customItemTypes
@@ -15179,12 +15352,129 @@ class _InventoryHomeState extends State<InventoryHome> {
               ],
             ),
             const SizedBox(height: 16),
+            if (metrics.topFilamentMaterials.isNotEmpty) ...[
+              _metricsDistributionPanel(
+                'Top filament materials',
+                metrics.topFilamentMaterials,
+                Icons.layers_outlined,
+                palette,
+                selected: filamentMaterialFilter,
+                onTap: (bucket) => _setMaterialFilter(
+                  filamentMaterialFilter == bucket.filterValue
+                      ? null
+                      : bucket.filterValue,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (metrics.topFilamentColors.isNotEmpty) ...[
+              _metricsDistributionPanel(
+                'Top filament colors',
+                metrics.topFilamentColors,
+                Icons.palette_outlined,
+                palette,
+                selected: itemColorFilter,
+                onTap: (bucket) => _setItemColorFilter(
+                  itemColorFilter == bucket.filterValue
+                      ? null
+                      : bucket.filterValue,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (metrics.topFilamentBrands.isNotEmpty) ...[
+              _metricsDistributionPanel(
+                'Top filament brands',
+                metrics.topFilamentBrands,
+                Icons.storefront_outlined,
+                palette,
+                selected: filamentBrandFilter,
+                onTap: (bucket) => _setBrandFilter(
+                  filamentBrandFilter == bucket.filterValue
+                      ? null
+                      : bucket.filterValue,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             _metricsCharts(palette),
           ],
         ),
       ),
     );
   }
+
+  Widget _metricsDistributionPanel(
+    String title,
+    List<_MetricBucket> entries,
+    IconData icon,
+    InventorinatorColors palette, {
+    String? selected,
+    required void Function(_MetricBucket) onTap,
+  }) =>
+      _JewelPanel(
+        title: title,
+        palette: palette,
+        trailing: Icon(icon, size: 18, color: const Color(0xff9da5b7)),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final entry in entries)
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => onTap(entry),
+                  child: Container(
+                    width: 176,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: selected == entry.filterValue
+                          ? palette.surface
+                          : palette.input,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: selected == entry.filterValue
+                            ? palette.accent.withValues(alpha: .75)
+                            : palette.outlineVariant,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entry.label,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xff9da5b7),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _formatBomQuantity(entry.value),
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const Text(
+                          'spools',
+                          style: TextStyle(
+                            color: Color(0xff9da5b7),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
 
   List<({String key, String label, IconData icon})> get _metricsTrackableTypes => [
     for (final value in InventoryType.values.where(
@@ -15402,6 +15692,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                               archivedOnly = selected;
                               catalogFilter = null;
                               itemColorFilter = null;
+                              filamentMaterialFilter = null;
+                              filamentBrandFilter = null;
                               if (selected) {
                                 type = null;
                                 customTypeFilterId = null;
@@ -15473,6 +15765,59 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
+  void _setMaterialFilter(String? material) {
+    _collapseTypePanel();
+    _collapseColorPanel();
+    setState(() {
+      filamentMaterialFilter = material;
+      catalogFilter = null;
+      itemColorFilter = null;
+      filamentBrandFilter = null;
+      if (material != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _scrollToFilteredResults();
+  }
+
+  void _setItemColorFilter(String? color) {
+    _collapseColorPanel();
+    setState(() {
+      itemColorFilter = color;
+      catalogFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
+      if (color != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _scrollToFilteredResults();
+  }
+
+  void _setBrandFilter(String? brand) {
+    _collapseTypePanel();
+    _collapseColorPanel();
+    setState(() {
+      filamentBrandFilter = brand;
+      catalogFilter = null;
+      itemColorFilter = null;
+      filamentMaterialFilter = null;
+      if (brand != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _scrollToFilteredResults();
+  }
+
   Widget _typeChip(InventoryType? value, String label) => Padding(
     padding: const EdgeInsets.only(right: 8),
     child: _GlassFilterChip(
@@ -15503,6 +15848,8 @@ class _InventoryHomeState extends State<InventoryHome> {
             customTypeFilterId = null;
             catalogFilter = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -15542,6 +15889,8 @@ class _InventoryHomeState extends State<InventoryHome> {
             customTypeFilterId = customType.id;
             catalogFilter = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -15579,6 +15928,8 @@ class _InventoryHomeState extends State<InventoryHome> {
             type = null;
             customTypeFilterId = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -15670,12 +16021,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                           label: const Text('All colors'),
                           selected: itemColorFilter == null,
                           onSelected: (_) {
-                            _collapseColorPanel();
-                            setState(() {
-                              itemColorFilter = null;
-                              currentPage = 0;
-                            });
-                            _scrollToFilteredResults();
+                            _setItemColorFilter(null);
                           },
                           backgroundColor: Colors.transparent,
                           selectedColor: Colors.transparent,
@@ -15713,12 +16059,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                             ),
                             selected: itemColorFilter == color.value,
                             onSelected: (_) {
-                              _collapseColorPanel();
-                              setState(() {
-                                itemColorFilter = color.value;
-                                currentPage = 0;
-                              });
-                              _scrollToFilteredResults();
+                              _setItemColorFilter(color.value);
                             },
                             backgroundColor: Colors.transparent,
                             selectedColor: Colors.transparent,

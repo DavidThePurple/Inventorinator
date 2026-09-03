@@ -88,9 +88,10 @@ begin
   end;
 
   begin
-    perform public.save_inventorinator_workshop_state(
+    perform public.apply_inventorinator_entity_changes(
       '20000000-0000-0000-0000-000000000001',
-      '{"inventory":[{"id":"INV-A","name":"Bolt","quantity":2}],"builds":[]}'::jsonb
+      'test-device',
+      '[{"entityType":"inventory","entityId":"INV-B","deleted":true}]'::jsonb
     );
     raise exception 'manager hard deletion was accepted';
   exception when others then
@@ -101,15 +102,13 @@ begin
 end;
 $$;
 
-select public.save_inventorinator_workshop_state(
+select public.apply_inventorinator_entity_changes(
   '20000000-0000-0000-0000-000000000001',
-  '{
-    "inventory": [
-      {"id":"INV-A","name":"Bolt","quantity":2},
-      {"id":"INV-B","name":"Nut","quantity":1,"archiveState":"archived"}
-    ],
-    "builds": []
-  }'::jsonb
+  'test-device',
+  '[{
+    "entityType": "inventory", "entityId": "INV-B",
+    "fields": {"archiveState": "archived"}
+  }]'::jsonb
 );
 
 select set_config(
@@ -132,35 +131,30 @@ begin
   end;
 
   begin
-    perform public.save_inventorinator_workshop_state(
+    perform public.apply_inventorinator_entity_changes(
       '20000000-0000-0000-0000-000000000001',
-      '{
-        "inventory": [
-          {"id":"INV-A","name":"Bolt","quantity":2},
-          {"id":"INV-B","name":"Nut","quantity":1,"archiveState":"archived"},
-          {"id":"INV-C","name":"Washer","quantity":1}
-        ],
-        "builds": []
-      }'::jsonb
+      'test-device',
+      '[{
+        "entityType": "inventory", "entityId": "INV-C",
+        "fields": {"name": "Washer", "quantity": 1}
+      }]'::jsonb
     );
     raise exception 'editor inventory creation was accepted';
   exception when others then
-    if position('Editors cannot add or remove inventory items' in sqlerrm) = 0 then
+    if position('Editors may only edit existing inventory items' in sqlerrm) = 0 then
       raise;
     end if;
   end;
 end;
 $$;
 
-select public.save_inventorinator_workshop_state(
+select public.apply_inventorinator_entity_changes(
   '20000000-0000-0000-0000-000000000001',
-  '{
-    "inventory": [
-      {"id":"INV-A","name":"Bolt revised","quantity":2},
-      {"id":"INV-B","name":"Nut","quantity":1,"archiveState":"archived"}
-    ],
-    "builds": []
-  }'::jsonb
+  'test-device',
+  '[{
+    "entityType": "inventory", "entityId": "INV-A",
+    "fields": {"name": "Bolt revised"}
+  }]'::jsonb
 );
 
 select set_config(

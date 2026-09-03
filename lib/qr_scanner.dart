@@ -385,7 +385,12 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       });
     }
     try {
-      final found = await availableCameras();
+      // Bounded so a platform channel that never responds (e.g. no camera
+      // plugin handler available) settles into the error state rather than
+      // leaving the loading spinner running indefinitely.
+      final found = await availableCameras().timeout(
+        const Duration(seconds: 5),
+      );
       if (!mounted) return;
       setState(() {
         cameras = found;

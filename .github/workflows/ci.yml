@@ -95,6 +95,17 @@ jobs:
           INVENTORINATOR_NATIVE_DECODER_TEST: "1"
           LD_LIBRARY_PATH: build/linux/x64/release/bundle/lib
         run: flutter test test/widget_test.dart --plain-name "ingest decoder reads a tilted alphanumeric Code 128 FNSKU"
+      - name: Package desktop integration
+        run: |
+          bundle_dir="build/linux/x64/release/bundle"
+          install -m 755 linux/packaging/install.sh "$bundle_dir/install.sh"
+          install -m 644 \
+            linux/packaging/media.everlasting.inventorinator.desktop \
+            "$bundle_dir/Inventorinator.desktop"
+          test -s "$bundle_dir/data/app_icon.png"
+          test -s "$bundle_dir/share/icons/hicolor/512x512/apps/media.everlasting.inventorinator.png"
+          test -s "$bundle_dir/share/applications/media.everlasting.inventorinator.desktop"
+          test -x "$bundle_dir/install.sh"
       - name: Compute artifact name
         id: artifact
         run: |

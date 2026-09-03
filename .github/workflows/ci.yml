@@ -45,7 +45,9 @@ jobs:
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
           ./supabase/install-or-update.sh --hosted
           ./supabase/install-or-update.sh --hosted
-          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "13"
+          latest_migration=$(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' \
+            -printf '%f\n' | sort | tail -n 1 | sed 's/^0*\([0-9][0-9]*\)_.*/\1/')
+          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "$latest_migration"
       - name: Verify builder quantity enforcement
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
       - name: Verify role and owner boundaries

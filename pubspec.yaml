@@ -80,6 +80,7 @@ flutter:
     - assets/ocr/linux_x64/tessdata/eng.traineddata
     - assets/ocr/linux_x64/LICENSE-tesseract.txt
     - assets/ocr/linux_x64/LICENSE-tessdata.txt
+    - assets/ocr/linux_x64/LICENSE-leptonica.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -2,7 +2,22 @@
 
 All notable changes to Inventorinator will be recorded here.
 
-## [0.1.0-alpha] - Unreleased
+## [0.2.0-alpha] - Unreleased
+
+### Added
+
+- A collapsible, default-collapsed Metrics panel above the search bar,
+  showing filament spool count (summed by quantity, not row count, so
+  multi-spool stacks count correctly), total units, item records, and
+  low-stock count.
+- A "Tracked types" chip row on the Metrics panel so any built-in or custom
+  item type can be excluded from its stats and charts, persisted per device.
+- An overlaid inventory-growth chart on the Metrics panel: per-type
+  cumulative trends in hue-rotated shades of the active theme accent, with a
+  "Unified" toggle to switch to one aggregate curve for the whole tracked
+  inventory.
+
+## [0.1.0-alpha] - 2026-09-02
 
 ### Added
 

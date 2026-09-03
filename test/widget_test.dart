@@ -2615,6 +2615,8 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     final toggle = find.byKey(const Key('alert-sounds-toggle'));
     expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    await tester.ensureVisible(toggle);
+    await tester.pump();
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
@@ -5208,6 +5210,8 @@ Bed Temperature: 80°C
     expect(find.text('E3D'), findsNothing);
     await tester.tap(find.text('Polymaker').last);
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('catalog-vendor')));
+    await tester.pump();
     await tester.tap(find.byKey(const Key('catalog-vendor')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Printed Solid').last);

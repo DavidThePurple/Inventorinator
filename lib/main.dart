@@ -13127,26 +13127,37 @@ class _InventoryHomeState extends State<InventoryHome> {
           onChanged: _previewPageSize,
         ),
       );
-      return Row(
-        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
-        children: [
-          Text(
-            compactLabel ? 'Page' : 'Page size',
-            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
-          ),
-          if (expandSlider)
-            Expanded(child: slider)
-          else
-            SizedBox(width: 190, child: slider),
-          SizedBox(
-            width: compactLabel ? 28 : 38,
-            child: Text(
-              '${_pageSizes[previewIndex]}',
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Below this width there isn't room for a label next to a usable
+          // slider; drop it rather than let the row overflow.
+          final showLabel = !expandSlider || constraints.maxWidth >= 100;
+          return Row(
+            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              if (showLabel)
+                Text(
+                  compactLabel ? 'Page' : 'Page size',
+                  style: const TextStyle(
+                    color: Color(0xff7f8798),
+                    fontSize: 12,
+                  ),
+                ),
+              if (expandSlider)
+                Expanded(child: slider)
+              else
+                SizedBox(width: 190, child: slider),
+              SizedBox(
+                width: compactLabel ? 28 : 38,
+                child: Text(
+                  '${_pageSizes[previewIndex]}',
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          );
+        },
       );
     },
   );
@@ -13241,26 +13252,37 @@ class _InventoryHomeState extends State<InventoryHome> {
           onChanged: _previewCardSize,
         ),
       );
-      return Row(
-        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
-        children: [
-          Text(
-            compactLabel ? 'Card' : 'Card size',
-            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
-          ),
-          if (expandSlider)
-            Expanded(child: slider)
-          else
-            SizedBox(width: 120, child: slider),
-          SizedBox(
-            width: compactLabel ? 38 : 42,
-            child: Text(
-              '${previewValue.round()}%',
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Below this width there isn't room for a label next to a usable
+          // slider; drop it rather than let the row overflow.
+          final showLabel = !expandSlider || constraints.maxWidth >= 100;
+          return Row(
+            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              if (showLabel)
+                Text(
+                  compactLabel ? 'Card' : 'Card size',
+                  style: const TextStyle(
+                    color: Color(0xff7f8798),
+                    fontSize: 12,
+                  ),
+                ),
+              if (expandSlider)
+                Expanded(child: slider)
+              else
+                SizedBox(width: 120, child: slider),
+              SizedBox(
+                width: compactLabel ? 38 : 42,
+                child: Text(
+                  '${previewValue.round()}%',
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          );
+        },
       );
     },
   );

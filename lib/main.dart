@@ -444,6 +444,9 @@ class _InventoryMetrics {
     required this.topFilamentMaterials,
     required this.topFilamentColors,
     required this.topFilamentBrands,
+    required this.filamentColorCount,
+    required this.filamentMaterialCount,
+    required this.filamentBrandCount,
   });
 
   /// Number of inventory rows, i.e. distinct items/stacks (not units).
@@ -466,6 +469,12 @@ class _InventoryMetrics {
 
   /// Top filament brand buckets shown in the metrics panel.
   final List<_MetricBucket> topFilamentBrands;
+
+  /// Distinct in-stock filament colors/materials/brands (not capped, unlike
+  /// the "top" lists above).
+  final int filamentColorCount;
+  final int filamentMaterialCount;
+  final int filamentBrandCount;
 }
 
 class _MetricBucket {
@@ -5492,6 +5501,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   /// metrics panel's stats and charts. Empty means every type is tracked.
   Set<String> metricsUntrackedTypeKeys = {};
   bool metricsUnifiedGrowth = false;
+  String metricsChartDimension = 'type';
+  bool metricsFilamentBreakdownExpanded = false;
   Timer? _syncDebounce;
   Timer? _deferredAutoSync;
   Timer? _syncPoll;
@@ -5731,6 +5742,18 @@ class _InventoryHomeState extends State<InventoryHome> {
     metricsUnifiedGrowth =
         widget.database?.loadBoolPreference(
           'metrics_unified_growth',
+          fallback: false,
+        ) ??
+        false;
+    metricsChartDimension =
+        widget.database?.loadStringPreference(
+          'metrics_chart_dimension',
+          fallback: 'type',
+        ) ??
+        'type';
+    metricsFilamentBreakdownExpanded =
+        widget.database?.loadBoolPreference(
+          'metrics_filament_breakdown_expanded',
           fallback: false,
         ) ??
         false;
@@ -6870,6 +6893,11 @@ class _InventoryHomeState extends State<InventoryHome> {
         labelForFilter: (key) =>
             key == _unspecifiedBrandKey ? 'Unspecified brand' : key,
       ),
+      filamentColorCount: filamentColors.values.where((v) => v > 0).length,
+      filamentMaterialCount: filamentMaterials.values
+          .where((v) => v > 0)
+          .length,
+      filamentBrandCount: filamentBrands.values.where((v) => v > 0).length,
     );
   }
 
@@ -6980,17 +7008,25 @@ class _InventoryHomeState extends State<InventoryHome> {
   ];
 
   /// The same cumulative growth trend as [_inventoryGrowthSeries], split out
-  /// per item type (largest first, capped so the overlay stays legible),
-  /// each assigned a hue-rotated shade of [baseColor].
+  /// per [keyFor] bucket (largest first, capped so the overlay stays
+  /// legible), each assigned a hue-rotated shade of [baseColor]. Used for
+  /// the type/color/material/brand overlay views on the growth chart.
   List<({String label, Color color, List<double> values})>
-  _inventoryTypeGrowthSeries(Color baseColor) {
+  _inventoryDimensionGrowthSeries(
+    Color baseColor, {
+    required bool Function(InventoryItem) includeItem,
+    required String Function(InventoryItem) keyFor,
+    required String Function(InventoryItem) labelForItem,
+  }) {
     final totals = <String, double>{};
     final labels = <String, String>{};
     for (final item in inventory) {
-      if (item.archived || !_isMetricsTracked(item)) continue;
-      final key = _metricsTypeKey(item);
+      if (item.archived || !_isMetricsTracked(item) || !includeItem(item)) {
+        continue;
+      }
+      final key = keyFor(item);
       totals[key] = (totals[key] ?? 0) + item.quantity;
-      labels[key] = _itemTypeDisplayLabel(item);
+      labels[key] = labelForItem(item);
     }
     final topKeys = (totals.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value)))
@@ -7011,7 +7047,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                     (item) =>
                         !item.archived &&
                         _isMetricsTracked(item) &&
-                        _metricsTypeKey(item) == topKeys[i] &&
+                        includeItem(item) &&
+                        keyFor(item) == topKeys[i] &&
                         item.added.isBefore(
                           DateTime(monthStart.year, monthStart.month + 1, 1),
                         ),
@@ -7021,6 +7058,51 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
     ];
   }
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryTypeGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: (_) => true,
+        keyFor: _metricsTypeKey,
+        labelForItem: _itemTypeDisplayLabel,
+      );
+
+  bool _isFilamentItem(InventoryItem item) =>
+      item.type == InventoryType.filament;
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryColorGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentColorFilterValue,
+        labelForItem: _metricsFilamentColorLabel,
+      );
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryMaterialGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentMaterialFilterValue,
+        labelForItem: (item) {
+          final key = _metricsFilamentMaterialFilterValue(item);
+          return key == _unspecifiedMaterialKey ? 'Unspecified material' : key;
+        },
+      );
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryBrandGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentBrandFilterValue,
+        labelForItem: (item) {
+          final key = _metricsFilamentBrandFilterValue(item);
+          return key == _unspecifiedBrandKey ? 'Unspecified brand' : key;
+        },
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -15286,6 +15368,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
     final metrics = _inventoryMetrics;
+    final filamentTracked = !metricsUntrackedTypeKeys.contains(
+      _inventoryTypeDefinitionKey(InventoryType.filament),
+    );
     final stats = [
       _MetricStat(
         'Filament spools',
@@ -15307,6 +15392,23 @@ class _InventoryHomeState extends State<InventoryHome> {
         metrics.lowStockRecords.toString(),
         Icons.warning_amber_rounded,
       ),
+      if (filamentTracked) ...[
+        _MetricStat(
+          'Colors',
+          metrics.filamentColorCount.toString(),
+          Icons.palette_outlined,
+        ),
+        _MetricStat(
+          'Materials',
+          metrics.filamentMaterialCount.toString(),
+          Icons.layers_outlined,
+        ),
+        _MetricStat(
+          'Brands',
+          metrics.filamentBrandCount.toString(),
+          Icons.storefront_outlined,
+        ),
+      ],
     ];
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -15351,58 +15453,107 @@ class _InventoryHomeState extends State<InventoryHome> {
                 for (final stat in stats) _metricStatTile(stat, palette),
               ],
             ),
+            if (filamentTracked &&
+                (metrics.topFilamentMaterials.isNotEmpty ||
+                    metrics.topFilamentColors.isNotEmpty ||
+                    metrics.topFilamentBrands.isNotEmpty)) ...[
+              const SizedBox(height: 12),
+              _metricsFilamentBreakdown(metrics, palette),
+            ],
             const SizedBox(height: 16),
-            if (metrics.topFilamentMaterials.isNotEmpty) ...[
-              _metricsDistributionPanel(
-                'Top filament materials',
-                metrics.topFilamentMaterials,
-                Icons.layers_outlined,
-                palette,
-                selected: filamentMaterialFilter,
-                onTap: (bucket) => _setMaterialFilter(
-                  filamentMaterialFilter == bucket.filterValue
-                      ? null
-                      : bucket.filterValue,
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (metrics.topFilamentColors.isNotEmpty) ...[
-              _metricsDistributionPanel(
-                'Top filament colors',
-                metrics.topFilamentColors,
-                Icons.palette_outlined,
-                palette,
-                selected: itemColorFilter,
-                onTap: (bucket) => _setItemColorFilter(
-                  itemColorFilter == bucket.filterValue
-                      ? null
-                      : bucket.filterValue,
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (metrics.topFilamentBrands.isNotEmpty) ...[
-              _metricsDistributionPanel(
-                'Top filament brands',
-                metrics.topFilamentBrands,
-                Icons.storefront_outlined,
-                palette,
-                selected: filamentBrandFilter,
-                onTap: (bucket) => _setBrandFilter(
-                  filamentBrandFilter == bucket.filterValue
-                      ? null
-                      : bucket.filterValue,
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
             _metricsCharts(palette),
           ],
         ),
       ),
     );
   }
+
+  /// Tucks the "Top filament colors/materials/brands" drill-down cards into
+  /// their own collapsed-by-default sub-section so they don't dominate the
+  /// Metrics panel the moment it's opened — the counts on the stat tiles
+  /// above are the always-visible summary; this is the opt-in detail view.
+  Widget _metricsFilamentBreakdown(
+    _InventoryMetrics metrics,
+    InventorinatorColors palette,
+  ) => Material(
+    color: palette.panel,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: BorderSide(color: palette.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('metrics-filament-breakdown'),
+        initiallyExpanded: metricsFilamentBreakdownExpanded,
+        onExpansionChanged: (expanded) {
+          setState(() => metricsFilamentBreakdownExpanded = expanded);
+          widget.database?.saveBoolPreference(
+            'metrics_filament_breakdown_expanded',
+            expanded,
+          );
+        },
+        leading: const Icon(Icons.donut_large_rounded, size: 20),
+        title: const Text(
+          'Filament breakdown',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        ),
+        subtitle: Text(
+          '${metrics.filamentColorCount} colors · '
+          '${metrics.filamentMaterialCount} materials · '
+          '${metrics.filamentBrandCount} brands',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        children: [
+          if (metrics.topFilamentMaterials.isNotEmpty) ...[
+            _metricsDistributionPanel(
+              'Top filament materials',
+              metrics.topFilamentMaterials,
+              Icons.layers_outlined,
+              palette,
+              selected: filamentMaterialFilter,
+              onTap: (bucket) => _setMaterialFilter(
+                filamentMaterialFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (metrics.topFilamentColors.isNotEmpty) ...[
+            _metricsDistributionPanel(
+              'Top filament colors',
+              metrics.topFilamentColors,
+              Icons.palette_outlined,
+              palette,
+              selected: itemColorFilter,
+              onTap: (bucket) => _setItemColorFilter(
+                itemColorFilter == bucket.filterValue ? null : bucket.filterValue,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (metrics.topFilamentBrands.isNotEmpty)
+            _metricsDistributionPanel(
+              'Top filament brands',
+              metrics.topFilamentBrands,
+              Icons.storefront_outlined,
+              palette,
+              selected: filamentBrandFilter,
+              onTap: (bucket) => _setBrandFilter(
+                filamentBrandFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 
   Widget _metricsDistributionPanel(
     String title,
@@ -15593,6 +15744,26 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       );
 
+  static const _metricsChartDimensions = [
+    (key: 'type', label: 'Type'),
+    (key: 'color', label: 'Color'),
+    (key: 'material', label: 'Material'),
+    (key: 'brand', label: 'Brand'),
+  ];
+
+  void _setMetricsChartDimension(String key) {
+    setState(() => metricsChartDimension = key);
+    widget.database?.saveStringPreference('metrics_chart_dimension', key);
+  }
+
+  List<({String label, Color color, List<double> values})>
+  _metricsChartSeries(Color accent) => switch (metricsChartDimension) {
+    'color' => _inventoryColorGrowthSeries(accent),
+    'material' => _inventoryMaterialGrowthSeries(accent),
+    'brand' => _inventoryBrandGrowthSeries(accent),
+    _ => _inventoryTypeGrowthSeries(accent),
+  };
+
   Widget _metricsCharts(InventorinatorColors palette) => _JewelPanel(
     title: 'Inventory growth',
     palette: palette,
@@ -15616,12 +15787,49 @@ class _InventoryHomeState extends State<InventoryHome> {
         visualDensity: VisualDensity.compact,
       ),
     ),
-    child: metricsUnifiedGrowth
-        ? _JewelAreaChart(series: _inventoryGrowthSeries, color: palette.accent)
-        : _JewelMultiAreaChart(
-            series: _inventoryTypeGrowthSeries(palette.accent),
-            monthLabels: _metricsMonthLabels,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!metricsUnifiedGrowth) ...[
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final dimension in _metricsChartDimensions)
+                _GlassFilterChip(
+                  selected: metricsChartDimension == dimension.key,
+                  child: FilterChip(
+                    key: Key('metrics-dimension-${dimension.key}'),
+                    label: Text(dimension.label),
+                    selected: metricsChartDimension == dimension.key,
+                    onSelected: (_) =>
+                        _setMetricsChartDimension(dimension.key),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    backgroundColor: Colors.transparent,
+                    selectedColor: Colors.transparent,
+                    side: BorderSide.none,
+                    visualDensity: VisualDensity.compact,
+                    labelStyle: const TextStyle(fontSize: 11),
+                  ),
+                ),
+            ],
           ),
+          const SizedBox(height: 10),
+        ],
+        metricsUnifiedGrowth
+            ? _JewelAreaChart(
+                series: _inventoryGrowthSeries,
+                color: palette.accent,
+              )
+            : _JewelMultiAreaChart(
+                series: _metricsChartSeries(palette.accent),
+                monthLabels: _metricsMonthLabels,
+              ),
+      ],
+    ),
   );
 
   Widget _typeFilterPanel({bool compact = false}) => Material(

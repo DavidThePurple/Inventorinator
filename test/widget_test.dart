@@ -1422,7 +1422,10 @@ Bed Temperature: 80°C
       ),
     )!;
 
-    expect(decoded.inventory.single.styleEntries.single.carbonFiberForm, 'ground');
+    expect(
+      decoded.inventory.single.styleEntries.single.carbonFiberForm,
+      'ground',
+    );
   });
 
   test('gradient style entries keep their name on export and import', () {
@@ -1561,161 +1564,231 @@ Bed Temperature: 80°C
     },
   );
 
-  testWidgets('filament style editor supports coextruded colors and a second style', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1200, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(const InventorinatorApp());
-    await tester.tap(find.byKey(const Key('add-item')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('item-type')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Filament').last);
-    await tester.pumpAndSettle();
+  testWidgets(
+    "a gradient name label doesn't push the material badge off the card's "
+    'right edge',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final state = encodeWorkshopState(
+        inventory: [
+          InventoryItem(
+            id: 'INV-NAMED',
+            name: 'Named gradient',
+            type: InventoryType.filament,
+            compatibility: const [],
+            added: DateTime(2026),
+            cost: 24,
+            color: const Color(0xffff0000),
+            materialName: 'PLA',
+            styleEntries: const [
+              FilamentStyleEntry(
+                style: 'gradient',
+                colors: ['#FF0000', '#0000FF'],
+                gradientName: 'Maui',
+              ),
+            ],
+          ),
+          InventoryItem(
+            id: 'INV-UNNAMED',
+            name: 'Unnamed gradient',
+            type: InventoryType.filament,
+            compatibility: const [],
+            added: DateTime(2026),
+            cost: 24,
+            color: const Color(0xffff0000),
+            materialName: 'PLA',
+            styleEntries: const [
+              FilamentStyleEntry(
+                style: 'gradient',
+                colors: ['#FF0000', '#0000FF'],
+              ),
+            ],
+          ),
+        ],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      );
+      await tester.pumpWidget(InventorinatorApp(persistedState: state));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('add-filament-style')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('filament-style-0')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Coextruded').last);
-    await tester.pumpAndSettle();
+      // Measure each badge's inset from its own card's right edge -- cards
+      // can land in different grid columns, so compare offsets within each
+      // card rather than raw screen coordinates. The "Maui" label must not
+      // eat into the trailing space reserved for the badge.
+      double insetFromCardRight(String itemId) {
+        final card = find.byKey(Key('inventory-card-$itemId'));
+        final badge = find.descendant(of: card, matching: find.text('PLA'));
+        return tester.getTopRight(card).dx - tester.getTopRight(badge).dx;
+      }
 
-    // Coextruded starts at two strands -- a single-strand coextrusion isn't
-    // a real thing -- and has no gradient name field, that's gradient-only.
-    expect(
-      find.byKey(const Key('filament-style-count-0-1')),
-      findsNothing,
-    );
-    expect(find.byKey(const Key('filament-style-color-0-0')), findsOneWidget);
-    expect(find.byKey(const Key('filament-style-color-0-1')), findsOneWidget);
-    expect(find.byKey(const Key('filament-style-color-0-2')), findsNothing);
-    expect(
-      find.byKey(const Key('filament-style-gradient-name-0')),
-      findsNothing,
-    );
+      expect(
+        insetFromCardRight('INV-NAMED'),
+        closeTo(insetFromCardRight('INV-UNNAMED'), 1),
+      );
+    },
+  );
 
-    // Each strand gets its own name slot alongside its chicklet.
-    expect(
-      find.byKey(const Key('filament-style-color-name-0-0')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('filament-style-color-name-0-1')),
-      findsOneWidget,
-    );
-    await tester.enterText(
-      find.byKey(const Key('filament-style-color-name-0-0')),
-      'Black',
-    );
-    await tester.enterText(
-      find.byKey(const Key('filament-style-color-name-0-1')),
-      'White',
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'filament style editor supports coextruded colors and a second style',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(const InventorinatorApp());
+      await tester.tap(find.byKey(const Key('add-item')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('item-type')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Filament').last);
+      await tester.pumpAndSettle();
 
-    await tester.ensureVisible(
-      find.byKey(const Key('filament-style-count-0-3')),
-    );
-    await tester.tap(find.byKey(const Key('filament-style-count-0-3')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
-    expect(
-      find.byKey(const Key('filament-style-color-name-0-2')),
-      findsOneWidget,
-    );
-    // Naming the third strand doesn't disturb the first two.
-    expect(
-      tester
-          .widget<TextFormField>(
-            find.byKey(const Key('filament-style-color-name-0-0')),
-          )
-          .initialValue,
-      'Black',
-    );
+      await tester.tap(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('filament-style-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Coextruded').last);
+      await tester.pumpAndSettle();
 
-    // A second style can be added and configured independently.
-    await tester.tap(find.byKey(const Key('add-filament-style')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('add-filament-style')), findsNothing);
-    await tester.tap(find.byKey(const Key('filament-style-1')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Carbon Fiber').last);
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('filament-style-carbon-form-1')),
-      findsOneWidget,
-    );
-    // The first style's color count is unaffected by the second entry.
-    expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
+      // Coextruded starts at two strands -- a single-strand coextrusion isn't
+      // a real thing -- and has no gradient name field, that's gradient-only.
+      expect(find.byKey(const Key('filament-style-count-0-1')), findsNothing);
+      expect(find.byKey(const Key('filament-style-color-0-0')), findsOneWidget);
+      expect(find.byKey(const Key('filament-style-color-0-1')), findsOneWidget);
+      expect(find.byKey(const Key('filament-style-color-0-2')), findsNothing);
+      expect(
+        find.byKey(const Key('filament-style-gradient-name-0')),
+        findsNothing,
+      );
 
-    await tester.tap(find.byKey(const Key('remove-filament-style-1')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('add-filament-style')), findsOneWidget);
-    expect(find.byKey(const Key('filament-style-1')), findsNothing);
-  });
+      // Each strand gets its own name slot alongside its chicklet.
+      expect(
+        find.byKey(const Key('filament-style-color-name-0-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('filament-style-color-name-0-1')),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('filament-style-color-name-0-0')),
+        'Black',
+      );
+      await tester.enterText(
+        find.byKey(const Key('filament-style-color-name-0-1')),
+        'White',
+      );
+      await tester.pumpAndSettle();
 
-  testWidgets('gradient style renders a live gradient preview with stop handles', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1200, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(const InventorinatorApp());
-    await tester.tap(find.byKey(const Key('add-item')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('item-type')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Filament').last);
-    await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('filament-style-count-0-3')),
+      );
+      await tester.tap(find.byKey(const Key('filament-style-count-0-3')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
+      expect(
+        find.byKey(const Key('filament-style-color-name-0-2')),
+        findsOneWidget,
+      );
+      // Naming the third strand doesn't disturb the first two.
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const Key('filament-style-color-name-0-0')),
+            )
+            .initialValue,
+        'Black',
+      );
 
-    await tester.tap(find.byKey(const Key('add-filament-style')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('filament-style-0')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Gradient').last);
-    await tester.pumpAndSettle();
+      // A second style can be added and configured independently.
+      await tester.tap(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('add-filament-style')), findsNothing);
+      await tester.tap(find.byKey(const Key('filament-style-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Carbon Fiber').last);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('filament-style-carbon-form-1')),
+        findsOneWidget,
+      );
+      // The first style's color count is unaffected by the second entry.
+      expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
 
-    // The gradient name field only appears for the gradient style, above
-    // the style dropdown itself.
-    expect(
-      find.byKey(const Key('filament-style-gradient-name-0')),
-      findsOneWidget,
-    );
-    final nameTop = tester
-        .getTopLeft(find.byKey(const Key('filament-style-gradient-name-0')))
-        .dy;
-    final dropdownTop = tester
-        .getTopLeft(find.byKey(const Key('filament-style-0')))
-        .dy;
-    expect(nameTop, lessThan(dropdownTop));
-    await tester.enterText(
-      find.byKey(const Key('filament-style-gradient-name-0')),
-      'Sunset Fade',
-    );
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('remove-filament-style-1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('add-filament-style')), findsOneWidget);
+      expect(find.byKey(const Key('filament-style-1')), findsNothing);
+    },
+  );
 
-    // Gradient starts at two stops with a rendered blend, not bare chicklets.
-    expect(find.byKey(const Key('filament-style-color-0-0')), findsOneWidget);
-    expect(find.byKey(const Key('filament-style-color-0-1')), findsOneWidget);
-    final container = tester
-        .widgetList<Container>(find.byType(Container))
-        .firstWhere((widget) => widget.decoration is BoxDecoration
-            && (widget.decoration! as BoxDecoration).gradient is LinearGradient);
-    expect(
-      ((container.decoration! as BoxDecoration).gradient! as LinearGradient)
-          .colors,
-      hasLength(2),
-    );
+  testWidgets(
+    'gradient style renders a live gradient preview with stop handles',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(const InventorinatorApp());
+      await tester.tap(find.byKey(const Key('add-item')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('item-type')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Filament').last);
+      await tester.pumpAndSettle();
 
-    await tester.ensureVisible(
-      find.byKey(const Key('filament-style-count-0-3')),
-    );
-    await tester.tap(find.byKey(const Key('filament-style-count-0-3')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
-  });
+      await tester.tap(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('filament-style-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Gradient').last);
+      await tester.pumpAndSettle();
+
+      // The gradient name field only appears for the gradient style, above
+      // the style dropdown itself.
+      expect(
+        find.byKey(const Key('filament-style-gradient-name-0')),
+        findsOneWidget,
+      );
+      final nameTop = tester
+          .getTopLeft(find.byKey(const Key('filament-style-gradient-name-0')))
+          .dy;
+      final dropdownTop = tester
+          .getTopLeft(find.byKey(const Key('filament-style-0')))
+          .dy;
+      expect(nameTop, lessThan(dropdownTop));
+      await tester.enterText(
+        find.byKey(const Key('filament-style-gradient-name-0')),
+        'Sunset Fade',
+      );
+      await tester.pumpAndSettle();
+
+      // Gradient starts at two stops with a rendered blend, not bare chicklets.
+      expect(find.byKey(const Key('filament-style-color-0-0')), findsOneWidget);
+      expect(find.byKey(const Key('filament-style-color-0-1')), findsOneWidget);
+      final container = tester
+          .widgetList<Container>(find.byType(Container))
+          .firstWhere(
+            (widget) =>
+                widget.decoration is BoxDecoration &&
+                (widget.decoration! as BoxDecoration).gradient
+                    is LinearGradient,
+          );
+      expect(
+        ((container.decoration! as BoxDecoration).gradient! as LinearGradient)
+            .colors,
+        hasLength(2),
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const Key('filament-style-count-0-3')),
+      );
+      await tester.tap(find.byKey(const Key('filament-style-count-0-3')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('filament-style-color-0-2')), findsOneWidget);
+    },
+  );
 
   testWidgets('kit package import plan creates zero stock and is idempotent', (
     tester,
@@ -2794,6 +2867,7 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('debug-quantity-sync')), findsOneWidget);
     expect(find.byKey(const Key('debug-low-stock')), findsOneWidget);
     expect(find.byKey(const Key('debug-moisture-wave')), findsOneWidget);
+    expect(find.byKey(const Key('debug-new-item-glow')), findsOneWidget);
     expect(find.byKey(const Key('animation-duration')), findsNothing);
     expect(find.byKey(const Key('animation-recurrence')), findsNothing);
     final targetItemId = tester
@@ -2860,6 +2934,14 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('color-theme-darkBlack')), findsOneWidget);
     expect(find.byKey(const Key('color-theme-darkBrown')), findsOneWidget);
     expect(find.byKey(const Key('color-theme-custom')), findsOneWidget);
+    expect(
+      find.byKey(const Key('personalization-notifications-section')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('personalization-sounds-section')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('alert-sounds-toggle')), findsOneWidget);
     expect(
       find.byKey(const Key('low-stock-alerts-personalization')),
@@ -2875,6 +2957,20 @@ Bed Temperature: 80°C
       find.byKey(const Key('moisture-chime-personalization')),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('alert-sound-profile')), findsOneWidget);
+    expect(find.byKey(const Key('alert-sound-volume')), findsOneWidget);
+    expect(find.byKey(const Key('alert-sound-recurrence')), findsOneWidget);
+    expect(find.byKey(const Key('preview-alert-sound')), findsOneWidget);
+    expect(
+      find.byKey(const Key('personalization-effects-section')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('card-effects-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('low-stock-effects-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('moisture-effects-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('remote-sync-effects-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('search-glow-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('new-item-glow-toggle')), findsOneWidget);
     final photoToggle = find.byKey(const Key('photo-cards-toggle'));
     expect(photoToggle, findsOneWidget);
     expect(tester.widget<SwitchListTile>(photoToggle).value, isFalse);
@@ -3453,6 +3549,7 @@ Bed Temperature: 80°C
       2,
     );
     await tester.pump(const Duration(milliseconds: 150));
+    await tester.runAsync(() => database.waitForPendingWrites());
     final saved = decodeWorkshopState(database.loadState())!;
     expect(saved.inventory.single.quantity, 4);
     expect(find.byTooltip('Changes saved'), findsOneWidget);
@@ -3520,13 +3617,15 @@ Bed Temperature: 80°C
       expect(find.byKey(const Key('local-save-feedback')), findsNothing);
       await tester.tap(find.byKey(const Key('status-deployed')));
       await tester.pump();
+      await tester.runAsync(() => database.waitForPendingWrites());
 
-      // No debounce window for this path -- the write already landed by the
-      // time _persist() returns, so the indicator goes straight to "saved".
+      // The record write is deferred off the interaction callback, then the
+      // indicator goes straight to "saved" once that queued commit lands.
       expect(
-        decodeWorkshopState(
-          database.loadState(),
-        )!.inventory.single.filamentStatus,
+        decodeWorkshopState(database.loadState())!
+            .inventory
+            .single
+            .filamentStatus,
         FilamentStatus.deployed,
       );
       expect(find.byTooltip('Changes saved'), findsOneWidget);
@@ -5483,10 +5582,7 @@ Bed Temperature: 80°C
       findsOneWidget,
     );
     expect(
-      find.descendant(
-        of: colorFilterPanel,
-        matching: find.text('#D7263D'),
-      ),
+      find.descendant(of: colorFilterPanel, matching: find.text('#D7263D')),
       findsOneWidget,
     );
   });

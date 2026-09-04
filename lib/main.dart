@@ -108,6 +108,462 @@ class _LocationIcon extends StatelessWidget {
       const Icon(Icons.warehouse_outlined, size: 24, semanticLabel: 'Location');
 }
 
+/// A moving, localized light band for the inventory search rim. Most of the
+/// edge stays quiet so the effect reads as reflected light rather than a neon
+/// outline painted around the whole field.
+class _EdgeLightPainter extends CustomPainter {
+  const _EdgeLightPainter({
+    required this.progress,
+    required this.accent,
+    required this.light,
+    required this.focused,
+  });
+
+  final double progress;
+  final Color accent;
+  final bool light;
+  final bool focused;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 2 || size.height <= 2) return;
+    final rim = RRect.fromRectAndRadius(
+      Rect.fromLTWH(.9, .9, size.width - 1.8, size.height - 1.8),
+      const Radius.circular(18.25),
+    );
+    final quietAlpha = (light ? .42 : .50) * (focused ? 1.15 : 1);
+    canvas.drawRRect(
+      rim,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = accent.withValues(alpha: quietAlpha),
+    );
+    // The moving light is an idle affordance. Keep the focused field calm so
+    // the user's typing state is visually stable.
+    if (focused) return;
+
+    final cyan = Color.lerp(accent, const Color(0xff52d8ff), .62)!;
+    final pink = Color.lerp(accent, const Color(0xffff73c9), .64)!;
+    final green = Color.lerp(accent, const Color(0xff75e58d), .58)!;
+    final amber = Color.lerp(accent, const Color(0xffffc46b), .55)!;
+    // Keep the pools saturated enough to survive both dark and pale input
+    // surfaces; the broader blur supplies spread without a hard neon line.
+    final bandAlpha = light ? 2.2 : 2.35;
+
+    // This is intentionally not one path-following animation. Independent
+    // edge pools drift at different rates and fade at both ends, like soft
+    // reflected light around the field in the reference treatment.
+    void drawEdgePool({
+      required Offset start,
+      required Offset end,
+      required bool horizontal,
+      required double center,
+      required double width,
+      required Color first,
+      required Color second,
+      required double strength,
+    }) {
+      final startFade = math.max(0.0, center - width * 1.8);
+      final coreStart = math.max(startFade, center - width * .55);
+      final coreEnd = math.min(1.0, center + width * .25);
+      final endFade = math.min(1.0, math.max(coreEnd, center + width * 1.8));
+      final rect = Rect.fromLTRB(
+        math.min(start.dx, end.dx),
+        math.min(start.dy, end.dy),
+        math.max(start.dx, end.dx),
+        math.max(start.dy, end.dy),
+      ).inflate(1);
+      final shader = LinearGradient(
+        begin: horizontal ? const Alignment(-1, 0) : const Alignment(0, -1),
+        end: horizontal ? const Alignment(1, 0) : const Alignment(0, 1),
+        colors: [
+          Colors.transparent,
+          Colors.transparent,
+          first.withValues(alpha: bandAlpha * strength * .20),
+          second.withValues(alpha: bandAlpha * strength * .42),
+          second.withValues(alpha: bandAlpha * strength * .12),
+          Colors.transparent,
+        ],
+        stops: [0, startFade, coreStart, coreEnd, endFade, 1],
+      ).createShader(rect);
+      final glow = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 9
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10)
+        ..shader = shader;
+      canvas.drawLine(start, end, glow);
+      final core = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 1.8
+        ..shader = shader;
+      canvas.drawLine(start, end, core);
+    }
+
+    final time = progress * math.pi * 2;
+    final topCenter =
+        (.42 + .16 * math.sin(time + .6) + .045 * math.sin(time * 3 + 1.1))
+            .clamp(.12, .88);
+    final bottomCenter =
+        (.72 + .19 * math.sin(time * 2 + 2.3) + .06 * math.sin(time * 5 + .2))
+            .clamp(.12, .92);
+    final leftCenter =
+        (.28 + .18 * math.sin(time + 1.8) + .05 * math.sin(time * 4 + 2.4))
+            .clamp(.08, .92);
+    final rightCenter =
+        (.78 + .13 * math.sin(time * 3 + 4.1) + .04 * math.sin(time * 7 + .5))
+            .clamp(.10, .92);
+
+    // Keep the animated blur inside an inset rounded mask. The quiet outline
+    // above remains unmasked so it still defines the field edge cleanly.
+    canvas.save();
+    canvas.clipRRect(
+      RRect.fromRectAndRadius(
+        rim.outerRect.deflate(1.0),
+        const Radius.circular(17.25),
+      ),
+    );
+    drawEdgePool(
+      start: Offset(rim.left + 18, rim.top),
+      end: Offset(rim.right - 18, rim.top),
+      horizontal: true,
+      center: topCenter,
+      width: .26,
+      first: pink,
+      second: cyan,
+      strength: .48,
+    );
+    drawEdgePool(
+      start: Offset(rim.left + 18, rim.bottom),
+      end: Offset(rim.right - 18, rim.bottom),
+      horizontal: true,
+      center: bottomCenter,
+      width: .24,
+      first: cyan,
+      second: pink,
+      strength: 1,
+    );
+    drawEdgePool(
+      start: Offset(rim.left, rim.bottom - 18),
+      end: Offset(rim.left, rim.top + 18),
+      horizontal: false,
+      center: leftCenter,
+      width: .30,
+      first: green,
+      second: cyan,
+      strength: .60,
+    );
+    drawEdgePool(
+      start: Offset(rim.right, rim.top + 18),
+      end: Offset(rim.right, rim.bottom - 18),
+      horizontal: false,
+      center: rightCenter,
+      width: .28,
+      first: amber,
+      second: pink,
+      strength: .35,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _EdgeLightPainter oldDelegate) =>
+      progress != oldDelegate.progress ||
+      accent != oldDelegate.accent ||
+      light != oldDelegate.light ||
+      focused != oldDelegate.focused;
+}
+
+/// The inventory search gets a moving, localized edge-lit rim without adding
+/// another animated layer to the scrolling inventory.
+class _EdgeLitSearchField extends StatefulWidget {
+  const _EdgeLitSearchField({
+    this.fieldKey,
+    required this.controller,
+    required this.focusNode,
+    this.enabled = true,
+    required this.onChanged,
+    required this.hintText,
+  });
+
+  final Key? fieldKey;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+  final String hintText;
+
+  @override
+  State<_EdgeLitSearchField> createState() => _EdgeLitSearchFieldState();
+}
+
+class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _edgeAnimation = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 11),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode.addListener(_handleFocusChanged);
+    _handleFocusChanged();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EdgeLitSearchField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode.removeListener(_handleFocusChanged);
+      widget.focusNode.addListener(_handleFocusChanged);
+    }
+    _handleFocusChanged();
+  }
+
+  void _handleFocusChanged() {
+    // Infinite idle animation is intentionally disabled under widget tests so
+    // pumpAndSettle can still settle the rest of the application.
+    if (!widget.enabled ||
+        widget.focusNode.hasFocus ||
+        Platform.environment.containsKey('FLUTTER_TEST')) {
+      _edgeAnimation.stop();
+    } else {
+      _edgeAnimation.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_handleFocusChanged);
+    _edgeAnimation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<InventorinatorColors>();
+    final accent = theme.colorScheme.primary;
+    final light = theme.brightness == Brightness.light;
+    final input = palette?.input ?? theme.colorScheme.surfaceContainerLow;
+
+    final field = TextField(
+      key: widget.fieldKey,
+      controller: widget.controller,
+      focusNode: widget.focusNode,
+      onChanged: widget.onChanged,
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.search_rounded),
+        hintText: widget.hintText,
+        filled: true,
+        fillColor: input,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([_edgeAnimation, widget.focusNode]),
+      child: Padding(padding: const EdgeInsets.all(1.5), child: field),
+      builder: (context, child) => CustomPaint(
+        foregroundPainter: widget.enabled
+            ? _EdgeLightPainter(
+                progress: _edgeAnimation.value,
+                accent: accent,
+                light: light,
+                focused: widget.focusNode.hasFocus,
+              )
+            : null,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _NewItemLaserGlow extends StatefulWidget {
+  const _NewItemLaserGlow({
+    required this.enabled,
+    required this.trigger,
+    required this.child,
+  });
+
+  final bool enabled;
+  final int trigger;
+  final Widget child;
+
+  @override
+  State<_NewItemLaserGlow> createState() => _NewItemLaserGlowState();
+}
+
+class _NewItemLaserGlowState extends State<_NewItemLaserGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 5),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.enabled) _animation.forward();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NewItemLaserGlow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.trigger != oldWidget.trigger) {
+      // Each debug preview is a fresh one-shot burst.
+      if (widget.enabled) _animation.forward(from: 0);
+    }
+    if (widget.enabled == oldWidget.enabled) return;
+    if (widget.enabled) {
+      _animation.forward(from: 0);
+    } else {
+      _animation.stop();
+      _animation.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    return AnimatedBuilder(
+      animation: _animation,
+      child: widget.child,
+      builder: (context, child) => Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _NewItemLaserPainter(
+                progress: _animation.value,
+                accent: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          child!,
+        ],
+      ),
+    );
+  }
+}
+
+class _NewItemLaserPainter extends CustomPainter {
+  const _NewItemLaserPainter({required this.progress, required this.accent});
+
+  final double progress;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 4 || size.height <= 4) return;
+    const spread = 12.0;
+    final rect = Rect.fromLTWH(
+      -spread,
+      -spread,
+      size.width + (spread * 2),
+      size.height + (spread * 2),
+    );
+    final progressValue = progress.clamp(0.0, 1.0).toDouble();
+    final envelope = math.sin(math.pi * progressValue);
+    if (envelope <= .001) return;
+    // Keep the beams neutral and luminous; the active theme only provides a
+    // restrained tint instead of turning the effect into a rainbow.
+    final white = Color.lerp(Colors.white, accent, .16)!;
+    final silver = Color.lerp(const Color(0xffd8dce6), accent, .28)!;
+    final pale = Color.lerp(const Color(0xfff1f3f8), accent, .10)!;
+    final colors = [white, silver, pale, white];
+    final center = rect.center;
+    final radiusToCorner = math.sqrt(
+      math.pow(rect.width / 2, 2) + math.pow(rect.height / 2, 2),
+    );
+    const rayCount = 10;
+    final angleStep = math.pi * 2 / rayCount;
+    final rotation = progressValue * math.pi * 2;
+
+    Path beam(double angle) {
+      final far = radiusToCorner * 1.35;
+      return Path()
+        ..moveTo(center.dx, center.dy)
+        ..lineTo(
+          center.dx + math.cos(angle) * far,
+          center.dy + math.sin(angle) * far,
+        );
+    }
+
+    for (var index = 0; index < rayCount; index++) {
+      final angle = rotation + (index * angleStep);
+      final color = colors[index % colors.length];
+      final path = beam(angle);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 28
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24)
+          ..color = color.withValues(alpha: .20 * envelope),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 10
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 11)
+          ..color = color.withValues(alpha: .34 * envelope),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 2.2
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2)
+          ..color = color.withValues(alpha: .34 * envelope),
+      );
+    }
+    canvas.drawCircle(
+      center,
+      radiusToCorner * .34,
+      Paint()
+        ..shader =
+            RadialGradient(
+              colors: [
+                Colors.white.withValues(alpha: .14 * envelope),
+                accent.withValues(alpha: .06 * envelope),
+                Colors.transparent,
+              ],
+            ).createShader(
+              Rect.fromCircle(center: center, radius: radiusToCorner * .34),
+            ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _NewItemLaserPainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.accent != accent;
+}
+
 Color _themeCanvas(BuildContext context) =>
     Theme.of(context).extension<InventorinatorColors>()?.canvas ??
     _appCanvasColor;
@@ -654,17 +1110,11 @@ class _JewelAreaChartPainter extends CustomPainter {
     canvas.drawPath(
       fillPath,
       Paint()
-        ..shader =
-            LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                color.withValues(alpha: .38),
-                color.withValues(alpha: 0),
-              ],
-            ).createShader(
-              Rect.fromLTWH(0, 0, size.width, size.height),
-            ),
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [color.withValues(alpha: .38), color.withValues(alpha: 0)],
+        ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
     );
 
     canvas.drawPath(
@@ -722,10 +1172,7 @@ Color _hueRotate(Color base, double degrees) {
 /// per item type, each colored by rotating the hue of a shared base color so
 /// the series read as one family rather than clashing.
 class _JewelMultiAreaChart extends StatelessWidget {
-  const _JewelMultiAreaChart({
-    required this.series,
-    required this.monthLabels,
-  });
+  const _JewelMultiAreaChart({required this.series, required this.monthLabels});
 
   final List<({String label, Color color, List<double> values})> series;
   final List<String> monthLabels;
@@ -809,9 +1256,7 @@ class _JewelMultiAreaChartPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final allValues = [
-      for (final line in series) ...line.values,
-    ];
+    final allValues = [for (final line in series) ...line.values];
     final maxValue = allValues.reduce(math.max);
     final minValue = math.min(0.0, allValues.reduce(math.min));
     final range = (maxValue - minValue).abs() < 1e-6
@@ -906,9 +1351,49 @@ enum CatalogViewFilter { kits, builds, machines, printers, tools }
 
 enum FilamentStatus { ready, deployed, drying, queuedForDrying }
 
+enum SpoolPrintOutcome { successful, failed }
+
+/// Immutable usage entry for one filament spool. Amounts are always grams;
+/// keeping each print as its own record preserves a correction-friendly audit
+/// trail and lets the UI report successful material separately from waste.
+class SpoolUsageRecord {
+  const SpoolUsageRecord({
+    required this.id,
+    required this.spoolId,
+    required this.recordedAt,
+    required this.gramsUsed,
+    this.gramsWaste = 0,
+    required this.outcome,
+    this.buildId,
+    this.project = '',
+    this.wasteReason = '',
+    this.notes = '',
+  });
+
+  final String id;
+  final String spoolId;
+  final DateTime recordedAt;
+  final double gramsUsed;
+  final double gramsWaste;
+  final SpoolPrintOutcome outcome;
+  final String? buildId;
+  final String project;
+  final String wasteReason;
+  final String notes;
+
+  double get totalGrams => gramsUsed + gramsWaste;
+}
+
 enum ArchiveDisposition { archived, depleted, destroyed }
 
 enum ProductSearchProvider { google, bing, duckDuckGo, brave, custom }
+
+enum AlertSoundProfile { workshop, system }
+
+String _alertSoundProfileLabel(AlertSoundProfile profile) => switch (profile) {
+  AlertSoundProfile.workshop => 'Workshop chimes',
+  AlertSoundProfile.system => 'System alert',
+};
 
 enum MoistureTimeUnit { hours, days }
 
@@ -930,7 +1415,12 @@ enum ItemAction {
   delete,
 }
 
-enum DebugCardEffect { remoteQuantity, lowStock, moistureThreshold }
+enum DebugCardEffect {
+  remoteQuantity,
+  lowStock,
+  moistureThreshold,
+  newItemGlow,
+}
 
 enum LocalSaveFeedback { idle, saving, saved }
 
@@ -2354,7 +2844,10 @@ const filamentStyleOptions = <FilamentStyleOption>[
 ];
 
 String filamentStyleLabel(String key) =>
-    filamentStyleOptions.where((option) => option.key == key).firstOrNull?.label ??
+    filamentStyleOptions
+        .where((option) => option.key == key)
+        .firstOrNull
+        ?.label ??
     key;
 
 const _maxFilamentStyleEntries = 2;
@@ -2763,18 +3256,17 @@ List<Color>? _itemGradientColors(InventoryItem item) {
   ];
 }
 
-String _itemGradientName(InventoryItem item) => item.styleEntries
-    .where((entry) => entry.style == 'gradient')
-    .firstOrNull
-    ?.gradientName
-    .trim() ??
+String _itemGradientName(InventoryItem item) =>
+    item.styleEntries
+        .where((entry) => entry.style == 'gradient')
+        .firstOrNull
+        ?.gradientName
+        .trim() ??
     '';
 
 List<Color>? _itemCoextrudedColors(InventoryItem item) {
   final entry = item.styleEntries
-      .where(
-        (entry) => entry.style == 'coextruded' && entry.colors.length >= 2,
-      )
+      .where((entry) => entry.style == 'coextruded' && entry.colors.length >= 2)
       .firstOrNull;
   if (entry == null) return null;
   return [
@@ -3813,6 +4305,7 @@ typedef WorkshopState = ({
   List<ShoppingListEntry> shoppingList,
   List<AuditEntry> auditLog,
   List<AdditionHistoryEntry> additionHistory,
+  List<SpoolUsageRecord> spoolUsage,
   int historyLimit,
 });
 
@@ -3960,6 +4453,7 @@ String encodeWorkshopState({
   List<ShoppingListEntry> shoppingList = const [],
   List<AuditEntry> auditLog = const [],
   List<AdditionHistoryEntry> additionHistory = const [],
+  List<SpoolUsageRecord> spoolUsage = const [],
   int historyLimit = 100,
 }) => jsonEncode({
   'schemaVersion': 8,
@@ -4158,6 +4652,22 @@ String encodeWorkshopState({
         },
       )
       .toList(),
+  'spoolUsage': spoolUsage
+      .map(
+        (entry) => {
+          'id': entry.id,
+          'spoolId': entry.spoolId,
+          'recordedAt': entry.recordedAt.toIso8601String(),
+          'gramsUsed': entry.gramsUsed,
+          'gramsWaste': entry.gramsWaste,
+          'outcome': entry.outcome.name,
+          if (entry.buildId != null) 'buildId': entry.buildId,
+          'project': entry.project,
+          'wasteReason': entry.wasteReason,
+          'notes': entry.notes,
+        },
+      )
+      .toList(),
   'historyLimit': historyLimit,
 });
 
@@ -4200,6 +4710,9 @@ Map<String, dynamic> encodeWorkshopEntityPayload(
       additionHistory: entityType == 'additionHistory'
           ? [record as AdditionHistoryEntry]
           : const [],
+      spoolUsage: entityType == 'spoolUsage'
+          ? [record as SpoolUsageRecord]
+          : const [],
     ),
   ) as Map<String, dynamic>;
   return Map<String, dynamic>.from(
@@ -4225,14 +4738,13 @@ WorkshopState? decodeWorkshopState(String? source) {
             compatibility: (item['compatibility'] as List).cast<String>(),
             purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
                 .cast<String>(),
-            styleEntries:
-                (item['styleEntries'] as List<dynamic>? ?? const [])
-                    .map(
-                      (entry) => FilamentStyleEntry.fromJson(
-                        (entry as Map).cast<String, dynamic>(),
-                      ),
-                    )
-                    .toList(),
+            styleEntries: (item['styleEntries'] as List<dynamic>? ?? const [])
+                .map(
+                  (entry) => FilamentStyleEntry.fromJson(
+                    (entry as Map).cast<String, dynamic>(),
+                  ),
+                )
+                .toList(),
             added: DateTime.parse(item['added'] as String),
             cost: (item['cost'] as num).toDouble(),
             color: Color(item['color'] as int),
@@ -4639,6 +5151,25 @@ WorkshopState? decodeWorkshopState(String? source) {
                 ),
               )
               .toList();
+    final spoolUsage = (root['spoolUsage'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(
+          (entry) => SpoolUsageRecord(
+            id: entry['id'] as String,
+            spoolId: entry['spoolId'] as String,
+            recordedAt: DateTime.parse(entry['recordedAt'] as String),
+            gramsUsed: (entry['gramsUsed'] as num?)?.toDouble() ?? 0,
+            gramsWaste: (entry['gramsWaste'] as num?)?.toDouble() ?? 0,
+            outcome: SpoolPrintOutcome.values.byName(
+              entry['outcome'] as String? ?? 'successful',
+            ),
+            buildId: entry['buildId'] as String?,
+            project: entry['project'] as String? ?? '',
+            wasteReason: entry['wasteReason'] as String? ?? '',
+            notes: entry['notes'] as String? ?? '',
+          ),
+        )
+        .toList();
     return (
       inventory: inventory,
       vendors: vendors,
@@ -4660,6 +5191,7 @@ WorkshopState? decodeWorkshopState(String? source) {
       shoppingList: shoppingList,
       auditLog: auditLog,
       additionHistory: additionHistory,
+      spoolUsage: spoolUsage,
       historyLimit: root['historyLimit'] as int? ?? 100,
     );
   } catch (exception) {
@@ -4866,6 +5398,10 @@ class _GlassFilterChip extends StatefulWidget {
   @override
   State<_GlassFilterChip> createState() => _GlassFilterChipState();
 }
+
+// Keep square inventory actions (sort direction and zero-quantity visibility)
+// on the same 48px control rhythm as the rest of the header.
+const double _inventorySquareControlSize = 48;
 
 class _GlassFilterChipState extends State<_GlassFilterChip> {
   bool hovered = false;
@@ -5675,17 +6211,28 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final List<ShoppingListEntry> shoppingList;
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
+  late final List<SpoolUsageRecord> spoolUsage;
   late int historyLimit;
   late bool alertSoundsEnabled;
   late bool lowStockAlertsEnabled;
   late bool syncChimeEnabled;
   late bool dryingCompleteChimeEnabled;
   late bool moistureAlertChimeEnabled;
+  late int alertSoundVolumePercent;
+  late int alertSoundRecurrenceSeconds;
+  late AlertSoundProfile alertSoundProfile;
+  late bool cardEffectsEnabled;
+  late bool lowStockEffectsEnabled;
+  late bool moistureEffectsEnabled;
+  late bool remoteSyncEffectsEnabled;
+  late bool searchGlowEnabled;
+  late bool newItemGlowEnabled;
   late int animationDurationPercent;
   late int animationRecurrenceSeconds;
   late bool photoCardsEnabled;
   late CustomIconAnimationMode customIconAnimationMode;
   late final Set<String> _moistureAlertChimedCycles;
+  final Map<String, DateTime> _lastMoistureAlertChimeAt = {};
   late final Set<String> _readInventoryAlertKeys;
   late String deviceName;
   late String deviceId;
@@ -5741,6 +6288,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool typePanelExpanded = false;
   bool colorPanelExpanded = false;
   bool metricsPanelExpanded = false;
+
   /// Type keys (see [_inventoryTypeDefinitionKey]) excluded from the
   /// metrics panel's stats and charts. Empty means every type is tracked.
   Set<String> metricsUntrackedTypeKeys = {};
@@ -5761,6 +6309,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   );
   Timer? _localSaveFeedbackTimer;
   bool _thumbnailBackfillRunning = false;
+  Timer? _thumbnailBackfillStartTimer;
   Timer? _clockTick;
   bool _syncing = false;
   bool _autoSyncPausedForAuthentication = false;
@@ -5771,6 +6320,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Map<String, int> _remoteQuantityAnimationVersions = {};
   final Map<String, int> _lowStockAnimationVersions = {};
   final Map<String, int> _moistureAnimationVersions = {};
+  int _newItemGlowVersion = 0;
+  String? _newItemGlowItemId;
   final Set<String> _moistureAnimationCycles = {};
   static final RegExp _searchNormalizationPattern = RegExp(r'[^a-z0-9]');
   int _searchDataRevision = 0;
@@ -5858,6 +6409,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     typeDepletionSettings = {...?restored?.typeDepletionSettings};
     typeStatusSettings = {...?restored?.typeStatusSettings};
     deletedTypeKeys = {...?restored?.deletedTypeKeys};
+    _restoreInventoryTypeFilter();
     products = restored?.products ?? [...starterProducts];
     machineTypes = restored?.machineTypes ?? [];
     machines = restored?.machines ?? [];
@@ -5871,10 +6423,11 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     auditLog = restored?.auditLog ?? [];
     additionHistory =
-        restored?.additionHistory ??
+      restored?.additionHistory ??
         (firstLaunch
             ? <AdditionHistoryEntry>[]
             : inventory.map(AdditionHistoryEntry.fromItem).toList());
+    spoolUsage = restored?.spoolUsage ?? [];
     historyLimit = restored?.historyLimit ?? 100;
     final initializedKitSections = _initializeKitSections();
     alertSoundsEnabled =
@@ -5904,6 +6457,71 @@ class _InventoryHomeState extends State<InventoryHome> {
     moistureAlertChimeEnabled =
         widget.database?.loadBoolPreference(
           'moisture_alert_chime_enabled',
+          fallback: true,
+        ) ??
+        true;
+    alertSoundVolumePercent =
+        (int.tryParse(
+                  widget.database?.loadStringPreference(
+                        'alert_sound_volume_percent',
+                        fallback: '78',
+                      ) ??
+                      '78',
+                ) ??
+                78)
+            .clamp(0, 100);
+    final savedSoundRecurrenceSeconds = int.tryParse(
+      widget.database?.loadStringPreference(
+            'alert_sound_recurrence_seconds',
+            fallback: '0',
+          ) ??
+          '0',
+    );
+    alertSoundRecurrenceSeconds =
+        const [0, 3, 5, 10, 30].contains(savedSoundRecurrenceSeconds)
+        ? savedSoundRecurrenceSeconds!
+        : 0;
+    final savedSoundProfile = widget.database?.loadStringPreference(
+      'alert_sound_profile',
+      fallback: AlertSoundProfile.workshop.name,
+    );
+    alertSoundProfile = AlertSoundProfile.values.firstWhere(
+      (profile) => profile.name == savedSoundProfile,
+      orElse: () => AlertSoundProfile.workshop,
+    );
+    cardEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'card_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    lowStockEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'low_stock_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    moistureEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'moisture_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    remoteSyncEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'remote_sync_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    searchGlowEnabled =
+        widget.database?.loadBoolPreference(
+          'search_glow_enabled',
+          fallback: true,
+        ) ??
+        true;
+    newItemGlowEnabled =
+        widget.database?.loadBoolPreference(
+          'new_item_glow_enabled',
           fallback: true,
         ) ??
         true;
@@ -6069,7 +6687,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       (_) => _advanceDryingTimers(),
     );
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_backfillInventoryThumbnails()),
+      (_) => unawaited(_startThumbnailBackfillWhenIdle()),
     );
     if (initializedDryingTimers ||
         initializedKitSections ||
@@ -6332,6 +6950,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _deferredAutoSync?.cancel();
     _syncPoll?.cancel();
     _clockTick?.cancel();
+    _thumbnailBackfillStartTimer?.cancel();
     _pageSizeCommitTimer?.cancel();
     _cardSizeCommitTimer?.cancel();
     pageSizeIndex = _pageSizeSliderValue.value.round();
@@ -6642,12 +7261,22 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _checkMoistureAlertChimes() {
-    if (!moistureAlertChimeEnabled) return;
+    if (!moistureAlertChimeEnabled || !alertSoundsEnabled) return;
     var changed = false;
+    final now = DateTime.now();
     for (final item in _moistureAlerts) {
       final cycle =
           '${item.id}:${item.lastDriedAt?.toIso8601String()}:${item.moistureAlertThresholdMinutes}';
-      if (_moistureAlertChimedCycles.add(cycle)) changed = true;
+      final previous = _lastMoistureAlertChimeAt[cycle];
+      final firstAlert = _moistureAlertChimedCycles.add(cycle);
+      final recurring =
+          alertSoundRecurrenceSeconds > 0 &&
+          previous != null &&
+          now.difference(previous).inSeconds >= alertSoundRecurrenceSeconds;
+      if (firstAlert || recurring) {
+        _lastMoistureAlertChimeAt[cycle] = now;
+        changed = true;
+      }
     }
     if (!changed) return;
     if (_moistureAlertChimedCycles.length > 200) {
@@ -7066,7 +7695,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     return _visibleItemsCache = result;
   }
 
-  String _metricsTypeKey(InventoryItem item) => item.type == InventoryType.custom
+  String _metricsTypeKey(InventoryItem item) =>
+      item.type == InventoryType.custom
       ? 'custom:${item.customTypeId}'
       : _inventoryTypeDefinitionKey(item.type);
 
@@ -7151,13 +7781,13 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   String _metricsFilamentColorFilterValue(InventoryItem item) =>
       _itemColorFilterValue(item).isNotEmpty
-          ? _itemColorFilterValue(item)
-          : _unspecifiedItemColorKey;
+      ? _itemColorFilterValue(item)
+      : _unspecifiedItemColorKey;
 
   String _metricsFilamentMaterialFilterValue(InventoryItem item) =>
       item.materialName.trim().isNotEmpty
-          ? item.materialName.trim()
-          : _unspecifiedMaterialKey;
+      ? item.materialName.trim()
+      : _unspecifiedMaterialKey;
 
   String _metricsFilamentBrandFilterValue(InventoryItem item) =>
       item.brand.trim().isNotEmpty ? item.brand.trim() : _unspecifiedBrandKey;
@@ -7174,12 +7804,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     final colorLabel = item.itemColorLabel.trim();
     final colorValue = _itemColorFilterValue(item).trim();
     if (colorValue.isEmpty) return 'Unspecified color';
-    final visibleLabel = colorLabel.isNotEmpty && colorValue.isNotEmpty &&
+    final visibleLabel =
+        colorLabel.isNotEmpty &&
+            colorValue.isNotEmpty &&
             colorValue.toUpperCase() != colorLabel.toUpperCase()
         ? '$colorLabel · $colorValue'
         : colorLabel.isNotEmpty
-            ? colorLabel
-            : colorValue;
+        ? colorLabel
+        : colorValue;
     return visibleLabel.isNotEmpty ? visibleLabel : 'Unspecified color';
   }
 
@@ -7272,12 +7904,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       totals[key] = (totals[key] ?? 0) + item.quantity;
       labels[key] = labelForItem(item);
     }
-    final topKeys = (totals.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value)))
-        .where((entry) => entry.value > 0)
-        .take(5)
-        .map((entry) => entry.key)
-        .toList();
+    final topKeys =
+        (totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+            .where((entry) => entry.value > 0)
+            .take(5)
+            .map((entry) => entry.key)
+            .toList();
     final monthStarts = _metricsMonthStarts;
     return [
       for (var i = 0; i < topKeys.length; i++)
@@ -7476,6 +8108,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                   bottom: 0,
                   child: _bottomActionBar(),
                 ),
+              if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
+                Positioned(right: 20, bottom: 82, child: _jumpToTopButton()),
             ],
           ),
           bottomNavigationBar: selectedInventoryIds.isNotEmpty
@@ -7538,6 +8172,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       quantitySyncVersion: _remoteQuantityAnimationVersions[record.id] ?? 0,
       lowStockAnimationVersion: _lowStockAnimationVersions[record.id] ?? 0,
       moistureAnimationVersion: _moistureAnimationVersions[record.id] ?? 0,
+      cardEffectsEnabled: cardEffectsEnabled,
+      lowStockEffectsEnabled: lowStockEffectsEnabled,
+      moistureEffectsEnabled: moistureEffectsEnabled,
+      remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
       showStatus: _itemShowsStatus(record),
     );
     final Widget card;
@@ -7552,6 +8190,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         quantitySyncVersion: common.quantitySyncVersion,
         lowStockAnimationVersion: common.lowStockAnimationVersion,
         moistureAnimationVersion: common.moistureAnimationVersion,
+        cardEffectsEnabled: common.cardEffectsEnabled,
+        lowStockEffectsEnabled: common.lowStockEffectsEnabled,
+        moistureEffectsEnabled: common.moistureEffectsEnabled,
+        remoteSyncEffectsEnabled: common.remoteSyncEffectsEnabled,
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
@@ -7577,6 +8219,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         quantitySyncVersion: common.quantitySyncVersion,
         lowStockAnimationVersion: common.lowStockAnimationVersion,
         moistureAnimationVersion: common.moistureAnimationVersion,
+        cardEffectsEnabled: common.cardEffectsEnabled,
+        lowStockEffectsEnabled: common.lowStockEffectsEnabled,
+        moistureEffectsEnabled: common.moistureEffectsEnabled,
+        remoteSyncEffectsEnabled: common.remoteSyncEffectsEnabled,
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
@@ -7591,7 +8237,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
       );
     }
-    return card;
+    if (!newItemGlowEnabled || _newItemGlowItemId != record.id) return card;
+    return _NewItemLaserGlow(
+      enabled: true,
+      trigger: _newItemGlowVersion,
+      child: card,
+    );
   }
 
   void _publishInventoryItem(InventoryItem item) {
@@ -7609,6 +8260,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     inventory.add(item);
     _inventoryItemNotifiers.remove(item.id)?.dispose();
     _inventoryItemNotifiers[item.id] = ValueNotifier(item);
+    if (!_applyingCloudState && newItemGlowEnabled) {
+      _newItemGlowItemId = item.id;
+      _newItemGlowVersion++;
+    }
   }
 
   void _removeInventoryItem(String itemId) {
@@ -8933,6 +9588,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           machines: machines,
           machineTypes: machineTypes,
           spoolTypes: spoolTypes,
+          spoolUsage: spoolUsage,
+          onSpoolUsageAdded: _addSpoolUsage,
           onChanged: (updated) =>
               _updateItemById(_withoutFullInventoryImages(updated)),
           onEdit: currentRole.canEditInventory
@@ -9227,6 +9884,21 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
     _persist();
     _checkMoistureThresholdAnimations();
+  }
+
+  void _addSpoolUsage(SpoolUsageRecord entry) {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return;
+    }
+    setState(() {
+      spoolUsage.insert(0, entry);
+      _recordAudit('spool_usage', 'inventory', entry.spoolId, {
+        'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
+        'outcome': entry.outcome.name,
+      });
+    });
+    _persist();
   }
 
   void _adjustItemQuantity(InventoryItem item, double delta) {
@@ -10903,10 +11575,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (result == null || !mounted) return;
     setState(() {
+      if (result.effect == DebugCardEffect.newItemGlow) {
+        _newItemGlowItemId = result.itemId;
+        _newItemGlowVersion++;
+        return;
+      }
       final versions = switch (result.effect) {
         DebugCardEffect.remoteQuantity => _remoteQuantityAnimationVersions,
         DebugCardEffect.lowStock => _lowStockAnimationVersions,
         DebugCardEffect.moistureThreshold => _moistureAnimationVersions,
+        DebugCardEffect.newItemGlow => _remoteQuantityAnimationVersions,
       };
       versions[result.itemId] = (versions[result.itemId] ?? 0) + 1;
     });
@@ -10928,6 +11606,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       syncChimeEnabled: syncChimeEnabled,
       dryingCompleteChimeEnabled: dryingCompleteChimeEnabled,
       moistureAlertChimeEnabled: moistureAlertChimeEnabled,
+      alertSoundVolumePercent: alertSoundVolumePercent,
+      alertSoundRecurrenceSeconds: alertSoundRecurrenceSeconds,
+      alertSoundProfile: alertSoundProfile,
+      cardEffectsEnabled: cardEffectsEnabled,
+      lowStockEffectsEnabled: lowStockEffectsEnabled,
+      moistureEffectsEnabled: moistureEffectsEnabled,
+      remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
+      searchGlowEnabled: searchGlowEnabled,
+      newItemGlowEnabled: newItemGlowEnabled,
       onSettingsChanged: _updateAnimationSettings,
       onColorThemeChanged: widget.onColorThemeChanged ?? (_) {},
       onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
@@ -10965,6 +11652,55 @@ class _InventoryHomeState extends State<InventoryHome> {
           value,
         );
       },
+      onAlertSoundVolumeChanged: (value) {
+        setState(() => alertSoundVolumePercent = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_volume_percent',
+          '$value',
+        );
+      },
+      onAlertSoundRecurrenceChanged: (value) {
+        setState(() => alertSoundRecurrenceSeconds = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_recurrence_seconds',
+          '$value',
+        );
+      },
+      onAlertSoundProfileChanged: (value) {
+        setState(() => alertSoundProfile = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_profile',
+          value.name,
+        );
+      },
+      onCardEffectsChanged: (value) {
+        setState(() => cardEffectsEnabled = value);
+        widget.database?.saveBoolPreference('card_effects_enabled', value);
+      },
+      onLowStockEffectsChanged: (value) {
+        setState(() => lowStockEffectsEnabled = value);
+        widget.database?.saveBoolPreference('low_stock_effects_enabled', value);
+      },
+      onMoistureEffectsChanged: (value) {
+        setState(() => moistureEffectsEnabled = value);
+        widget.database?.saveBoolPreference('moisture_effects_enabled', value);
+      },
+      onRemoteSyncEffectsChanged: (value) {
+        setState(() => remoteSyncEffectsEnabled = value);
+        widget.database?.saveBoolPreference(
+          'remote_sync_effects_enabled',
+          value,
+        );
+      },
+      onSearchGlowChanged: (value) {
+        setState(() => searchGlowEnabled = value);
+        widget.database?.saveBoolPreference('search_glow_enabled', value);
+      },
+      onNewItemGlowChanged: (value) {
+        setState(() => newItemGlowEnabled = value);
+        widget.database?.saveBoolPreference('new_item_glow_enabled', value);
+      },
+      onPreviewAlertSound: () => unawaited(_playSyncChime(force: true)),
       onPhotoCardsChanged: (value) {
         setState(() => photoCardsEnabled = value);
         widget.database?.saveBoolPreference('photo_cards_enabled', value);
@@ -11544,7 +12280,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   // _adjustItemQuantity/_commitPendingQuantityChange) -- every other
   // save-triggering edit (status, location, lifecycle, item-detail fields)
   // funnels through _persist(), so a single pulse here covers all of them
-  // without a dedicated debounce, since local persistence is synchronous.
+  // while the database commit is deferred through the local write queue.
   void _pulseLocalSaveFeedback() {
     if (_quantityCommitTimers.isNotEmpty) return;
     _localSaveFeedbackTimer?.cancel();
@@ -11570,6 +12306,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     'materials': materials,
     'products': products,
     'additionHistory': additionHistory,
+    'spoolUsage': spoolUsage,
   };
 
   String _entityId(Object record) => switch (record) {
@@ -11588,6 +12325,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     MaterialRecord value => value.id,
     CatalogProduct value => value.id,
     AdditionHistoryEntry value => value.id,
+    SpoolUsageRecord value => value.id,
     _ => throw ArgumentError.value(record, 'record', 'Unknown entity type'),
   };
 
@@ -11626,18 +12364,30 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final entry in current.entries) {
         if (identical(previous[entry.key], entry.value)) continue;
         if (collection.key == 'inventory') {
-          if (_saveInventoryEntity(
-            database,
-            entry.value as InventoryItem,
-            previous: previous[entry.key] as InventoryItem?,
-          )) {
+          final item = entry.value as InventoryItem;
+          final fields = _changedInventoryFields(
+            previous[entry.key] as InventoryItem?,
+            item,
+          );
+          if (fields.isNotEmpty) {
+            unawaited(
+              database.queueWorkshopChanges([
+                WorkshopEntityChange(
+                  entityType: 'inventory',
+                  entityId: item.id,
+                  fields: fields,
+                ),
+              ]),
+            );
             wroteChange = true;
           }
         } else {
-          database.saveEntityPayloadAndQueue(
-            collection.key,
-            entry.key,
-            encodeWorkshopEntityPayload(collection.key, entry.value),
+          unawaited(
+            database.queueEntityPayloadChange(
+              collection.key,
+              entry.key,
+              encodeWorkshopEntityPayload(collection.key, entry.value),
+            ),
           );
           wroteChange = true;
         }
@@ -11645,17 +12395,28 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final removedId in previous.keys.where(
         (id) => !current.containsKey(id),
       )) {
-        database.deleteEntityAndQueue(collection.key, removedId);
+        unawaited(
+          database.queueWorkshopChanges([
+            WorkshopEntityChange(
+              entityType: collection.key,
+              entityId: removedId,
+              fields: const {},
+              deleted: true,
+            ),
+          ]),
+        );
         wroteChange = true;
       }
       _persistedEntityReferences[collection.key] = current;
     }
     final metadata = _workshopMetadata();
     if (jsonEncode(metadata) != jsonEncode(_persistedMetadata)) {
-      database.saveEntityPayloadAndQueue(
-        workshopMetadataEntityType,
-        workshopMetadataEntityId,
-        metadata,
+      unawaited(
+        database.queueEntityPayloadChange(
+          workshopMetadataEntityType,
+          workshopMetadataEntityId,
+          metadata,
+        ),
       );
       _persistedMetadata = Map<String, dynamic>.from(
         jsonDecode(jsonEncode(metadata)) as Map,
@@ -11703,12 +12464,30 @@ class _InventoryHomeState extends State<InventoryHome> {
     return true;
   }
 
+  void _queueInventoryEntity(
+    LocalDatabase database,
+    InventoryItem item, {
+    InventoryItem? previous,
+  }) {
+    final fields = _changedInventoryFields(previous, item);
+    if (fields.isEmpty) return;
+    unawaited(
+      database.queueWorkshopChanges([
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: item.id,
+          fields: fields,
+        ),
+      ]),
+    );
+  }
+
   void _persistInventoryItem(InventoryItem item) {
     _reconcileReadInventoryAlerts();
     _invalidateSearchCaches();
     final database = widget.database;
     if (database != null) {
-      _saveInventoryEntity(
+      _queueInventoryEntity(
         database,
         item,
         previous:
@@ -11760,7 +12539,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (latest == null || !listEquals(latestSource, source)) continue;
         final updated = latest.copyWith(thumbnailBytes: thumbnail);
         _publishInventoryItem(updated);
-        _saveInventoryEntity(widget.database!, updated, previous: latest);
+        _queueInventoryEntity(widget.database!, updated, previous: latest);
         _persistedEntityReferences.putIfAbsent(
           'inventory',
           () => {},
@@ -11774,6 +12553,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       _localStateRevision++;
       _scheduleAutomaticSync();
     }
+  }
+
+  Future<void> _startThumbnailBackfillWhenIdle() async {
+    // Let the first screen settle before opening image rows and spawning
+    // thumbnail workers. On Android this keeps first interaction responsive.
+    _thumbnailBackfillStartTimer?.cancel();
+    _thumbnailBackfillStartTimer = Timer(const Duration(milliseconds: 750), () {
+      if (mounted) unawaited(_backfillInventoryThumbnails());
+    });
   }
 
   void _scheduleAutomaticSync({
@@ -11818,6 +12606,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     shoppingList: shoppingList,
     auditLog: auditLog,
     additionHistory: additionHistory,
+    spoolUsage: spoolUsage,
     historyLimit: historyLimit,
   );
 
@@ -11868,8 +12657,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         conflict.entityType,
         conflict.entityId,
         {
-          conflict.field:
-              'kept local value pending sync; another device changed this field too',
+          conflict.field: 'kept local value pending sync; another device changed this field too',
         },
       );
     }
@@ -11892,15 +12680,20 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     auditLog.insert(0, entry);
     if (auditLog.length > 2000) auditLog.removeRange(2000, auditLog.length);
-    widget.database?.saveEntityPayloadAndQueue('auditLog', entry.id, {
-      'id': entry.id,
-      'timestamp': entry.timestamp.toIso8601String(),
-      'actor': entry.actor,
-      'action': entry.action,
-      'entityType': entry.entityType,
-      'entityId': entry.entityId,
-      'changes': entry.changes,
-    });
+    final database = widget.database;
+    if (database != null) {
+      unawaited(
+        database.queueEntityPayloadChange('auditLog', entry.id, {
+          'id': entry.id,
+          'timestamp': entry.timestamp.toIso8601String(),
+          'actor': entry.actor,
+          'action': entry.action,
+          'entityType': entry.entityType,
+          'entityId': entry.entityId,
+          'changes': entry.changes,
+        }),
+      );
+    }
     _pendingAuditEvents.add({
       'action': action,
       'entityType': entityType,
@@ -11993,6 +12786,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       additionHistory
         ..clear()
         ..addAll(restored.additionHistory);
+      spoolUsage
+        ..clear()
+        ..addAll(restored.spoolUsage);
       historyLimit = restored.historyLimit;
       _trimAdditionHistory();
     });
@@ -12348,6 +13144,18 @@ class _InventoryHomeState extends State<InventoryHome> {
               replaceById(additionHistory, change.entityId, value, (e) => e.id);
             }
           }
+        case 'spoolUsage':
+          if (change.deleted) {
+            spoolUsage.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<SpoolUsageRecord>(
+              change,
+              (s) => s.spoolUsage.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(spoolUsage, change.entityId, value, (e) => e.id);
+            }
+          }
       }
       rememberAppliedChange(change);
     }
@@ -12357,11 +13165,47 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (inventoryChanged) unawaited(_playSyncChime());
   }
 
-  Future<void> _playSyncChime() async {
-    if (!alertSoundsEnabled || !syncChimeEnabled) return;
+  Future<void> _playSyncChime({bool force = false}) =>
+      _playAlertSound('sync', enabled: syncChimeEnabled, force: force);
+
+  Future<void> _playDryingCompleteChime({bool force = false}) =>
+      _playAlertSound(
+        'drying',
+        enabled: dryingCompleteChimeEnabled,
+        force: force,
+      );
+
+  Future<void> _playMoistureAlertChime({bool force = false}) => _playAlertSound(
+    'moisture',
+    enabled: moistureAlertChimeEnabled,
+    force: force,
+  );
+
+  Future<void> _playAlertSound(
+    String event, {
+    required bool enabled,
+    bool force = false,
+  }) async {
+    if (!force && (!alertSoundsEnabled || !enabled)) return;
     try {
+      if (alertSoundProfile == AlertSoundProfile.system) {
+        await SystemSound.play(SystemSoundType.alert);
+        return;
+      }
+      final method = switch (event) {
+        'sync' => 'playSyncChime',
+        'drying' => 'playDryingCompleteChime',
+        _ => 'playMoistureAlertChime',
+      };
+      final fileName = switch (event) {
+        'sync' => 'transhuman_sync.wav',
+        'drying' => 'drying_complete.wav',
+        _ => 'moisture_alert.wav',
+      };
       if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playSyncChime');
+        await _audioChannel.invokeMethod<void>(method, {
+          'volume': alertSoundVolumePercent,
+        });
         return;
       }
       if (Platform.isLinux) {
@@ -12369,57 +13213,17 @@ class _InventoryHomeState extends State<InventoryHome> {
             .parent
             .path;
         final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/transhuman_sync.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
+            '$executableDirectory/data/flutter_assets/assets/audio/$fileName';
+        final volume = (alertSoundVolumePercent * 65536 / 100).round();
+        final result = await Process.run('/usr/bin/paplay', [
+          '--volume=$volume',
+          sound,
+        ]);
         if (result.exitCode == 0) return;
       }
       await SystemSound.play(SystemSoundType.alert);
     } catch (error) {
       debugPrint('Could not play sync chime: $error');
-    }
-  }
-
-  Future<void> _playDryingCompleteChime() async {
-    if (!alertSoundsEnabled || !dryingCompleteChimeEnabled) return;
-    try {
-      if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playDryingCompleteChime');
-        return;
-      }
-      if (Platform.isLinux) {
-        final executableDirectory = File(Platform.resolvedExecutable)
-            .parent
-            .path;
-        final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/drying_complete.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
-        if (result.exitCode == 0) return;
-      }
-      await SystemSound.play(SystemSoundType.alert);
-    } catch (error) {
-      debugPrint('Could not play drying-complete chime: $error');
-    }
-  }
-
-  Future<void> _playMoistureAlertChime() async {
-    if (!alertSoundsEnabled || !moistureAlertChimeEnabled) return;
-    try {
-      if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playMoistureAlertChime');
-        return;
-      }
-      if (Platform.isLinux) {
-        final executableDirectory = File(Platform.resolvedExecutable)
-            .parent
-            .path;
-        final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/moisture_alert.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
-        if (result.exitCode == 0) return;
-      }
-      await SystemSound.play(SystemSoundType.alert);
-    } catch (error) {
-      debugPrint('Could not play moisture-alert chime: $error');
     }
   }
 
@@ -12477,6 +13281,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       _syncRequestedWhileBusy = true;
       return;
     }
+    // Drain deferred local commits before taking a sync snapshot. This keeps
+    // a just-edited field in the outbox before any remote merge can run.
+    await database.waitForPendingWrites();
+    if (!mounted || database.isClosed) return;
     if (_quantityCommitTimers.isNotEmpty) return;
     if (_inventoryIsScrolling.value) {
       _deferredAutoSync?.cancel();
@@ -12607,6 +13415,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (!mounted) return;
         // Re-read after the await. A user can edit this item while the remote
         // request or scroll-settle wait is in flight.
+        await database.waitForPendingWrites();
         final latestPending = database.loadPendingWorkshopChanges();
         final incomingMerge = mergeRemoteChangesWithPending(
           incoming.changes,
@@ -12622,6 +13431,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final auditBatch = _pendingAuditBatch();
       // Include edits made while the incoming batch was being applied. The
       // versioned acknowledgement leaves any still-newer edit in the outbox.
+      await database.waitForPendingWrites();
       var pending = database.loadPendingWorkshopChanges();
       if (pending.isNotEmpty) {
         var auditAcknowledged = false;
@@ -12662,6 +13472,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           _syncRequestedWhileBusy = true;
           return;
         }
+        await database.waitForPendingWrites();
         pending = database.loadPendingWorkshopChanges();
         final confirmedMerge = mergeRemoteChangesWithPending(
           confirmed.changes,
@@ -13201,20 +14012,18 @@ class _InventoryHomeState extends State<InventoryHome> {
               _metricsPanel(),
               const SizedBox(height: 14),
             ],
-            TextField(
-              key: const Key('inventory-search'),
+            _EdgeLitSearchField(
+              fieldKey: const Key('inventory-search'),
               controller: inventorySearchController,
               focusNode: inventorySearchFocusNode,
+              enabled: searchGlowEnabled,
               onChanged: (value) => setState(() {
                 query = value;
                 currentPage = 0;
               }),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search_rounded),
-                hintText: compact
-                    ? 'Search inventory…'
-                    : 'Search items, types, compatibility…  Try “E3DV6”',
-              ),
+              hintText: compact
+                  ? 'Search inventory…'
+                  : 'Search items, types, compatibility…  Try “E3DV6”',
             ),
             const SizedBox(height: 14),
             if (catalogFilter == null &&
@@ -13560,7 +14369,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: _GlassFilterChip(
           selected: false,
           child: SizedBox.square(
-            dimension: 40,
+            dimension: _inventorySquareControlSize,
             child: Icon(
               sortAscending
                   ? Icons.arrow_upward_rounded
@@ -15256,6 +16065,38 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  Widget _jumpToTopButton() => AnimatedBuilder(
+    animation: inventoryScrollController,
+    builder: (context, _) {
+      final visible =
+          inventoryScrollController.hasClients &&
+          inventoryScrollController.offset > 80;
+      return IgnorePointer(
+        ignoring: !visible,
+        child: AnimatedOpacity(
+          key: const Key('jump-to-top-visibility'),
+          duration: const Duration(milliseconds: 180),
+          opacity: visible ? 1 : 0,
+          child: _glassQuickAction(
+            key: const Key('jump-to-top-button'),
+            onPressed: () {
+              if (!inventoryScrollController.hasClients) return;
+              inventoryScrollController.animateTo(
+                0,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            },
+            icon: Icons.keyboard_arrow_up_rounded,
+            label: 'Jump to top',
+            iconOnly: true,
+            iconOnlyWidth: 48,
+          ),
+        ),
+      );
+    },
+  );
+
   ButtonStyle get _quickActionStyle => ButtonStyle(
     foregroundColor: WidgetStatePropertyAll(
       Theme.of(context).colorScheme.onSurface,
@@ -15544,7 +16385,12 @@ class _InventoryHomeState extends State<InventoryHome> {
           icon: const Icon(Icons.visibility_outlined),
           selectedIcon: const Icon(Icons.visibility_off_outlined),
           style: ButtonStyle(
-            minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+            minimumSize: const WidgetStatePropertyAll(
+              Size(_inventorySquareControlSize, _inventorySquareControlSize),
+            ),
+            maximumSize: const WidgetStatePropertyAll(
+              Size(_inventorySquareControlSize, _inventorySquareControlSize),
+            ),
             backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
             overlayColor: const WidgetStatePropertyAll(Colors.transparent),
             foregroundColor: WidgetStateProperty.resolveWith(
@@ -15803,7 +16649,9 @@ class _InventoryHomeState extends State<InventoryHome> {
               palette,
               selected: itemColorFilter,
               onTap: (bucket) => _setItemColorFilter(
-                itemColorFilter == bucket.filterValue ? null : bucket.filterValue,
+                itemColorFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
               ),
             ),
             const SizedBox(height: 12),
@@ -15833,79 +16681,77 @@ class _InventoryHomeState extends State<InventoryHome> {
     InventorinatorColors palette, {
     String? selected,
     required void Function(_MetricBucket) onTap,
-  }) =>
-      _JewelPanel(
-        title: title,
-        palette: palette,
-        trailing: Icon(icon, size: 18, color: const Color(0xff9da5b7)),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final entry in entries)
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
+  }) => _JewelPanel(
+    title: title,
+    palette: palette,
+    trailing: Icon(icon, size: 18, color: const Color(0xff9da5b7)),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final entry in entries)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => onTap(entry),
+              child: Container(
+                width: 176,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: selected == entry.filterValue
+                      ? palette.surface
+                      : palette.input,
                   borderRadius: BorderRadius.circular(12),
-                  onTap: () => onTap(entry),
-                  child: Container(
-                    width: 176,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: selected == entry.filterValue
-                          ? palette.surface
-                          : palette.input,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: selected == entry.filterValue
-                            ? palette.accent.withValues(alpha: .75)
-                            : palette.outlineVariant,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          entry.label,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xff9da5b7),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _formatBomQuantity(entry.value),
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const Text(
-                          'spools',
-                          style: TextStyle(
-                            color: Color(0xff9da5b7),
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                    ),
+                  border: Border.all(
+                    color: selected == entry.filterValue
+                        ? palette.accent.withValues(alpha: .75)
+                        : palette.outlineVariant,
                   ),
                 ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xff9da5b7),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _formatBomQuantity(entry.value),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Text(
+                      'spools',
+                      style: TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+                    ),
+                  ],
+                ),
               ),
-          ],
-        ),
-      );
+            ),
+          ),
+      ],
+    ),
+  );
 
-  List<({String key, String label, IconData icon})> get _metricsTrackableTypes => [
+  List<({String key, String label, IconData icon})>
+  get _metricsTrackableTypes => [
     for (final value in InventoryType.values.where(
       (value) => value != InventoryType.custom,
     ))
       if (!deletedTypeKeys.contains(_inventoryTypeDefinitionKey(value)))
         (
           key: _inventoryTypeDefinitionKey(value),
-          label: typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
+          label:
+              typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
               _typeLabel(value),
           icon: _iconFromKey(
             typeIconOverrides[_inventoryTypeDefinitionKey(value)],
@@ -16002,10 +16848,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             const SizedBox(height: 8),
             Text(
               stat.value,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-              ),
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),
             Text(
               stat.label,
@@ -16027,8 +16870,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     widget.database?.saveStringPreference('metrics_chart_dimension', key);
   }
 
-  List<({String label, Color color, List<double> values})>
-  _metricsChartSeries(Color accent) => switch (metricsChartDimension) {
+  List<({String label, Color color, List<double> values})> _metricsChartSeries(
+    Color accent,
+  ) => switch (metricsChartDimension) {
     'color' => _inventoryColorGrowthSeries(accent),
     'material' => _inventoryMaterialGrowthSeries(accent),
     'brand' => _inventoryBrandGrowthSeries(accent),
@@ -16073,8 +16917,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                     key: Key('metrics-dimension-${dimension.key}'),
                     label: Text(dimension.label),
                     selected: metricsChartDimension == dimension.key,
-                    onSelected: (_) =>
-                        _setMetricsChartDimension(dimension.key),
+                    onSelected: (_) => _setMetricsChartDimension(dimension.key),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 6,
                       vertical: 2,
@@ -16179,6 +17022,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                               }
                               currentPage = 0;
                             });
+                            _saveInventoryTypeFilter();
                             _scrollToFilteredResults();
                           },
                           padding: const EdgeInsets.symmetric(
@@ -16244,6 +17088,94 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
+  void _saveInventoryTypeFilter() {
+    widget.database?.saveStringPreference(
+      'inventory_type_filter',
+      jsonEncode({
+        'archived': archivedOnly,
+        'catalog': catalogFilter?.name,
+        'type': type?.name,
+        'customTypeId': customTypeFilterId,
+        'color': itemColorFilter,
+        'material': filamentMaterialFilter,
+        'brand': filamentBrandFilter,
+      }),
+    );
+  }
+
+  void _restoreInventoryTypeFilter() {
+    final raw = widget.database?.loadStringPreference(
+      'inventory_type_filter',
+      fallback: '',
+    );
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final saved = jsonDecode(raw);
+      if (saved is! Map) return;
+      String? value(Object? candidate) =>
+          candidate is String && candidate.isNotEmpty ? candidate : null;
+
+      final savedArchived = saved['archived'] == true;
+      final savedCatalog = value(saved['catalog']);
+      final savedType = value(saved['type']);
+      final savedCustomTypeId = value(saved['customTypeId']);
+      final savedColor = value(saved['color']);
+      final savedMaterial = value(saved['material']);
+      final savedBrand = value(saved['brand']);
+      archivedOnly = savedArchived;
+      catalogFilter = savedCatalog == null
+          ? null
+          : CatalogViewFilter.values
+                .where((candidate) => candidate.name == savedCatalog)
+                .where(
+                  (candidate) => !deletedTypeKeys.contains(
+                    _catalogViewDefinitionKey(candidate),
+                  ),
+                )
+                .firstOrNull;
+      type = savedType == null
+          ? null
+          : InventoryType.values
+                .where((candidate) => candidate.name == savedType)
+                .where(
+                  (candidate) => !deletedTypeKeys.contains(
+                    _inventoryTypeDefinitionKey(candidate),
+                  ),
+                )
+                .firstOrNull;
+      customTypeFilterId =
+          savedCustomTypeId != null &&
+              customItemTypes.any(
+                (candidate) => candidate.id == savedCustomTypeId,
+              )
+          ? savedCustomTypeId
+          : null;
+      itemColorFilter = savedColor;
+      filamentMaterialFilter = savedMaterial;
+      filamentBrandFilter = savedBrand;
+
+      if (catalogFilter != null || archivedOnly) {
+        type = null;
+        customTypeFilterId = null;
+        itemColorFilter = null;
+        filamentMaterialFilter = null;
+        filamentBrandFilter = null;
+      } else if (customTypeFilterId != null) {
+        type = InventoryType.custom;
+        itemColorFilter = null;
+        filamentMaterialFilter = null;
+        filamentBrandFilter = null;
+      } else if (type == null &&
+          (itemColorFilter != null ||
+              filamentMaterialFilter != null ||
+              filamentBrandFilter != null)) {
+        type = InventoryType.filament;
+      }
+    } catch (_) {
+      // Ignore malformed device preferences and keep the default filter.
+    }
+  }
+
   void _setMaterialFilter(String? material) {
     _collapseTypePanel();
     _collapseColorPanel();
@@ -16259,6 +17191,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       archivedOnly = false;
       currentPage = 0;
     });
+    _saveInventoryTypeFilter();
     _scrollToFilteredResults();
   }
 
@@ -16276,6 +17209,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       archivedOnly = false;
       currentPage = 0;
     });
+    _saveInventoryTypeFilter();
     _scrollToFilteredResults();
   }
 
@@ -16294,6 +17228,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       archivedOnly = false;
       currentPage = 0;
     });
+    _saveInventoryTypeFilter();
     _scrollToFilteredResults();
   }
 
@@ -16332,6 +17267,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -16373,6 +17309,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -16412,6 +17349,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -16572,17 +17510,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       final totalLabel = totalUnits == totalUnits.roundToDouble()
           ? totalUnits.toInt().toString()
           : totalUnits.toStringAsFixed(2);
-      final machineCount = machines
-          .where((machine) => machine.kitIds.contains(record.id))
-          .length;
+      final buildableCount = _kitBuildability(record).buildCount;
+      final recentBuildCutoff = DateTime.now().subtract(
+        const Duration(days: 30),
+      );
+      final recentlyBuiltCount = builds.where((build) {
+        final completedAt = build.completedAt;
+        return build.kitId == record.id &&
+            completedAt != null &&
+            completedAt.isAfter(recentBuildCutoff);
+      }).length;
       icon = Icons.inventory_2_outlined;
       accent = const Color(0xffa987ff);
       category = _catalogViewDisplayLabel(CatalogViewFilter.kits).toUpperCase();
       title = record.name;
-      subtitle = '${record.bom.length} BOM lines · $totalLabel units';
-      detail = machineCount == 0
-          ? 'Not assigned to a machine'
-          : '$machineCount compatible ${machineCount == 1 ? 'machine' : 'machines'}';
+      subtitle = '$totalLabel total parts · $buildableCount builds available';
+      detail = '$recentlyBuiltCount built recently.';
       recordImage = record.imageBytes;
     } else if (record is BuildRecord) {
       final used = record.lines.fold<double>(
@@ -21766,6 +22709,13 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.syncChimeEnabled,
     required this.dryingCompleteChimeEnabled,
     required this.moistureAlertChimeEnabled,
+    required this.alertSoundVolumePercent,
+    required this.alertSoundRecurrenceSeconds,
+    required this.alertSoundProfile,
+    required this.cardEffectsEnabled,
+    required this.lowStockEffectsEnabled,
+    required this.moistureEffectsEnabled,
+    required this.remoteSyncEffectsEnabled,
     required this.onSettingsChanged,
     required this.onColorThemeChanged,
     required this.onBrightnessModeChanged,
@@ -21776,6 +22726,18 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onSyncChimeChanged,
     required this.onDryingCompleteChimeChanged,
     required this.onMoistureAlertChimeChanged,
+    required this.onPreviewAlertSound,
+    required this.onAlertSoundVolumeChanged,
+    required this.onAlertSoundRecurrenceChanged,
+    required this.onAlertSoundProfileChanged,
+    required this.onCardEffectsChanged,
+    required this.onLowStockEffectsChanged,
+    required this.onMoistureEffectsChanged,
+    required this.onRemoteSyncEffectsChanged,
+    required this.searchGlowEnabled,
+    required this.newItemGlowEnabled,
+    required this.onSearchGlowChanged,
+    required this.onNewItemGlowChanged,
     required this.onPhotoCardsChanged,
     required this.onCustomIconAnimationModeChanged,
   });
@@ -21792,6 +22754,13 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final bool syncChimeEnabled;
   final bool dryingCompleteChimeEnabled;
   final bool moistureAlertChimeEnabled;
+  final int alertSoundVolumePercent;
+  final int alertSoundRecurrenceSeconds;
+  final AlertSoundProfile alertSoundProfile;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final void Function(int durationPercent, int recurrenceSeconds)
   onSettingsChanged;
   final ValueChanged<AppColorTheme> onColorThemeChanged;
@@ -21803,6 +22772,18 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<bool> onSyncChimeChanged;
   final ValueChanged<bool> onDryingCompleteChimeChanged;
   final ValueChanged<bool> onMoistureAlertChimeChanged;
+  final VoidCallback onPreviewAlertSound;
+  final ValueChanged<int> onAlertSoundVolumeChanged;
+  final ValueChanged<int> onAlertSoundRecurrenceChanged;
+  final ValueChanged<AlertSoundProfile> onAlertSoundProfileChanged;
+  final ValueChanged<bool> onCardEffectsChanged;
+  final ValueChanged<bool> onLowStockEffectsChanged;
+  final ValueChanged<bool> onMoistureEffectsChanged;
+  final ValueChanged<bool> onRemoteSyncEffectsChanged;
+  final bool searchGlowEnabled;
+  final bool newItemGlowEnabled;
+  final ValueChanged<bool> onSearchGlowChanged;
+  final ValueChanged<bool> onNewItemGlowChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
@@ -21827,6 +22808,15 @@ class _PersonalizationSettingsDialogState
   late bool syncChimeEnabled = widget.syncChimeEnabled;
   late bool dryingCompleteChimeEnabled = widget.dryingCompleteChimeEnabled;
   late bool moistureAlertChimeEnabled = widget.moistureAlertChimeEnabled;
+  late int alertSoundVolumePercent = widget.alertSoundVolumePercent;
+  late int alertSoundRecurrenceSeconds = widget.alertSoundRecurrenceSeconds;
+  late AlertSoundProfile alertSoundProfile = widget.alertSoundProfile;
+  late bool cardEffectsEnabled = widget.cardEffectsEnabled;
+  late bool lowStockEffectsEnabled = widget.lowStockEffectsEnabled;
+  late bool moistureEffectsEnabled = widget.moistureEffectsEnabled;
+  late bool remoteSyncEffectsEnabled = widget.remoteSyncEffectsEnabled;
+  late bool searchGlowEnabled = widget.searchGlowEnabled;
+  late bool newItemGlowEnabled = widget.newItemGlowEnabled;
 
   Future<void> _pickCustomThemeColor() async {
     final selected = await showDialog<String>(
@@ -22013,90 +23003,258 @@ class _PersonalizationSettingsDialogState
               },
             ),
             const Divider(height: 28),
-            const Text(
-              'Sounds',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-            ),
-            SwitchListTile(
-              key: const Key('low-stock-alerts-personalization'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Low-stock alerts'),
-              subtitle: const Text(
-                'Show quantity-threshold alerts on this device.',
+            ExpansionTile(
+              key: const Key('personalization-notifications-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Notifications',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
-              value: lowStockAlertsEnabled,
-              onChanged: (value) {
-                setState(() => lowStockAlertsEnabled = value);
-                widget.onLowStockAlertsChanged(value);
-              },
-            ),
-            SwitchListTile(
-              key: const Key('alert-sounds-toggle'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Alert sounds'),
-              subtitle: const Text(
-                'Silence remote-item, drying-complete, and moisture alerts on this device.',
-              ),
-              value: alertSoundsEnabled,
-              onChanged: (value) {
-                setState(() => alertSoundsEnabled = value);
-                widget.onAlertSoundsChanged(value);
-              },
-            ),
-            if (!alertSoundsEnabled)
-              Container(
-                key: const Key('all-alert-sounds-muted'),
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 9,
+              subtitle: const Text('Choose which visual alerts appear here.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('low-stock-alerts-personalization'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low-stock alerts'),
+                  subtitle: const Text(
+                    'Show quantity-threshold alerts on this device.',
+                  ),
+                  value: lowStockAlertsEnabled,
+                  onChanged: (value) {
+                    setState(() => lowStockAlertsEnabled = value);
+                    widget.onLowStockAlertsChanged(value);
+                  },
                 ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary
-                      .withValues(alpha: .1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'All alert sounds are muted. Your individual choices are preserved.',
-                ),
-              ),
-            SwitchListTile(
-              key: const Key('sync-chime-personalization'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Remote item additions'),
-              subtitle: const Text('Chime when another device adds an item.'),
-              value: syncChimeEnabled,
-              onChanged: (value) {
-                setState(() => syncChimeEnabled = value);
-                widget.onSyncChimeChanged(value);
-              },
+              ],
             ),
-            SwitchListTile(
-              key: const Key('drying-chime-personalization'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Drying complete'),
-              subtitle: const Text('Chime when a drying timer finishes.'),
-              value: dryingCompleteChimeEnabled,
-              onChanged: (value) {
-                setState(() => dryingCompleteChimeEnabled = value);
-                widget.onDryingCompleteChimeChanged(value);
-              },
-            ),
-            SwitchListTile(
-              key: const Key('moisture-chime-personalization'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Moisture threshold'),
-              subtitle: const Text(
-                'Chime once when filament crosses its alert threshold.',
+            ExpansionTile(
+              key: const Key('personalization-sounds-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Sounds',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
-              value: moistureAlertChimeEnabled,
-              onChanged: (value) {
-                setState(() => moistureAlertChimeEnabled = value);
-                widget.onMoistureAlertChimeChanged(value);
-              },
+              subtitle: const Text('Control this device’s alert chimes.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('alert-sounds-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Alert sounds'),
+                  subtitle: const Text(
+                    'Silence remote-item, drying-complete, and moisture alerts on this device.',
+                  ),
+                  value: alertSoundsEnabled,
+                  onChanged: (value) {
+                    setState(() => alertSoundsEnabled = value);
+                    widget.onAlertSoundsChanged(value);
+                  },
+                ),
+                if (!alertSoundsEnabled)
+                  Container(
+                    key: const Key('all-alert-sounds-muted'),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'All alert sounds are muted. Your individual choices are preserved.',
+                    ),
+                  ),
+                SwitchListTile(
+                  key: const Key('sync-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Remote item additions'),
+                  subtitle: const Text(
+                    'Chime when another device adds an item.',
+                  ),
+                  value: syncChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => syncChimeEnabled = value);
+                    widget.onSyncChimeChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('drying-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Drying complete'),
+                  subtitle: const Text('Chime when a drying timer finishes.'),
+                  value: dryingCompleteChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => dryingCompleteChimeEnabled = value);
+                    widget.onDryingCompleteChimeChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('moisture-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Moisture threshold'),
+                  subtitle: const Text(
+                    'Chime once when filament crosses its alert threshold.',
+                  ),
+                  value: moistureAlertChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => moistureAlertChimeEnabled = value);
+                    widget.onMoistureAlertChimeChanged(value);
+                  },
+                ),
+                DropdownButtonFormField<AlertSoundProfile>(
+                  key: const Key('alert-sound-profile'),
+                  initialValue: alertSoundProfile,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Sound style'),
+                  items: [
+                    for (final profile in AlertSoundProfile.values)
+                      DropdownMenuItem(
+                        value: profile,
+                        child: Text(_alertSoundProfileLabel(profile)),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => alertSoundProfile = value);
+                    widget.onAlertSoundProfileChanged(value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text('Alert volume · $alertSoundVolumePercent%'),
+                Slider(
+                  key: const Key('alert-sound-volume'),
+                  value: alertSoundVolumePercent.toDouble(),
+                  min: 0,
+                  max: 100,
+                  divisions: 20,
+                  label: '$alertSoundVolumePercent%',
+                  onChanged: (value) =>
+                      setState(() => alertSoundVolumePercent = value.round()),
+                  onChangeEnd: (value) =>
+                      widget.onAlertSoundVolumeChanged(value.round()),
+                ),
+                DropdownButtonFormField<int>(
+                  key: const Key('alert-sound-recurrence'),
+                  initialValue: alertSoundRecurrenceSeconds,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Repeat moisture chime',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('Never')),
+                    DropdownMenuItem(value: 3, child: Text('Every 3 seconds')),
+                    DropdownMenuItem(value: 5, child: Text('Every 5 seconds')),
+                    DropdownMenuItem(
+                      value: 10,
+                      child: Text('Every 10 seconds'),
+                    ),
+                    DropdownMenuItem(
+                      value: 30,
+                      child: Text('Every 30 seconds'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => alertSoundRecurrenceSeconds = value);
+                    widget.onAlertSoundRecurrenceChanged(value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('preview-alert-sound'),
+                  onPressed: widget.onPreviewAlertSound,
+                  icon: const Icon(Icons.volume_up_outlined),
+                  label: const Text('Preview chime'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            ExpansionTile(
+              key: const Key('personalization-effects-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Visual effects',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text('Tune animated card and alert layers.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('card-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Card effects'),
+                  subtitle: const Text('Allow animated effects on item cards.'),
+                  value: cardEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => cardEffectsEnabled = value);
+                    widget.onCardEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('low-stock-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low-stock pulse'),
+                  value: lowStockEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => lowStockEffectsEnabled = value);
+                    widget.onLowStockEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('moisture-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Moisture droplets'),
+                  value: moistureEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => moistureEffectsEnabled = value);
+                    widget.onMoistureEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('remote-sync-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Remote Sync quantity effect'),
+                  value: remoteSyncEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => remoteSyncEffectsEnabled = value);
+                    widget.onRemoteSyncEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('search-glow-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Search box glow'),
+                  subtitle: const Text('Animate the search field edge light.'),
+                  value: searchGlowEnabled,
+                  onChanged: (value) {
+                    setState(() => searchGlowEnabled = value);
+                    widget.onSearchGlowChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('new-item-glow-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('New item laser glow'),
+                  subtitle: const Text(
+                    'Highlight additions and debug previews.',
+                  ),
+                  value: newItemGlowEnabled,
+                  onChanged: (value) {
+                    setState(() => newItemGlowEnabled = value);
+                    widget.onNewItemGlowChanged(value);
+                  },
+                ),
+              ],
             ),
             const Divider(height: 28),
             const Text(
@@ -22307,6 +23465,13 @@ class _DebugPanelDialogState extends State<DebugPanelDialog> {
                       : null,
                   icon: const Icon(Icons.water_drop_rounded),
                   label: const Text('Moisture droplet wave'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('debug-new-item-glow'),
+                  onPressed: () => _play(DebugCardEffect.newItemGlow),
+                  icon: const Icon(Icons.auto_awesome_rounded),
+                  label: const Text('New item laser glow'),
                 ),
               ],
             ),
@@ -23369,9 +24534,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
 
   void _addStyleEntry() {
     if (styleEntryDrafts.length >= _maxFilamentStyleEntries) return;
-    setState(
-      () => styleEntryDrafts.add(const FilamentStyleEntry(style: '')),
-    );
+    setState(() => styleEntryDrafts.add(const FilamentStyleEntry(style: '')));
   }
 
   void _removeStyleEntry(int index) {
@@ -23417,9 +24580,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     final colors = [...entry.colors];
     final colorNames = [...entry.colorNames];
     if (count > colors.length) {
-      colors.addAll(
-        List.filled(count - colors.length, _defaultStyleColor),
-      );
+      colors.addAll(List.filled(count - colors.length, _defaultStyleColor));
     } else {
       colors.removeRange(count, colors.length);
     }
@@ -23438,9 +24599,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     final entry = styleEntryDrafts[index];
     final colorNames = [...entry.colorNames];
     if (colorNames.length <= colorIndex) {
-      colorNames.addAll(
-        List.filled(colorIndex + 1 - colorNames.length, ''),
-      );
+      colorNames.addAll(List.filled(colorIndex + 1 - colorNames.length, ''));
     }
     colorNames[colorIndex] = name;
     styleEntryDrafts[index] = entry.copyWith(colorNames: colorNames);
@@ -23456,9 +24615,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     if (!mounted || selected == null || selected.isEmpty) return;
     final colors = [...entry.colors];
     colors[colorIndex] = selected;
-    setState(
-      () => styleEntryDrafts[index] = entry.copyWith(colors: colors),
-    );
+    setState(() => styleEntryDrafts[index] = entry.copyWith(colors: colors));
   }
 
   Widget _filamentStyleSection() => InputDecorator(
@@ -23548,10 +24705,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
           DropdownButtonFormField<String>(
             key: Key('filament-style-carbon-form-$index'),
             initialValue: entry.carbonFiberForm ?? 'chopped',
-            decoration: const InputDecoration(
-              labelText: 'Form',
-              isDense: true,
-            ),
+            decoration: const InputDecoration(labelText: 'Form', isDense: true),
             items: const [
               DropdownMenuItem(value: 'chopped', child: Text('Chopped')),
               DropdownMenuItem(value: 'ground', child: Text('Ground')),
@@ -23640,8 +24794,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
 
   Widget _filamentGradientEditor(int index, FilamentStyleEntry entry) {
     final colors = [
-      for (final hex in entry.colors)
-        _hexColor(hex) ?? const Color(0xff5d5970),
+      for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff5d5970),
     ];
     return SizedBox(
       height: 44,
@@ -23976,7 +25129,8 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             controller: purposeTagsController,
                             decoration: const InputDecoration(
                               labelText: 'Purpose tags',
-                              hintText: 'Use first, Engineering, Beauty prints only…',
+                              hintText:
+                                  'Use first, Engineering, Beauty prints only…',
                               helperText: 'Separate tags with commas',
                             ),
                           ),
@@ -24148,8 +25302,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                               controller: itemColorController,
                               textInputAction: TextInputAction.next,
                               autocorrect: false,
-                              textCapitalization:
-                                  TextCapitalization.characters,
+                              textCapitalization: TextCapitalization.characters,
                               decoration: InputDecoration(
                                 labelText: 'Color value',
                                 hintText: '#8E75FF',
@@ -25098,9 +26251,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
         compatibility: compatibility,
         purposeTags: type == InventoryType.filament ? purposeTags : const [],
         styleEntries: type == InventoryType.filament
-            ? styleEntryDrafts
-                  .where((entry) => entry.style.isNotEmpty)
-                  .toList()
+            ? styleEntryDrafts.where((entry) => entry.style.isNotEmpty).toList()
             : const [],
         added: widget.initialItem?.added ?? DateTime.now(),
         cost: double.parse(costController.text),
@@ -26614,6 +27765,8 @@ class ItemDetailsPanel extends StatefulWidget {
     required this.machines,
     required this.machineTypes,
     required this.spoolTypes,
+    this.spoolUsage = const [],
+    this.onSpoolUsageAdded,
     this.onEdit,
     this.onSplitOne,
     this.typeLabel,
@@ -26632,6 +27785,8 @@ class ItemDetailsPanel extends StatefulWidget {
   final List<MachineRecord> machines;
   final List<MachineTypeRecord> machineTypes;
   final List<SpoolTypeRecord> spoolTypes;
+  final List<SpoolUsageRecord> spoolUsage;
+  final ValueChanged<SpoolUsageRecord>? onSpoolUsageAdded;
   final Future<void> Function(InventoryItem item)? onEdit;
   final Future<void> Function(InventoryItem item)? onSplitOne;
   final String? typeLabel;
@@ -26647,6 +27802,125 @@ class ItemDetailsPanel extends StatefulWidget {
 
   @override
   State<ItemDetailsPanel> createState() => _ItemDetailsPanelState();
+}
+
+class _SpoolUsageDialog extends StatefulWidget {
+  const _SpoolUsageDialog();
+
+  @override
+  State<_SpoolUsageDialog> createState() => _SpoolUsageDialogState();
+}
+
+class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
+  final usedController = TextEditingController();
+  final wasteController = TextEditingController(text: '0');
+  final projectController = TextEditingController();
+  final reasonController = TextEditingController();
+  final notesController = TextEditingController();
+  SpoolPrintOutcome outcome = SpoolPrintOutcome.successful;
+
+  @override
+  void dispose() {
+    usedController.dispose();
+    wasteController.dispose();
+    projectController.dispose();
+    reasonController.dispose();
+    notesController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final used = double.tryParse(usedController.text.trim());
+    final waste = double.tryParse(wasteController.text.trim());
+    if (used == null || used < 0 || waste == null || waste < 0 || used + waste <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a positive gram amount.')),
+      );
+      return;
+    }
+    Navigator.pop(
+      context,
+      SpoolUsageRecord(
+        id: '',
+        spoolId: '',
+        recordedAt: DateTime.now(),
+        gramsUsed: used,
+        gramsWaste: waste,
+        outcome: outcome,
+        project: projectController.text.trim(),
+        wasteReason: reasonController.text.trim(),
+        notes: notesController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Log filament usage'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButtonFormField<SpoolPrintOutcome>(
+            initialValue: outcome,
+            decoration: const InputDecoration(labelText: 'Print outcome'),
+            items: const [
+              DropdownMenuItem(
+                value: SpoolPrintOutcome.successful,
+                child: Text('Successful print'),
+              ),
+              DropdownMenuItem(
+                value: SpoolPrintOutcome.failed,
+                child: Text('Failed print'),
+              ),
+            ],
+            onChanged: (value) => setState(() => outcome = value!),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: usedController,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Filament used (g)',
+              suffixText: 'g',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: wasteController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Waste (g)',
+              suffixText: 'g',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: projectController,
+            decoration: const InputDecoration(labelText: 'Project / build (optional)'),
+          ),
+          if (outcome == SpoolPrintOutcome.failed) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(labelText: 'Waste reason (optional)'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: notesController,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Notes (optional)'),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      FilledButton(onPressed: _save, child: const Text('Save usage')),
+    ],
+  );
 }
 
 enum _FilamentSidebarTab { instructions, spool, brand }
@@ -27080,6 +28354,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         ),
         if (item.styleEntries.isNotEmpty)
           _FilamentStyleDetailSection(entries: item.styleEntries),
+        ..._spoolUsageContent(),
       ],
       _FilamentSidebarTab.brand => <Widget>[
         _DetailSection(
@@ -27137,6 +28412,104 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         ),
       ],
     );
+  }
+
+  List<Widget> _spoolUsageContent() {
+    final entries = widget.spoolUsage
+        .where((entry) => entry.spoolId == item.id)
+        .toList()
+      ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    final used = entries.fold<double>(0, (sum, entry) => sum + entry.gramsUsed);
+    final waste = entries.fold<double>(0, (sum, entry) => sum + entry.gramsWaste);
+    final nominal = widget.spoolTypes
+        .where((spool) => spool.id == item.spoolTypeId)
+        .firstOrNull
+        ?.weightGrams;
+    final remaining = nominal == null ? null : nominal - used - waste;
+    return [
+      const Divider(height: 34),
+      Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Usage tracking',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+          ),
+          if (widget.onSpoolUsageAdded != null)
+            OutlinedButton.icon(
+              key: const Key('log-spool-usage'),
+              onPressed: widget.canEdit ? _logSpoolUsage : null,
+              icon: const Icon(Icons.add_chart_rounded, size: 18),
+              label: const Text('Log print'),
+            ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      Text(
+        remaining == null
+            ? '${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste'
+            : '${remaining.clamp(0, double.infinity).toStringAsFixed(1)} g remaining · ${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste',
+        style: const TextStyle(color: Color(0xffb4bac9)),
+      ),
+      if (entries.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(top: 12),
+          child: Text(
+            'No print usage recorded yet. Amounts are tracked in grams.',
+            style: TextStyle(color: Color(0xff929aac)),
+          ),
+        )
+      else
+        ...entries.take(8).map(
+          (entry) => ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: Icon(
+              entry.outcome == SpoolPrintOutcome.successful
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.error_outline_rounded,
+              color: entry.outcome == SpoolPrintOutcome.successful
+                  ? const Color(0xff45d2bd)
+                  : const Color(0xffff8f8f),
+            ),
+            title: Text(
+              '${entry.outcome == SpoolPrintOutcome.successful ? 'Successful' : 'Failed'} · ${entry.gramsUsed.toStringAsFixed(1)} g used · ${entry.gramsWaste.toStringAsFixed(1)} g waste',
+            ),
+            subtitle: Text(
+              [
+                if (entry.project.trim().isNotEmpty) entry.project.trim(),
+                if (entry.wasteReason.trim().isNotEmpty)
+                  'Waste: ${entry.wasteReason.trim()}',
+                entry.recordedAt.toLocal().toString().split('.').first,
+              ].join(' · '),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  Future<void> _logSpoolUsage() async {
+    final entry = await showDialog<SpoolUsageRecord>(
+      context: context,
+      builder: (_) => const _SpoolUsageDialog(),
+    );
+    if (!mounted || entry == null) return;
+    widget.onSpoolUsageAdded?.call(
+      SpoolUsageRecord(
+        id: 'USAGE-${DateTime.now().microsecondsSinceEpoch}',
+        spoolId: item.id,
+        recordedAt: DateTime.now(),
+        gramsUsed: entry.gramsUsed,
+        gramsWaste: entry.gramsWaste,
+        outcome: entry.outcome,
+        buildId: entry.buildId,
+        project: entry.project,
+        wasteReason: entry.wasteReason,
+        notes: entry.notes,
+      ),
+    );
+    setState(() {});
   }
 
   @override
@@ -28100,7 +29473,10 @@ class _FilamentStyleDetailSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Style', style: TextStyle(fontWeight: FontWeight.w700)),
+              const Text(
+                'Style',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
               const SizedBox(height: 5),
               for (final entry in entries)
                 Padding(
@@ -28125,8 +29501,7 @@ class _FilamentStyleDetailSection extends StatelessWidget {
                               gradient: LinearGradient(
                                 colors: [
                                   for (final hex in entry.colors)
-                                    _hexColor(hex) ??
-                                        const Color(0xff5d5970),
+                                    _hexColor(hex) ?? const Color(0xff5d5970),
                                 ],
                               ),
                               borderRadius: BorderRadius.circular(4),
@@ -28961,9 +30336,10 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
       animation: controller,
       child: widget.child,
       builder: (context, child) {
-        final pulse = controller.value < .35
-            ? controller.value / .35
-            : (1 - controller.value) / .65;
+        final travel = Curves.easeInOutCubic.transform(controller.value);
+        final pulse = controller.value < .28
+            ? controller.value / .28
+            : (1 - controller.value) / .72;
         return Stack(
           fit: StackFit.passthrough,
           children: [
@@ -28986,16 +30362,21 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
               child: IgnorePointer(
                 child: Opacity(
                   opacity: (.52 * pulse).clamp(0, 1),
-                  child: Transform.scale(
-                    scale: .72 + (.42 * pulse),
-                    child: Icon(
-                      Icons.warning_amber_rounded,
-                      key: Key('low-stock-pulse-${widget.itemId}'),
-                      size: 112,
-                      color: Colors.white,
-                      shadows: const [
-                        Shadow(color: Color(0xffffc857), blurRadius: 30),
-                      ],
+                  child: Align(
+                    // Low-stock warnings drop down through the card instead
+                    // of sliding laterally across it.
+                    alignment: Alignment(0, -1.25 + (2.5 * travel)),
+                    child: Transform.scale(
+                      scale: .72 + (.42 * pulse),
+                      child: Icon(
+                        Icons.warning_amber_rounded,
+                        key: Key('low-stock-pulse-${widget.itemId}'),
+                        size: 112,
+                        color: Colors.white,
+                        shadows: const [
+                          Shadow(color: Color(0xffffc857), blurRadius: 30),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -29201,6 +30582,10 @@ class ItemCardEffects extends StatelessWidget {
     required this.moistureVersion,
     required this.lowStockActive,
     required this.moistureActive,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     required this.durationPercent,
     required this.recurrenceSeconds,
     this.scrollingListenable,
@@ -29212,6 +30597,10 @@ class ItemCardEffects extends StatelessWidget {
   final int moistureVersion;
   final bool lowStockActive;
   final bool moistureActive;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final int durationPercent;
   final int recurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
@@ -29220,29 +30609,43 @@ class ItemCardEffects extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final staticChild = RepaintBoundary(child: child);
+    if (!cardEffectsEnabled) return staticChild;
     final playWhenFirstVisible = scrollingListenable == null;
-    Widget effects(Widget effectChild) => MoistureDropletWaveEffect(
-      itemId: itemId,
-      trigger: moistureVersion,
-      active: moistureActive,
-      durationPercent: durationPercent,
-      recurrenceSeconds: recurrenceSeconds,
-      playWhenFirstVisible: playWhenFirstVisible,
-      child: LowStockPulseEffect(
-        itemId: itemId,
-        trigger: lowStockVersion,
-        active: lowStockActive,
-        durationPercent: durationPercent,
-        recurrenceSeconds: recurrenceSeconds,
-        playWhenFirstVisible: playWhenFirstVisible,
-        child: RemoteQuantityChangeEffect(
+    Widget effects(Widget effectChild) {
+      Widget result = effectChild;
+      if (remoteSyncEffectsEnabled) {
+        result = RemoteQuantityChangeEffect(
           itemId: itemId,
           trigger: quantitySyncVersion,
           durationPercent: durationPercent,
-          child: effectChild,
-        ),
-      ),
-    );
+          child: result,
+        );
+      }
+      if (lowStockEffectsEnabled) {
+        result = LowStockPulseEffect(
+          itemId: itemId,
+          trigger: lowStockVersion,
+          active: lowStockActive,
+          durationPercent: durationPercent,
+          recurrenceSeconds: recurrenceSeconds,
+          playWhenFirstVisible: playWhenFirstVisible,
+          child: result,
+        );
+      }
+      if (moistureEffectsEnabled) {
+        result = MoistureDropletWaveEffect(
+          itemId: itemId,
+          trigger: moistureVersion,
+          active: moistureActive,
+          durationPercent: durationPercent,
+          recurrenceSeconds: recurrenceSeconds,
+          playWhenFirstVisible: playWhenFirstVisible,
+          child: result,
+        );
+      }
+      return result;
+    }
+
     final scrolling = scrollingListenable;
     if (scrolling == null) return effects(staticChild);
     return ValueListenableBuilder<bool>(
@@ -29628,6 +31031,10 @@ class InventoryCard extends StatelessWidget {
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
     this.scrollingListenable,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     this.photoCard = false,
     this.showStatus = true,
     this.canEdit = true,
@@ -29651,6 +31058,10 @@ class InventoryCard extends StatelessWidget {
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final bool photoCard;
   final bool showStatus;
   final bool canEdit;
@@ -29699,6 +31110,10 @@ class InventoryCard extends StatelessWidget {
           moistureVersion: moistureAnimationVersion,
           lowStockActive: !item.archived && _isLowStock(item),
           moistureActive: _hasMoistureVisualAlert(item),
+          cardEffectsEnabled: cardEffectsEnabled,
+          lowStockEffectsEnabled: lowStockEffectsEnabled,
+          moistureEffectsEnabled: moistureEffectsEnabled,
+          remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,
@@ -29793,11 +31208,13 @@ class InventoryCard extends StatelessWidget {
                                 if (!compact &&
                                     _itemCoextrudedColors(item) == null &&
                                     (item.itemColorLabel.isNotEmpty ||
-                                        _itemGradientName(
-                                          item,
-                                        ).isNotEmpty)) ...[
+                                        _itemGradientName(item)
+                                            .isNotEmpty)) ...[
                                   const SizedBox(width: 8),
-                                  Flexible(
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 110,
+                                    ),
                                     child: Text(
                                       item.itemColorLabel.isNotEmpty
                                           ? item.itemColorLabel
@@ -29915,6 +31332,10 @@ class InventoryRow extends StatelessWidget {
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
     this.scrollingListenable,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     this.showStatus = true,
     this.canEdit = true,
     this.canCreate = true,
@@ -29937,6 +31358,10 @@ class InventoryRow extends StatelessWidget {
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final bool showStatus;
   final bool canEdit;
   final bool canCreate;
@@ -30157,6 +31582,10 @@ class InventoryRow extends StatelessWidget {
           moistureVersion: moistureAnimationVersion,
           lowStockActive: !item.archived && _isLowStock(item),
           moistureActive: _hasMoistureVisualAlert(item),
+          cardEffectsEnabled: cardEffectsEnabled,
+          lowStockEffectsEnabled: lowStockEffectsEnabled,
+          moistureEffectsEnabled: moistureEffectsEnabled,
+          remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,

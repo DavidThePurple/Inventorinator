@@ -150,4 +150,109 @@ void main() {
       );
     },
   );
+
+  test(
+    'location, lifecycle, and detail edits survive delayed create uploads',
+    () async {
+      const scenarios = [
+        (
+          field: 'storageLocationId',
+          remoteValue: 'LOC-REMOTE',
+          localValue: 'LOC-LOCAL',
+        ),
+        (field: 'archived', remoteValue: false, localValue: true),
+        (
+          field: 'name',
+          remoteValue: 'Remote name',
+          localValue: 'Renamed locally',
+        ),
+      ];
+
+      for (final scenario in scenarios) {
+        final directory = await Directory.systemTemp.createTemp(
+          'inventorinator-sync-race-${scenario.field}-',
+        );
+        final database = await LocalDatabase.open(
+          overridePath: '${directory.path}/inventory.sqlite3',
+        );
+        try {
+          database.saveState(
+            '{"schemaVersion":8,"inventory":[],"vendors":[],'
+            '"brands":[],"products":[]}',
+          );
+          final baseFields = <String, dynamic>{
+            'id': 'INV-RACE',
+            'name': 'Race PLA',
+            'type': 'filament',
+            'compatibility': <String>[],
+            'added': DateTime.utc(2026).toIso8601String(),
+            'cost': 10,
+            'color': 0xff000000,
+            scenario.field: scenario.remoteValue,
+          };
+          database.saveEntityPayloadAndQueue(
+            'inventory',
+            'INV-RACE',
+            baseFields,
+          );
+          final uploadingBatch = database.loadPendingWorkshopChanges();
+          final releaseUploadResponse = Completer<void>();
+          final service = SupabaseSyncService(
+            config,
+            client: MockClient((request) async {
+              await releaseUploadResponse.future;
+              return http.Response(jsonEncode(1), 200);
+            }),
+          );
+          final uploadFuture = service.uploadChanges(
+            session,
+            uploadingBatch.map((entry) => entry.change),
+            deviceId: 'DEVICE-RACE',
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+
+          database.saveEntityPayloadAndQueue('inventory', 'INV-RACE', {
+            ...baseFields,
+            scenario.field: scenario.localValue,
+          });
+          releaseUploadResponse.complete();
+          await uploadFuture;
+          database.acknowledgePendingWorkshopChanges(uploadingBatch);
+
+          final pending = database.loadPendingWorkshopChanges();
+          expect(pending, hasLength(1));
+          expect(pending.single.change.fields[scenario.field], scenario.localValue);
+
+          final merged = mergeRemoteChangesWithPending(
+            [
+              WorkshopEntityChange(
+                entityType: 'inventory',
+                entityId: 'INV-RACE',
+                fields: baseFields,
+                revision: 1,
+              ),
+            ],
+            pending.map((entry) => entry.change),
+          );
+          expect(
+            merged.changes.single.fields[scenario.field],
+            scenario.localValue,
+          );
+          database.applyRemoteWorkshopChanges(merged.changes);
+          final restored =
+              jsonDecode(database.loadState()!) as Map<String, dynamic>;
+          final restoredItem =
+              (restored['inventory'] as List<dynamic>).single
+                  as Map<String, dynamic>;
+          expect(
+            restoredItem[scenario.field],
+            scenario.localValue,
+          );
+        } finally {
+          database.close();
+          await directory.delete(recursive: true);
+        }
+      }
+    },
+  );
 }

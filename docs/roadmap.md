@@ -4,15 +4,22 @@
 
 ### State-safe delayed writes
 
+Implementation status: complete for the current edit paths in build 8. Normal persistence now
+uses a per-entity outbox with changed-field patches and tombstones. Explicit
+local revisions protect newer edits from stale acknowledgements, incoming
+records merge field-by-field against pending local fields, and conflicts are
+recorded instead of silently replacing the local value. Build 7 added an
+end-to-end delayed create/status race test; build 8 expands that coverage to
+location, lifecycle, and item-detail edits.
+
 - Treat eliminating local-state rollback after a save or Remote Sync response as
-  a v0.2 release requirement. A database acknowledgement must never reset newer
-  local edits to the older state that was originally submitted.
-- Replace independent delayed saves and reloads with per-record write queues so
-  an older database response cannot overwrite a newer user action.
+  a v0.2 release requirement. This is now enforced by local revision matching
+  and pending-field merges; keep the requirement for future persistence paths.
+- Keep the per-entity outbox and revision handling for all new edit paths.
 - Preserve locally edited fields while an item creation or earlier update is
   still being committed; for example, changing a new filament from Ready to Wet
   must survive the initial database refresh.
-- Add revision-aware merging for local persistence and Remote Sync rather than
+- Keep revision-aware merging for local persistence and Remote Sync rather than
   treating debouncing alone as conflict resolution.
 - Never respond to a successful record write by reloading the whole inventory.
   Acknowledge only the submitted record revision and retain any newer queued
@@ -20,41 +27,51 @@
 - Merge incoming changes field-by-field against the local outbox. Locally dirty
   fields remain authoritative until their exact revision is acknowledged;
   unrelated incoming fields and records may continue applying asynchronously.
-- Show a lightweight pending/saved state where feedback is useful without
-  blocking continued edits.
-  Implementation status: complete for debounced quantity changes; broaden this
-  feedback as the remaining queued-write paths move to the record outbox.
-- Add race-condition tests for rapid quantity, status, location, lifecycle, and
-  item-detail changes.
-- Add a required end-to-end test that creates an item, immediately changes its
-  status or another field while the initial image/database write is delayed,
-  receives both local and remote acknowledgements out of order, and proves the
-  newest visible value never rolls back on either device.
+- Keep lightweight pending/saved feedback where useful without blocking edits.
+- The local commit is now deferred through a serialized, coalescing write queue;
+  sync waits for that queue before reading or uploading. Keep extending the
+  race suite as new edit fields are added. A dedicated isolate is optional and
+  should only be introduced if profiling shows the queue still affects frames.
 
 ### Detailed personalization, notifications, and sound
 
-Implementation status: in progress. Per-device master mute and independent
-Remote-addition, drying-complete, and moisture-threshold chime controls are
-available together in Personalization. Low-stock visual notifications can also
-be disabled independently per device without changing item thresholds.
+Implementation status: substantially complete in build 8. Per-device master
+mute, sound style, volume, preview, recurrence, and independent Remote-addition,
+drying-complete, and moisture-threshold chime controls are available together
+in Personalization. Card, low-stock, moisture, and Remote Sync visual effects
+can also be disabled independently per device without changing inventory data.
 
-- Provide per-effect controls for card, status, alert, moisture, and Remote Sync
-  animations, including intensity and duration where appropriate.
-- Provide per-alert notification controls for low stock, moisture, drying,
-  Remote Sync changes, and other supported events.
-- Allow each alert type to select its sound, preview it, set volume, choose
-  recurrence, or remain silent while retaining its visual notification.
+- Add intensity controls for individual effects where profiling and accessibility
+  feedback show they are needed; duration and global recurrence are already
+  available.
+- Extend the existing per-alert notification controls to any new event types
+  (low stock is independently switchable today; sound events are independently
+  switchable for moisture, drying, and Remote Sync).
+- Add per-alert sound profiles when multiple chime families are available;
+  build 8 provides a shared profile, preview, volume, recurrence, and silence
+  controls while retaining visual notifications.
 - Keep notification, sound, and appearance preferences per device unless the
   user explicitly chooses a shared behavior.
 
 ### Spool usage controls
 
-- Record spool consumption through manual weight, length, or percentage
-  adjustments without forcing a quantity change.
+Implementation status: initial gram-based print usage and waste tracking is
+available in build 8 through each filament item's details panel. Remaining
+spool adjustments, transfers, and printer attribution still need completion.
+
+- Treat grams as the canonical filament amount and record spool consumption
+  through manual gram adjustments (with length or percentage as optional
+  convenience inputs) without forcing a quantity change.
 - Track starting amount, tare, remaining material, and usage history for each
   individual spool split from a stack.
 - Support corrections, refills, spool transfers, and usage attribution to a
   printer, build, or project without destroying the audit trail.
+- Track filament used by each print in grams, including whether the print was
+  successful or failed, and distinguish planned usage from actual usage and
+  waste (such as purge material or support discarded after a failed print).
+- Keep print outcome, waste reason, and project/build attribution in the usage
+  history so successful-use and failed-print totals can be reported without
+  rewriting the spool's audit trail.
 - Make low-material and moisture behavior work from the remaining spool amount.
 
 ### Multi-color filament support

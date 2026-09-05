@@ -520,7 +520,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       }
       return bytes;
     } catch (exception) {
-      if (mounted && !xrealStreaming) {
+      if (mounted) {
         setState(() => error = 'Camera capture failed: $exception');
       }
       return null;
@@ -614,7 +614,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                           ),
                         ),
                     ],
-                    onChanged: initializing || xrealMode
+                    onChanged: initializing
                         ? null
                         : (value) {
                             if (value != null && value != selectedCamera) {
@@ -627,7 +627,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                 IconButton.filledTonal(
                   key: const Key('cycle-windows-camera'),
                   tooltip: 'Switch camera',
-                  onPressed: cameras.length < 2 || initializing || xrealMode
+                  onPressed: cameras.length < 2 || initializing
                       ? null
                       : _cycleCamera,
                   icon: const Icon(Icons.cameraswitch_rounded),
@@ -636,25 +636,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             ),
           ),
         Expanded(
-          child: xrealMode && xrealFrame != null
-              ? GestureDetector(
-                  key: const Key('xreal-camera-surface'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap:
-                      widget.mode == ScanMode.ingest &&
-                          widget.captureMode == ScanCaptureMode.ocr &&
-                          widget.onLabelCapture != null
-                      ? () => unawaited(widget.onLabelCapture!(xrealFrame!))
-                      : null,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.memory(xrealFrame!, fit: BoxFit.contain),
-                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
-                    ],
-                  ),
-                )
-              : active == null || !active.value.isInitialized
+          child: active == null || !active.value.isInitialized
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,

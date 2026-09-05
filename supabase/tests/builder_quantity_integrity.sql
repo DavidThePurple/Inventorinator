@@ -41,23 +41,13 @@ select set_config(
 do $$
 begin
   begin
-    perform public.save_inventorinator_workshop_state(
+    perform public.apply_inventorinator_entity_changes(
       '10000000-0000-0000-0000-000000000001',
-      '{
-        "inventory": [{
-          "id": "INV-1", "name": "M3 screw", "quantity": 9,
-          "catalogProductId": "P-1"
-        }],
-        "builds": [{
-          "id": "B-1", "ownerUserId": "99999999-9999-9999-9999-999999999999",
-          "shared": true,
-          "lines": [{
-            "id": "L-1", "productId": "P-1", "name": "M3 screw",
-            "requiredQuantity": 1, "usedQuantity": 0,
-            "consumedInventoryIds": []
-          }]
-        }]
-      }'::jsonb
+      'test-device',
+      '[{
+        "entityType": "inventory", "entityId": "INV-1",
+        "fields": {"quantity": 9}
+      }]'::jsonb
     );
     raise exception 'tampered quantity was accepted';
   exception when others then
@@ -66,23 +56,25 @@ begin
 end;
 $$;
 
-select public.save_inventorinator_workshop_state(
+select public.apply_inventorinator_entity_changes(
   '10000000-0000-0000-0000-000000000001',
-  '{
-    "inventory": [{
-      "id": "INV-1", "name": "M3 screw", "quantity": 0,
-      "catalogProductId": "P-1"
-    }],
-    "builds": [{
-      "id": "B-1", "ownerUserId": "99999999-9999-9999-9999-999999999999",
-      "shared": true,
-      "lines": [{
-        "id": "L-1", "productId": "P-1", "name": "M3 screw",
-        "requiredQuantity": 1, "usedQuantity": 1,
-        "consumedInventoryIds": ["INV-1"]
-      }]
-    }]
-  }'::jsonb
+  'test-device',
+  '[
+    {
+      "entityType": "inventory", "entityId": "INV-1",
+      "fields": {"quantity": 0}
+    },
+    {
+      "entityType": "builds", "entityId": "B-1",
+      "fields": {
+        "lines": [{
+          "id": "L-1", "productId": "P-1", "name": "M3 screw",
+          "requiredQuantity": 1, "usedQuantity": 1,
+          "consumedInventoryIds": ["INV-1"]
+        }]
+      }
+    }
+  ]'::jsonb
 );
 
 do $$

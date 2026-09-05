@@ -45,7 +45,9 @@ jobs:
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
           ./supabase/install-or-update.sh --hosted
           ./supabase/install-or-update.sh --hosted
-          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "12"
+          latest_migration=$(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' \
+            -printf '%f\n' | sort | tail -n 1 | sed 's/^0*\([0-9][0-9]*\)_.*/\1/')
+          test "$(psql -h 127.0.0.1 -U postgres -Atqc 'select version from public.inventorinator_schema where singleton')" = "$latest_migration"
       - name: Verify builder quantity enforcement
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
       - name: Verify role and owner boundaries
@@ -93,6 +95,29 @@ jobs:
           INVENTORINATOR_NATIVE_DECODER_TEST: "1"
           LD_LIBRARY_PATH: build/linux/x64/release/bundle/lib
         run: flutter test test/widget_test.dart --plain-name "ingest decoder reads a tilted alphanumeric Code 128 FNSKU"
+      - name: Package desktop integration
+        run: |
+          bundle_dir="build/linux/x64/release/bundle"
+          install -m 755 linux/packaging/install.sh "$bundle_dir/install.sh"
+          install -m 644 \
+            linux/packaging/media.everlasting.inventorinator.desktop \
+            "$bundle_dir/Inventorinator.desktop"
+          test -s "$bundle_dir/data/app_icon.png"
+          test -s "$bundle_dir/share/icons/hicolor/512x512/apps/media.everlasting.inventorinator.png"
+          test -s "$bundle_dir/share/applications/media.everlasting.inventorinator.desktop"
+          test -x "$bundle_dir/install.sh"
+      - name: Compute artifact name
+        id: artifact
+        run: |
+          app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
+          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
+          echo "name=Inventorinator-v${app_version}-build${app_build}-Linux-x64" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: build/linux/x64/release/bundle
+          if-no-files-found: error
+          retention-days: 7
 
   android:
     runs-on: ubuntu-24.04
@@ -112,6 +137,18 @@ jobs:
       - name: Android app lint
         working-directory: android
         run: ./gradlew :app:lintDebug
+      - name: Compute artifact name
+        id: artifact
+        run: |
+          app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
+          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
+          echo "name=Inventorinator-v${app_version}-build${app_build}-Android-debug" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
 
   windows:
     runs-on: windows-2025
@@ -127,3 +164,16 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build windows --release
+      - name: Compute artifact name
+        id: artifact
+        shell: bash
+        run: |
+          app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
+          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
+          echo "name=Inventorinator-v${app_version}-build${app_build}-Windows-x64" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: build\windows\x64\runner\Release
+          if-no-files-found: error
+          retention-days: 7

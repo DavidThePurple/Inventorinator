@@ -167,10 +167,14 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
   bool xrealEyeMode = false;
   Uint8List? xrealEyeFrame;
   Timer? xrealEyeTimer;
+  // Normal barcode scanning only needs decoded values. Requesting an image
+  // for every preview frame forces large allocations and image conversion on
+  // Android, which can stall scrolling and other UI work on high-resolution
+  // phones. OCR uses its own still-photo camera below.
   final controller = MobileScannerController(
-    returnImage: true,
-    autoZoom: true,
-    cameraResolution: const Size(1920, 1080),
+    returnImage: false,
+    autoZoom: false,
+    cameraResolution: const Size(1280, 720),
   );
 
   @override
@@ -268,7 +272,7 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
                   return;
                 }
                 delivered = true;
-                widget.onCode(value, capture.image);
+                widget.onCode(value, null);
               },
             ),
           Positioned(
@@ -343,7 +347,9 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
       );
       final next = CameraController(
         description,
-        ResolutionPreset.max,
+        // OCR captures one still image; requesting the full sensor resolution
+        // creates a large capture/decode spike on high-resolution phones.
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -588,8 +594,12 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       });
     }
     try {
-      final found = (await availableCameras()).toList()
-        ..sort(_compareWindowsCameras);
+      // Bounded so a platform channel that never responds (e.g. no camera
+      // plugin handler available) settles into the error state rather than
+      // leaving the loading spinner running indefinitely.
+      final found = (await availableCameras().timeout(
+        const Duration(seconds: 5),
+      )).toList()..sort(_compareWindowsCameras);
       if (!mounted) return;
       setState(() {
         cameras = found;

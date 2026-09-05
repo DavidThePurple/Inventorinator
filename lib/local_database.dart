@@ -12,13 +12,17 @@ import 'workshop_delta.dart';
 class PendingWorkshopChange {
   const PendingWorkshopChange({
     required this.outboxId,
-    required this.version,
+    required this.localRevision,
     required this.change,
   });
 
   final int outboxId;
-  final String version;
+  final int localRevision;
   final WorkshopEntityChange change;
+
+  // Kept as a compatibility label for callers that only displayed the old
+  // timestamp-based version value. Acknowledgements use localRevision.
+  String get version => localRevision.toString();
 }
 
 class InventoryImageData {
@@ -41,7 +45,11 @@ class LocalDatabase {
   final String path;
   Database _database;
   final RandomAccessFile? _instanceLock;
+  bool _closed = false;
+  int _writeGeneration = 0;
   Future<void> _syncSessionTail = Future<void>.value();
+  Future<void> _writeTail = Future<void>.value();
+  final Map<String, WorkshopEntityChange> _queuedWrites = {};
 
   Future<T> withSyncSessionLock<T>(Future<T> Function() action) async {
     final previous = _syncSessionTail;
@@ -54,6 +62,75 @@ class LocalDatabase {
       release.complete();
     }
   }
+
+  /// Queues changed records outside the current UI callback and coalesces
+  /// rapid edits to the same record before committing them to SQLite.
+  ///
+  /// The existing synchronous methods remain available for import/migration
+  /// code and tests. Interactive edits use this queue so a burst of changes
+  /// does not perform one SQLite transaction per tap or keystroke.
+  Future<void> queueWorkshopChanges(
+    Iterable<WorkshopEntityChange> changes,
+  ) {
+    if (_closed) return Future<void>.value();
+    for (final change in changes) {
+      final key = '${change.entityType}\u0000${change.entityId}';
+      final previous = _queuedWrites[key];
+      if (previous == null || change.deleted) {
+        _queuedWrites[key] = change;
+      } else {
+        _queuedWrites[key] = WorkshopEntityChange(
+          entityType: change.entityType,
+          entityId: change.entityId,
+          fields: {...previous.fields, ...change.fields},
+        );
+      }
+    }
+    if (_queuedWrites.isEmpty) return _writeTail;
+    final generation = _writeGeneration;
+    _writeTail = _writeTail.catchError((_) {}).then((_) async {
+      if (_closed || generation != _writeGeneration) return;
+      final batch = _queuedWrites.values.toList();
+      _queuedWrites.clear();
+      applyAndQueueWorkshopChanges(batch);
+    });
+    return _writeTail;
+  }
+
+  /// Computes a payload diff without writing synchronously, then sends only
+  /// the changed fields through the deferred outbox queue.
+  Future<void> queueEntityPayloadChange(
+    String entityType,
+    String entityId,
+    Map<String, dynamic> payload,
+  ) {
+    if (_closed) return Future<void>.value();
+    final rows = _database.select(
+      '''SELECT payload_json FROM entity_state
+         WHERE entity_type = ? AND entity_id = ?''',
+      [entityType, entityId],
+    );
+    final previous = rows.isEmpty
+        ? <String, dynamic>{}
+        : Map<String, dynamic>.from(
+            jsonDecode(rows.first['payload_json'] as String) as Map,
+          );
+    final fields = rows.isEmpty
+        ? payload
+        : changedWorkshopEntityFields(previous, payload);
+    if (fields.isEmpty) return Future<void>.value();
+    return queueWorkshopChanges([
+      WorkshopEntityChange(
+        entityType: entityType,
+        entityId: entityId,
+        fields: fields,
+      ),
+    ]);
+  }
+
+  Future<void> waitForPendingWrites() => _writeTail;
+
+  bool get isClosed => _closed;
 
   static Future<LocalDatabase> open({String? overridePath}) async {
     final databasePath =
@@ -131,9 +208,35 @@ class LocalDatabase {
         fields_json TEXT NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
+        local_revision INTEGER NOT NULL DEFAULT 0,
         UNIQUE(entity_type, entity_id)
       ) STRICT
     ''');
+    final outboxColumns = _database.select('PRAGMA table_info(sync_outbox)');
+    if (!outboxColumns.any((row) => row['name'] == 'local_revision')) {
+      _database.execute(
+        'ALTER TABLE sync_outbox ADD COLUMN local_revision INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    // Existing rows predate explicit local revisions. Their outbox id is
+    // already monotonic, so it is a safe one-time seed for the new counter.
+    _database.execute(
+      'UPDATE sync_outbox SET local_revision = id WHERE local_revision = 0',
+    );
+    _database.execute('''
+      CREATE TABLE IF NOT EXISTS sync_local_revisions (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_revision INTEGER NOT NULL
+      ) STRICT
+    ''');
+    final maxRevision = _database
+        .select('SELECT coalesce(max(local_revision), 0) AS value FROM sync_outbox')
+        .first['value'] as int;
+    _database.execute(
+      '''INSERT INTO sync_local_revisions (id, next_revision) VALUES (1, ?)
+         ON CONFLICT(id) DO NOTHING''',
+      [maxRevision + 1],
+    );
     _database.execute('''
       CREATE TABLE IF NOT EXISTS entity_state (
         entity_type TEXT NOT NULL,
@@ -409,6 +512,7 @@ class LocalDatabase {
     _database.execute('BEGIN IMMEDIATE');
     try {
       for (final change in changes) {
+        final localRevision = _nextLocalRevision();
         _applyEntityStateChange(change);
         final existing = _database.select(
           '''
@@ -431,12 +535,14 @@ class LocalDatabase {
         _database.execute(
           '''
           INSERT INTO sync_outbox (
-            entity_type, entity_id, fields_json, deleted, created_at
-          ) VALUES (?, ?, ?, ?, ?)
+            entity_type, entity_id, fields_json, deleted, created_at,
+            local_revision
+          ) VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(entity_type, entity_id) DO UPDATE SET
             fields_json = excluded.fields_json,
             deleted = excluded.deleted,
-            created_at = excluded.created_at
+            created_at = excluded.created_at,
+            local_revision = excluded.local_revision
           ''',
           [
             change.entityType,
@@ -444,6 +550,7 @@ class LocalDatabase {
             jsonEncode(fields),
             change.deleted ? 1 : 0,
             now,
+            localRevision,
           ],
         );
       }
@@ -461,6 +568,7 @@ class LocalDatabase {
     _database.execute('BEGIN IMMEDIATE');
     try {
       for (final change in pending) {
+        final localRevision = _nextLocalRevision();
         _applyEntityStateChange(change);
         final existing = _database.select(
           '''SELECT fields_json, deleted FROM sync_outbox
@@ -480,12 +588,16 @@ class LocalDatabase {
         }
         _database.execute(
           '''
-          INSERT INTO sync_outbox(entity_type, entity_id, fields_json, deleted, created_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO sync_outbox(
+            entity_type, entity_id, fields_json, deleted, created_at,
+            local_revision
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(entity_type, entity_id) DO UPDATE SET
             fields_json = excluded.fields_json,
             deleted = excluded.deleted,
-            created_at = excluded.created_at
+            created_at = excluded.created_at,
+            local_revision = excluded.local_revision
           ''',
           [
             change.entityType,
@@ -493,6 +605,7 @@ class LocalDatabase {
             jsonEncode(fields),
             change.deleted ? 1 : 0,
             now,
+            localRevision,
           ],
         );
       }
@@ -741,7 +854,7 @@ class LocalDatabase {
       .map(
         (row) => PendingWorkshopChange(
           outboxId: row['id'] as int,
-          version: row['created_at'] as String,
+          localRevision: row['local_revision'] as int,
           change: WorkshopEntityChange(
             entityType: row['entity_type'] as String,
             entityId: row['entity_id'] as String,
@@ -758,15 +871,33 @@ class LocalDatabase {
     Iterable<PendingWorkshopChange> changes,
   ) {
     final statement = _database.prepare(
-      'DELETE FROM sync_outbox WHERE id = ? AND created_at = ?',
+      'DELETE FROM sync_outbox WHERE id = ? AND local_revision = ?',
     );
     try {
       for (final pending in changes) {
-        statement.execute([pending.outboxId, pending.version]);
+        statement.execute([pending.outboxId, pending.localRevision]);
       }
     } finally {
       statement.close();
     }
+  }
+
+  int _nextLocalRevision() {
+    final rows = _database.select(
+      'SELECT next_revision FROM sync_local_revisions WHERE id = 1',
+    );
+    if (rows.isEmpty) {
+      _database.execute(
+        'INSERT INTO sync_local_revisions (id, next_revision) VALUES (1, 2)',
+      );
+      return 1;
+    }
+    final revision = rows.first['next_revision'] as int;
+    _database.execute(
+      'UPDATE sync_local_revisions SET next_revision = ? WHERE id = 1',
+      [revision + 1],
+    );
+    return revision;
   }
 
   int loadSyncCursor(String workspaceId) {
@@ -789,16 +920,24 @@ class LocalDatabase {
 
   Future<void> deleteAndRecreate() async {
     _database.close();
+    _closed = true;
+    _writeGeneration++;
+    _queuedWrites.clear();
     for (final suffix in const ['', '-wal', '-shm']) {
       final file = File('$path$suffix');
       if (await file.exists()) await file.delete();
     }
     _database = sqlite3.open(path);
+    _closed = false;
     _createSchema();
     await _hardenLocalPermissions(path);
   }
 
   void close() {
+    if (_closed) return;
+    _closed = true;
+    _writeGeneration++;
+    _queuedWrites.clear();
     _database.close();
     _instanceLock?.closeSync();
   }

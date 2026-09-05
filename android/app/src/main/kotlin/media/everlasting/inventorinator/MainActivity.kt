@@ -88,7 +88,9 @@ class MainActivity : FlutterActivity() {
                 }
             }
             val player = MediaPlayer.create(this, sound)
-            player.setVolume(0.78f, 0.78f)
+            val volume = (call.argument<Number>("volume")?.toFloat()?.div(100f) ?: 0.78f)
+                .coerceIn(0f, 1f)
+            player.setVolume(volume, volume)
             player.setOnCompletionListener { completed -> completed.release() }
             player.start()
             result.success(null)

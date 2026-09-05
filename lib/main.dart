@@ -108,6 +108,462 @@ class _LocationIcon extends StatelessWidget {
       const Icon(Icons.warehouse_outlined, size: 24, semanticLabel: 'Location');
 }
 
+/// A moving, localized light band for the inventory search rim. Most of the
+/// edge stays quiet so the effect reads as reflected light rather than a neon
+/// outline painted around the whole field.
+class _EdgeLightPainter extends CustomPainter {
+  const _EdgeLightPainter({
+    required this.progress,
+    required this.accent,
+    required this.light,
+    required this.focused,
+  });
+
+  final double progress;
+  final Color accent;
+  final bool light;
+  final bool focused;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 2 || size.height <= 2) return;
+    final rim = RRect.fromRectAndRadius(
+      Rect.fromLTWH(.9, .9, size.width - 1.8, size.height - 1.8),
+      const Radius.circular(18.25),
+    );
+    final quietAlpha = (light ? .42 : .50) * (focused ? 1.15 : 1);
+    canvas.drawRRect(
+      rim,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = accent.withValues(alpha: quietAlpha),
+    );
+    // The moving light is an idle affordance. Keep the focused field calm so
+    // the user's typing state is visually stable.
+    if (focused) return;
+
+    final cyan = Color.lerp(accent, const Color(0xff52d8ff), .62)!;
+    final pink = Color.lerp(accent, const Color(0xffff73c9), .64)!;
+    final green = Color.lerp(accent, const Color(0xff75e58d), .58)!;
+    final amber = Color.lerp(accent, const Color(0xffffc46b), .55)!;
+    // Keep the pools saturated enough to survive both dark and pale input
+    // surfaces; the broader blur supplies spread without a hard neon line.
+    final bandAlpha = light ? 2.2 : 2.35;
+
+    // This is intentionally not one path-following animation. Independent
+    // edge pools drift at different rates and fade at both ends, like soft
+    // reflected light around the field in the reference treatment.
+    void drawEdgePool({
+      required Offset start,
+      required Offset end,
+      required bool horizontal,
+      required double center,
+      required double width,
+      required Color first,
+      required Color second,
+      required double strength,
+    }) {
+      final startFade = math.max(0.0, center - width * 1.8);
+      final coreStart = math.max(startFade, center - width * .55);
+      final coreEnd = math.min(1.0, center + width * .25);
+      final endFade = math.min(1.0, math.max(coreEnd, center + width * 1.8));
+      final rect = Rect.fromLTRB(
+        math.min(start.dx, end.dx),
+        math.min(start.dy, end.dy),
+        math.max(start.dx, end.dx),
+        math.max(start.dy, end.dy),
+      ).inflate(1);
+      final shader = LinearGradient(
+        begin: horizontal ? const Alignment(-1, 0) : const Alignment(0, -1),
+        end: horizontal ? const Alignment(1, 0) : const Alignment(0, 1),
+        colors: [
+          Colors.transparent,
+          Colors.transparent,
+          first.withValues(alpha: bandAlpha * strength * .20),
+          second.withValues(alpha: bandAlpha * strength * .42),
+          second.withValues(alpha: bandAlpha * strength * .12),
+          Colors.transparent,
+        ],
+        stops: [0, startFade, coreStart, coreEnd, endFade, 1],
+      ).createShader(rect);
+      final glow = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 9
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10)
+        ..shader = shader;
+      canvas.drawLine(start, end, glow);
+      final core = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 1.8
+        ..shader = shader;
+      canvas.drawLine(start, end, core);
+    }
+
+    final time = progress * math.pi * 2;
+    final topCenter =
+        (.42 + .16 * math.sin(time + .6) + .045 * math.sin(time * 3 + 1.1))
+            .clamp(.12, .88);
+    final bottomCenter =
+        (.72 + .19 * math.sin(time * 2 + 2.3) + .06 * math.sin(time * 5 + .2))
+            .clamp(.12, .92);
+    final leftCenter =
+        (.28 + .18 * math.sin(time + 1.8) + .05 * math.sin(time * 4 + 2.4))
+            .clamp(.08, .92);
+    final rightCenter =
+        (.78 + .13 * math.sin(time * 3 + 4.1) + .04 * math.sin(time * 7 + .5))
+            .clamp(.10, .92);
+
+    // Keep the animated blur inside an inset rounded mask. The quiet outline
+    // above remains unmasked so it still defines the field edge cleanly.
+    canvas.save();
+    canvas.clipRRect(
+      RRect.fromRectAndRadius(
+        rim.outerRect.deflate(1.0),
+        const Radius.circular(17.25),
+      ),
+    );
+    drawEdgePool(
+      start: Offset(rim.left + 18, rim.top),
+      end: Offset(rim.right - 18, rim.top),
+      horizontal: true,
+      center: topCenter,
+      width: .26,
+      first: pink,
+      second: cyan,
+      strength: .48,
+    );
+    drawEdgePool(
+      start: Offset(rim.left + 18, rim.bottom),
+      end: Offset(rim.right - 18, rim.bottom),
+      horizontal: true,
+      center: bottomCenter,
+      width: .24,
+      first: cyan,
+      second: pink,
+      strength: 1,
+    );
+    drawEdgePool(
+      start: Offset(rim.left, rim.bottom - 18),
+      end: Offset(rim.left, rim.top + 18),
+      horizontal: false,
+      center: leftCenter,
+      width: .30,
+      first: green,
+      second: cyan,
+      strength: .60,
+    );
+    drawEdgePool(
+      start: Offset(rim.right, rim.top + 18),
+      end: Offset(rim.right, rim.bottom - 18),
+      horizontal: false,
+      center: rightCenter,
+      width: .28,
+      first: amber,
+      second: pink,
+      strength: .35,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _EdgeLightPainter oldDelegate) =>
+      progress != oldDelegate.progress ||
+      accent != oldDelegate.accent ||
+      light != oldDelegate.light ||
+      focused != oldDelegate.focused;
+}
+
+/// The inventory search gets a moving, localized edge-lit rim without adding
+/// another animated layer to the scrolling inventory.
+class _EdgeLitSearchField extends StatefulWidget {
+  const _EdgeLitSearchField({
+    this.fieldKey,
+    required this.controller,
+    required this.focusNode,
+    this.enabled = true,
+    required this.onChanged,
+    required this.hintText,
+  });
+
+  final Key? fieldKey;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+  final String hintText;
+
+  @override
+  State<_EdgeLitSearchField> createState() => _EdgeLitSearchFieldState();
+}
+
+class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _edgeAnimation = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 11),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode.addListener(_handleFocusChanged);
+    _handleFocusChanged();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EdgeLitSearchField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode.removeListener(_handleFocusChanged);
+      widget.focusNode.addListener(_handleFocusChanged);
+    }
+    _handleFocusChanged();
+  }
+
+  void _handleFocusChanged() {
+    // Infinite idle animation is intentionally disabled under widget tests so
+    // pumpAndSettle can still settle the rest of the application.
+    if (!widget.enabled ||
+        widget.focusNode.hasFocus ||
+        Platform.environment.containsKey('FLUTTER_TEST')) {
+      _edgeAnimation.stop();
+    } else {
+      _edgeAnimation.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_handleFocusChanged);
+    _edgeAnimation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<InventorinatorColors>();
+    final accent = theme.colorScheme.primary;
+    final light = theme.brightness == Brightness.light;
+    final input = palette?.input ?? theme.colorScheme.surfaceContainerLow;
+
+    final field = TextField(
+      key: widget.fieldKey,
+      controller: widget.controller,
+      focusNode: widget.focusNode,
+      onChanged: widget.onChanged,
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.search_rounded),
+        hintText: widget.hintText,
+        filled: true,
+        fillColor: input,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([_edgeAnimation, widget.focusNode]),
+      child: Padding(padding: const EdgeInsets.all(1.5), child: field),
+      builder: (context, child) => CustomPaint(
+        foregroundPainter: widget.enabled
+            ? _EdgeLightPainter(
+                progress: _edgeAnimation.value,
+                accent: accent,
+                light: light,
+                focused: widget.focusNode.hasFocus,
+              )
+            : null,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _NewItemLaserGlow extends StatefulWidget {
+  const _NewItemLaserGlow({
+    required this.enabled,
+    required this.trigger,
+    required this.child,
+  });
+
+  final bool enabled;
+  final int trigger;
+  final Widget child;
+
+  @override
+  State<_NewItemLaserGlow> createState() => _NewItemLaserGlowState();
+}
+
+class _NewItemLaserGlowState extends State<_NewItemLaserGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 5),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.enabled) _animation.forward();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NewItemLaserGlow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.trigger != oldWidget.trigger) {
+      // Each debug preview is a fresh one-shot burst.
+      if (widget.enabled) _animation.forward(from: 0);
+    }
+    if (widget.enabled == oldWidget.enabled) return;
+    if (widget.enabled) {
+      _animation.forward(from: 0);
+    } else {
+      _animation.stop();
+      _animation.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    return AnimatedBuilder(
+      animation: _animation,
+      child: widget.child,
+      builder: (context, child) => Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _NewItemLaserPainter(
+                progress: _animation.value,
+                accent: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          child!,
+        ],
+      ),
+    );
+  }
+}
+
+class _NewItemLaserPainter extends CustomPainter {
+  const _NewItemLaserPainter({required this.progress, required this.accent});
+
+  final double progress;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 4 || size.height <= 4) return;
+    const spread = 12.0;
+    final rect = Rect.fromLTWH(
+      -spread,
+      -spread,
+      size.width + (spread * 2),
+      size.height + (spread * 2),
+    );
+    final progressValue = progress.clamp(0.0, 1.0).toDouble();
+    final envelope = math.sin(math.pi * progressValue);
+    if (envelope <= .001) return;
+    // Keep the beams neutral and luminous; the active theme only provides a
+    // restrained tint instead of turning the effect into a rainbow.
+    final white = Color.lerp(Colors.white, accent, .16)!;
+    final silver = Color.lerp(const Color(0xffd8dce6), accent, .28)!;
+    final pale = Color.lerp(const Color(0xfff1f3f8), accent, .10)!;
+    final colors = [white, silver, pale, white];
+    final center = rect.center;
+    final radiusToCorner = math.sqrt(
+      math.pow(rect.width / 2, 2) + math.pow(rect.height / 2, 2),
+    );
+    const rayCount = 10;
+    final angleStep = math.pi * 2 / rayCount;
+    final rotation = progressValue * math.pi * 2;
+
+    Path beam(double angle) {
+      final far = radiusToCorner * 1.35;
+      return Path()
+        ..moveTo(center.dx, center.dy)
+        ..lineTo(
+          center.dx + math.cos(angle) * far,
+          center.dy + math.sin(angle) * far,
+        );
+    }
+
+    for (var index = 0; index < rayCount; index++) {
+      final angle = rotation + (index * angleStep);
+      final color = colors[index % colors.length];
+      final path = beam(angle);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 28
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24)
+          ..color = color.withValues(alpha: .20 * envelope),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 10
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 11)
+          ..color = color.withValues(alpha: .34 * envelope),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 2.2
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2)
+          ..color = color.withValues(alpha: .34 * envelope),
+      );
+    }
+    canvas.drawCircle(
+      center,
+      radiusToCorner * .34,
+      Paint()
+        ..shader =
+            RadialGradient(
+              colors: [
+                Colors.white.withValues(alpha: .14 * envelope),
+                accent.withValues(alpha: .06 * envelope),
+                Colors.transparent,
+              ],
+            ).createShader(
+              Rect.fromCircle(center: center, radius: radiusToCorner * .34),
+            ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _NewItemLaserPainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.accent != accent;
+}
+
 Color _themeCanvas(BuildContext context) =>
     Theme.of(context).extension<InventorinatorColors>()?.canvas ??
     _appCanvasColor;
@@ -435,6 +891,437 @@ enum InventoryType {
   custom,
 }
 
+class _InventoryMetrics {
+  const _InventoryMetrics({
+    required this.itemRecords,
+    required this.totalUnits,
+    required this.filamentSpools,
+    required this.lowStockRecords,
+    required this.topFilamentMaterials,
+    required this.topFilamentColors,
+    required this.topFilamentBrands,
+    required this.filamentColorCount,
+    required this.filamentMaterialCount,
+    required this.filamentBrandCount,
+  });
+
+  /// Number of inventory rows, i.e. distinct items/stacks (not units).
+  final int itemRecords;
+
+  /// Sum of [InventoryItem.quantity] across every non-archived item.
+  final double totalUnits;
+
+  /// Sum of [InventoryItem.quantity] across non-archived filament items;
+  /// a stack of 5 spools in one row counts as 5, not 1.
+  final double filamentSpools;
+
+  final int lowStockRecords;
+
+  /// Top filament material buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentMaterials;
+
+  /// Top filament color buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentColors;
+
+  /// Top filament brand buckets shown in the metrics panel.
+  final List<_MetricBucket> topFilamentBrands;
+
+  /// Distinct in-stock filament colors/materials/brands (not capped, unlike
+  /// the "top" lists above).
+  final int filamentColorCount;
+  final int filamentMaterialCount;
+  final int filamentBrandCount;
+}
+
+class _MetricBucket {
+  const _MetricBucket({
+    required this.label,
+    required this.value,
+    required this.filterValue,
+  });
+
+  final String label;
+  final double value;
+  final String filterValue;
+}
+
+class _MetricStat {
+  const _MetricStat(this.label, this.value, this.icon);
+  final String label;
+  final String value;
+  final IconData icon;
+}
+
+class _JewelPanel extends StatelessWidget {
+  const _JewelPanel({
+    required this.title,
+    required this.palette,
+    required this.child,
+    this.trailing,
+  });
+
+  final String title;
+  final InventorinatorColors palette;
+  final Widget child;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: palette.panel,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: palette.outlineVariant),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  letterSpacing: .3,
+                ),
+              ),
+            ),
+            ?trailing,
+          ],
+        ),
+        const SizedBox(height: 10),
+        child,
+      ],
+    ),
+  );
+}
+
+/// A glowing filled line chart in the style of a "jewel" sparkline: a
+/// gradient-filled area under a blurred, luminous stroke, with the peak
+/// point called out beneath the chart.
+class _JewelAreaChart extends StatelessWidget {
+  const _JewelAreaChart({required this.series, required this.color});
+
+  final List<({String label, double value})> series;
+  final Color color;
+  static const double _height = 130;
+
+  @override
+  Widget build(BuildContext context) {
+    if (series.length < 2) {
+      return const SizedBox(
+        height: _height,
+        child: Center(
+          child: Text(
+            'Not enough history yet.',
+            style: TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    final peak = series.reduce((a, b) => a.value >= b.value ? a : b);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: _height,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _JewelAreaChartPainter(
+              values: [for (final point in series) point.value],
+              color: color,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (final point in series)
+              Text(
+                point.label,
+                style: const TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.trending_up_rounded, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              'Peak ${_formatBomQuantity(peak.value)} units in ${peak.label}',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _JewelAreaChartPainter extends CustomPainter {
+  _JewelAreaChartPainter({required this.values, required this.color});
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final maxValue = values.reduce(math.max);
+    final minValue = math.min(0.0, values.reduce(math.min));
+    final range = (maxValue - minValue).abs() < 1e-6
+        ? 1.0
+        : maxValue - minValue;
+    final stepX = size.width / (values.length - 1);
+
+    Offset pointAt(int i) {
+      final normalized = (values[i] - minValue) / range;
+      return Offset(stepX * i, size.height - normalized * size.height);
+    }
+
+    final linePath = Path()..moveTo(pointAt(0).dx, pointAt(0).dy);
+    for (var i = 0; i < values.length - 1; i++) {
+      final current = pointAt(i);
+      final next = pointAt(i + 1);
+      final controlX = (current.dx + next.dx) / 2;
+      linePath.cubicTo(
+        controlX,
+        current.dy,
+        controlX,
+        next.dy,
+        next.dx,
+        next.dy,
+      );
+    }
+
+    final fillPath = Path.from(linePath)
+      ..lineTo(pointAt(values.length - 1).dx, size.height)
+      ..lineTo(pointAt(0).dx, size.height)
+      ..close();
+
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [color.withValues(alpha: .38), color.withValues(alpha: 0)],
+        ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
+    );
+
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = color.withValues(alpha: .55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round,
+    );
+
+    final peakIndex = values.indexOf(maxValue);
+    final peakPoint = pointAt(peakIndex);
+    canvas.drawCircle(
+      peakPoint,
+      7,
+      Paint()
+        ..color = color.withValues(alpha: .3)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    canvas.drawCircle(peakPoint, 4, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      peakPoint,
+      4,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _JewelAreaChartPainter oldDelegate) =>
+      !identical(oldDelegate.values, values) || oldDelegate.color != color;
+}
+
+/// Rotates [base]'s hue by [degrees], keeping its saturation and lightness,
+/// so a family of related series colors can be derived from one accent.
+Color _hueRotate(Color base, double degrees) {
+  final hsl = HSLColor.fromColor(base);
+  return hsl.withHue((hsl.hue + degrees) % 360).toColor();
+}
+
+/// Several [_JewelAreaChart]-style trends overlaid on shared axes, one line
+/// per item type, each colored by rotating the hue of a shared base color so
+/// the series read as one family rather than clashing.
+class _JewelMultiAreaChart extends StatelessWidget {
+  const _JewelMultiAreaChart({required this.series, required this.monthLabels});
+
+  final List<({String label, Color color, List<double> values})> series;
+  final List<String> monthLabels;
+  static const double _height = 130;
+
+  @override
+  Widget build(BuildContext context) {
+    if (series.isEmpty || monthLabels.length < 2) {
+      return const SizedBox(
+        height: _height,
+        child: Center(
+          child: Text(
+            'No items yet.',
+            style: TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: _height,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _JewelMultiAreaChartPainter(series: series),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (final label in monthLabels)
+              Text(
+                label,
+                style: const TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 12,
+          runSpacing: 6,
+          children: [
+            for (final line in series)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: line.color,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: line.color.withValues(alpha: .6),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${line.label} · ${_formatBomQuantity(line.values.last)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _JewelMultiAreaChartPainter extends CustomPainter {
+  _JewelMultiAreaChartPainter({required this.series});
+
+  final List<({String label, Color color, List<double> values})> series;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final allValues = [for (final line in series) ...line.values];
+    final maxValue = allValues.reduce(math.max);
+    final minValue = math.min(0.0, allValues.reduce(math.min));
+    final range = (maxValue - minValue).abs() < 1e-6
+        ? 1.0
+        : maxValue - minValue;
+    final pointCount = series.first.values.length;
+    final stepX = size.width / (pointCount - 1);
+
+    Offset pointAt(List<double> values, int i) {
+      final normalized = (values[i] - minValue) / range;
+      return Offset(stepX * i, size.height - normalized * size.height);
+    }
+
+    Path lineFor(List<double> values) {
+      final path = Path()..moveTo(pointAt(values, 0).dx, pointAt(values, 0).dy);
+      for (var i = 0; i < values.length - 1; i++) {
+        final current = pointAt(values, i);
+        final next = pointAt(values, i + 1);
+        final controlX = (current.dx + next.dx) / 2;
+        path.cubicTo(controlX, current.dy, controlX, next.dy, next.dx, next.dy);
+      }
+      return path;
+    }
+
+    for (final line in series) {
+      final path = lineFor(line.values);
+      final fillPath = Path.from(path)
+        ..lineTo(pointAt(line.values, line.values.length - 1).dx, size.height)
+        ..lineTo(pointAt(line.values, 0).dx, size.height)
+        ..close();
+      canvas.drawPath(
+        fillPath,
+        Paint()..color = line.color.withValues(alpha: .1),
+      );
+    }
+
+    for (final line in series) {
+      final path = lineFor(line.values);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = line.color.withValues(alpha: .5)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = line.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..strokeCap = StrokeCap.round,
+      );
+      final endPoint = pointAt(line.values, line.values.length - 1);
+      canvas.drawCircle(endPoint, 3.5, Paint()..color = line.color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _JewelMultiAreaChartPainter oldDelegate) =>
+      !identical(oldDelegate.series, series);
+}
+
 extension InventoryTypeContext on InventoryType {
   bool get supportsDrying => this == InventoryType.filament;
   bool get supportsPrinting =>
@@ -442,15 +1329,71 @@ extension InventoryTypeContext on InventoryType {
   bool get supportsFilamentLifecycle => this == InventoryType.filament;
 }
 
-enum InventorySort { type, quantity, age, cost, dryingTime, moistureRemaining }
+enum InventorySort {
+  type,
+  quantity,
+  addedDate,
+  cost,
+  dryingTime,
+  moistureRemaining,
+}
+
+bool defaultInventorySortAscending(InventorySort value) => switch (value) {
+  InventorySort.type => true,
+  InventorySort.quantity => false,
+  InventorySort.addedDate => false,
+  InventorySort.cost => false,
+  InventorySort.dryingTime => false,
+  InventorySort.moistureRemaining => true,
+};
 
 enum CatalogViewFilter { kits, builds, machines, printers, tools }
 
 enum FilamentStatus { ready, deployed, drying, queuedForDrying }
 
+enum SpoolPrintOutcome { successful, failed }
+
+/// Immutable usage entry for one filament spool. Amounts are always grams;
+/// keeping each print as its own record preserves a correction-friendly audit
+/// trail and lets the UI report successful material separately from waste.
+class SpoolUsageRecord {
+  const SpoolUsageRecord({
+    required this.id,
+    required this.spoolId,
+    required this.recordedAt,
+    required this.gramsUsed,
+    this.gramsWaste = 0,
+    required this.outcome,
+    this.buildId,
+    this.project = '',
+    this.wasteReason = '',
+    this.notes = '',
+  });
+
+  final String id;
+  final String spoolId;
+  final DateTime recordedAt;
+  final double gramsUsed;
+  final double gramsWaste;
+  final SpoolPrintOutcome outcome;
+  final String? buildId;
+  final String project;
+  final String wasteReason;
+  final String notes;
+
+  double get totalGrams => gramsUsed + gramsWaste;
+}
+
 enum ArchiveDisposition { archived, depleted, destroyed }
 
 enum ProductSearchProvider { google, bing, duckDuckGo, brave, custom }
+
+enum AlertSoundProfile { workshop, system }
+
+String _alertSoundProfileLabel(AlertSoundProfile profile) => switch (profile) {
+  AlertSoundProfile.workshop => 'Workshop chimes',
+  AlertSoundProfile.system => 'System alert',
+};
 
 enum MoistureTimeUnit { hours, days }
 
@@ -472,7 +1415,14 @@ enum ItemAction {
   delete,
 }
 
-enum DebugCardEffect { remoteQuantity, lowStock, moistureThreshold }
+enum DebugCardEffect {
+  remoteQuantity,
+  lowStock,
+  moistureThreshold,
+  newItemGlow,
+}
+
+enum LocalSaveFeedback { idle, saving, saved }
 
 class VendorRecord {
   const VendorRecord({
@@ -1773,12 +2723,144 @@ class AdditionHistoryEntry {
   );
 }
 
+/// A single filament style tag (e.g. Matte, Glitter, Coextruded) plus
+/// whatever extra data that style needs. Most styles carry no extra data;
+/// [carbonFiberForm] only applies to `carbonFiber`, and [colors] only
+/// applies to `gradient`/`coextruded` (ordered, one hex string per strand).
+class FilamentStyleEntry {
+  const FilamentStyleEntry({
+    required this.style,
+    this.carbonFiberForm,
+    this.colors = const [],
+    this.gradientName = '',
+    this.colorNames = const [],
+  });
+
+  final String style;
+  final String? carbonFiberForm;
+  final List<String> colors;
+  final String gradientName;
+  // One name per entry in [colors], for `coextruded` strands (e.g. "Black",
+  // "White"). Not used by `gradient`, which has a single [gradientName].
+  final List<String> colorNames;
+
+  String colorNameAt(int index) =>
+      index < colorNames.length ? colorNames[index] : '';
+
+  FilamentStyleEntry copyWith({
+    String? style,
+    String? carbonFiberForm,
+    List<String>? colors,
+    String? gradientName,
+    List<String>? colorNames,
+  }) => FilamentStyleEntry(
+    style: style ?? this.style,
+    carbonFiberForm: carbonFiberForm ?? this.carbonFiberForm,
+    colors: colors ?? this.colors,
+    gradientName: gradientName ?? this.gradientName,
+    colorNames: colorNames ?? this.colorNames,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'style': style,
+    if (carbonFiberForm != null) 'carbonFiberForm': carbonFiberForm,
+    if (colors.isNotEmpty) 'colors': colors,
+    if (gradientName.isNotEmpty) 'gradientName': gradientName,
+    if (colorNames.any((name) => name.isNotEmpty)) 'colorNames': colorNames,
+  };
+
+  factory FilamentStyleEntry.fromJson(Map<String, dynamic> json) =>
+      FilamentStyleEntry(
+        style: json['style'] as String? ?? '',
+        carbonFiberForm: json['carbonFiberForm'] as String?,
+        colors:
+            (json['colors'] as List<dynamic>?)
+                ?.map((value) => value as String)
+                .toList() ??
+            const [],
+        gradientName: json['gradientName'] as String? ?? '',
+        colorNames:
+            (json['colorNames'] as List<dynamic>?)
+                ?.map((value) => value as String)
+                .toList() ??
+            const [],
+      );
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! FilamentStyleEntry ||
+        other.style != style ||
+        other.carbonFiberForm != carbonFiberForm ||
+        other.gradientName != gradientName ||
+        other.colors.length != colors.length ||
+        other.colorNames.length != colorNames.length) {
+      return false;
+    }
+    for (var i = 0; i < colors.length; i++) {
+      if (other.colors[i] != colors[i]) return false;
+    }
+    for (var i = 0; i < colorNames.length; i++) {
+      if (other.colorNames[i] != colorNames[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    style,
+    carbonFiberForm,
+    gradientName,
+    Object.hashAll(colors),
+    Object.hashAll(colorNames),
+  );
+}
+
+/// The fixed catalog of selectable filament styles and what extra input
+/// each one needs in the editor.
+enum FilamentStyleInput { none, carbonFiberForm, colors }
+
+class FilamentStyleOption {
+  const FilamentStyleOption(this.key, this.label, this.input);
+  final String key;
+  final String label;
+  final FilamentStyleInput input;
+}
+
+const filamentStyleOptions = <FilamentStyleOption>[
+  FilamentStyleOption('flat', 'Flat', FilamentStyleInput.none),
+  FilamentStyleOption('matte', 'Matte', FilamentStyleInput.none),
+  FilamentStyleOption('silk', 'Silk', FilamentStyleInput.none),
+  FilamentStyleOption('galaxy', 'Galaxy', FilamentStyleInput.none),
+  FilamentStyleOption('glitter', 'Glitter', FilamentStyleInput.none),
+  FilamentStyleOption('glow', 'Glow', FilamentStyleInput.none),
+  FilamentStyleOption(
+    'carbonFiber',
+    'Carbon Fiber',
+    FilamentStyleInput.carbonFiberForm,
+  ),
+  FilamentStyleOption('glassFiber', 'Glass Fiber', FilamentStyleInput.none),
+  FilamentStyleOption('gradient', 'Gradient', FilamentStyleInput.colors),
+  FilamentStyleOption('coextruded', 'Coextruded', FilamentStyleInput.colors),
+];
+
+String filamentStyleLabel(String key) =>
+    filamentStyleOptions
+        .where((option) => option.key == key)
+        .firstOrNull
+        ?.label ??
+    key;
+
+const _maxFilamentStyleEntries = 2;
+const _maxFilamentStyleColors = 4;
+
 class InventoryItem {
   const InventoryItem({
     required this.id,
     required this.name,
     required this.type,
     required this.compatibility,
+    this.purposeTags = const [],
+    this.styleEntries = const [],
     required this.added,
     required this.cost,
     required this.color,
@@ -1835,6 +2917,8 @@ class InventoryItem {
   final String name;
   final InventoryType type;
   final List<String> compatibility;
+  final List<String> purposeTags;
+  final List<FilamentStyleEntry> styleEntries;
   final DateTime added;
   final double cost;
   final Color color;
@@ -1892,6 +2976,8 @@ class InventoryItem {
     String? name,
     InventoryType? type,
     List<String>? compatibility,
+    List<String>? purposeTags,
+    List<FilamentStyleEntry>? styleEntries,
     DateTime? added,
     double? cost,
     Color? color,
@@ -1953,6 +3039,10 @@ class InventoryItem {
     name: name ?? this.name,
     type: type ?? this.type,
     compatibility: compatibility ?? this.compatibility,
+    purposeTags: clearFilamentData ? const [] : purposeTags ?? this.purposeTags,
+    styleEntries: clearFilamentData
+        ? const []
+        : styleEntries ?? this.styleEntries,
     added: added ?? this.added,
     cost: cost ?? this.cost,
     color: color ?? this.color,
@@ -2154,6 +3244,99 @@ Color? _itemColorSwatch(String name) {
     if (normalized.contains(entry.key.toLowerCase())) return entry.value;
   }
   return null;
+}
+
+List<Color>? _itemGradientColors(InventoryItem item) {
+  final entry = item.styleEntries
+      .where((entry) => entry.style == 'gradient' && entry.colors.length >= 2)
+      .firstOrNull;
+  if (entry == null) return null;
+  return [
+    for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff8c929f),
+  ];
+}
+
+String _itemGradientName(InventoryItem item) =>
+    item.styleEntries
+        .where((entry) => entry.style == 'gradient')
+        .firstOrNull
+        ?.gradientName
+        .trim() ??
+    '';
+
+List<Color>? _itemCoextrudedColors(InventoryItem item) {
+  final entry = item.styleEntries
+      .where((entry) => entry.style == 'coextruded' && entry.colors.length >= 2)
+      .firstOrNull;
+  if (entry == null) return null;
+  return [
+    for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff8c929f),
+  ];
+}
+
+/// A short "Black + White" style summary of named coextruded strands, for a
+/// hover tooltip. Empty if no strand has been named.
+String _itemCoextrudedName(InventoryItem item) {
+  final entry = item.styleEntries
+      .where((entry) => entry.style == 'coextruded')
+      .firstOrNull;
+  if (entry == null) return '';
+  final names = [
+    for (var i = 0; i < entry.colors.length; i++) entry.colorNameAt(i).trim(),
+  ].where((name) => name.isNotEmpty);
+  return names.join(' + ');
+}
+
+/// A circular chicklet split into equal wedges, one per strand color, for
+/// coextruded filament. Distinct from the gradient's blended strip since
+/// coextruded strands are discrete materials, not a blend.
+class _PieColorChicklet extends StatelessWidget {
+  const _PieColorChicklet({
+    super.key,
+    required this.colors,
+    required this.size,
+  });
+  final List<Color> colors;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CustomPaint(painter: _PieColorPainter(colors)),
+  );
+}
+
+class _PieColorPainter extends CustomPainter {
+  const _PieColorPainter(this.colors);
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2;
+    final sweep = 2 * math.pi / colors.length;
+    for (var i = 0; i < colors.length; i++) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -math.pi / 2 + i * sweep,
+        sweep,
+        true,
+        Paint()..color = colors[i],
+      );
+    }
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = const Color(0xff5d5970)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PieColorPainter oldDelegate) =>
+      !listEquals(oldDelegate.colors, colors);
 }
 
 class ItemColorPickerDialog extends StatefulWidget {
@@ -3122,6 +4305,7 @@ typedef WorkshopState = ({
   List<ShoppingListEntry> shoppingList,
   List<AuditEntry> auditLog,
   List<AdditionHistoryEntry> additionHistory,
+  List<SpoolUsageRecord> spoolUsage,
   int historyLimit,
 });
 
@@ -3193,6 +4377,8 @@ Map<String, dynamic> _inventoryItemJson(
   'name': item.name,
   'type': item.type.name,
   'compatibility': item.compatibility,
+  'purposeTags': item.purposeTags,
+  'styleEntries': item.styleEntries.map((entry) => entry.toJson()).toList(),
   'added': item.added.toIso8601String(),
   'cost': item.cost,
   'color': item.color.toARGB32(),
@@ -3267,6 +4453,7 @@ String encodeWorkshopState({
   List<ShoppingListEntry> shoppingList = const [],
   List<AuditEntry> auditLog = const [],
   List<AdditionHistoryEntry> additionHistory = const [],
+  List<SpoolUsageRecord> spoolUsage = const [],
   int historyLimit = 100,
 }) => jsonEncode({
   'schemaVersion': 8,
@@ -3465,6 +4652,22 @@ String encodeWorkshopState({
         },
       )
       .toList(),
+  'spoolUsage': spoolUsage
+      .map(
+        (entry) => {
+          'id': entry.id,
+          'spoolId': entry.spoolId,
+          'recordedAt': entry.recordedAt.toIso8601String(),
+          'gramsUsed': entry.gramsUsed,
+          'gramsWaste': entry.gramsWaste,
+          'outcome': entry.outcome.name,
+          if (entry.buildId != null) 'buildId': entry.buildId,
+          'project': entry.project,
+          'wasteReason': entry.wasteReason,
+          'notes': entry.notes,
+        },
+      )
+      .toList(),
   'historyLimit': historyLimit,
 });
 
@@ -3507,6 +4710,9 @@ Map<String, dynamic> encodeWorkshopEntityPayload(
       additionHistory: entityType == 'additionHistory'
           ? [record as AdditionHistoryEntry]
           : const [],
+      spoolUsage: entityType == 'spoolUsage'
+          ? [record as SpoolUsageRecord]
+          : const [],
     ),
   ) as Map<String, dynamic>;
   return Map<String, dynamic>.from(
@@ -3530,6 +4736,15 @@ WorkshopState? decodeWorkshopState(String? source) {
               item['name'] as String,
             ),
             compatibility: (item['compatibility'] as List).cast<String>(),
+            purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
+                .cast<String>(),
+            styleEntries: (item['styleEntries'] as List<dynamic>? ?? const [])
+                .map(
+                  (entry) => FilamentStyleEntry.fromJson(
+                    (entry as Map).cast<String, dynamic>(),
+                  ),
+                )
+                .toList(),
             added: DateTime.parse(item['added'] as String),
             cost: (item['cost'] as num).toDouble(),
             color: Color(item['color'] as int),
@@ -3936,6 +5151,25 @@ WorkshopState? decodeWorkshopState(String? source) {
                 ),
               )
               .toList();
+    final spoolUsage = (root['spoolUsage'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(
+          (entry) => SpoolUsageRecord(
+            id: entry['id'] as String,
+            spoolId: entry['spoolId'] as String,
+            recordedAt: DateTime.parse(entry['recordedAt'] as String),
+            gramsUsed: (entry['gramsUsed'] as num?)?.toDouble() ?? 0,
+            gramsWaste: (entry['gramsWaste'] as num?)?.toDouble() ?? 0,
+            outcome: SpoolPrintOutcome.values.byName(
+              entry['outcome'] as String? ?? 'successful',
+            ),
+            buildId: entry['buildId'] as String?,
+            project: entry['project'] as String? ?? '',
+            wasteReason: entry['wasteReason'] as String? ?? '',
+            notes: entry['notes'] as String? ?? '',
+          ),
+        )
+        .toList();
     return (
       inventory: inventory,
       vendors: vendors,
@@ -3957,6 +5191,7 @@ WorkshopState? decodeWorkshopState(String? source) {
       shoppingList: shoppingList,
       auditLog: auditLog,
       additionHistory: additionHistory,
+      spoolUsage: spoolUsage,
       historyLimit: root['historyLimit'] as int? ?? 100,
     );
   } catch (exception) {
@@ -4062,12 +5297,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? [palette.flash, palette.flashDark]
         : _hovered && _hoverPhase == _GlassHoverPhase.purple || selected
         ? [palette.base, palette.container]
-        : light
-        ? [
-            Colors.white.withValues(alpha: .86),
-            palette.container.withValues(alpha: .3),
-          ]
-        : [const Color(0x29ffffff), palette.base.withValues(alpha: .12)];
+        : themedGlassRestingColors(palette, light: light);
     final rim = disabled
         ? light
               ? palette.outlineVariant.withValues(alpha: .58)
@@ -4076,7 +5306,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? palette.rim
         : light
         ? palette.outlineVariant
-        : const Color(0x38ebe6ff);
+        : palette.outline.withValues(alpha: .72);
     final inset = disabled
         ? light
               ? Colors.white.withValues(alpha: .28)
@@ -4087,7 +5317,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? palette.rim.withValues(alpha: .42)
         : light
         ? Colors.white.withValues(alpha: .92)
-        : const Color(0x29ffffff);
+        : palette.accent.withValues(alpha: .18);
     final radius = widget.joined
         ? BorderRadius.zero
         : BorderRadius.circular(10);
@@ -4142,6 +5372,19 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
   }
 }
 
+List<Color> themedGlassRestingColors(
+  InventorinatorColors palette, {
+  required bool light,
+}) => light
+    ? [
+        Color.lerp(Colors.white, palette.base, .18)!,
+        Color.lerp(Colors.white, palette.container, .28)!,
+      ]
+    : [
+        palette.base.withValues(alpha: .34),
+        palette.container.withValues(alpha: .24),
+      ];
+
 class _GlassFilterChip extends StatefulWidget {
   const _GlassFilterChip({
     super.key,
@@ -4155,6 +5398,10 @@ class _GlassFilterChip extends StatefulWidget {
   @override
   State<_GlassFilterChip> createState() => _GlassFilterChipState();
 }
+
+// Keep square inventory actions (sort direction and zero-quantity visibility)
+// on the same 48px control rhythm as the rest of the header.
+const double _inventorySquareControlSize = 48;
 
 class _GlassFilterChipState extends State<_GlassFilterChip> {
   bool hovered = false;
@@ -4340,10 +5587,15 @@ class InventorinatorApp extends StatefulWidget {
     this.database,
     this.persistedState,
     this.filamentColorsClient,
+    this.supabaseHttpClient,
   });
   final LocalDatabase? database;
   final String? persistedState;
   final FilamentColorsClient? filamentColorsClient;
+  // Test-only injection point for Remote Sync's HTTP client, so a test can
+  // control timing/ordering of Supabase responses. Null in production, which
+  // leaves SupabaseSyncService's own default (a fresh http.Client()) intact.
+  final http.Client? supabaseHttpClient;
 
   @override
   State<InventorinatorApp> createState() => _InventorinatorAppState();
@@ -4692,6 +5944,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         database: widget.database,
         persistedState: widget.persistedState,
         filamentColorsClient: widget.filamentColorsClient,
+        supabaseHttpClient: widget.supabaseHttpClient,
         colorTheme: colorTheme,
         brightnessMode: brightnessMode,
         customThemeColor: customThemeColor,
@@ -4913,6 +6166,7 @@ class InventoryHome extends StatefulWidget {
     this.database,
     this.persistedState,
     this.filamentColorsClient,
+    this.supabaseHttpClient,
     this.colorTheme = AppColorTheme.darkPurple,
     this.brightnessMode = AppBrightnessMode.dark,
     this.customThemeColor = const Color(0xff8e75ff),
@@ -4923,6 +6177,7 @@ class InventoryHome extends StatefulWidget {
   final LocalDatabase? database;
   final String? persistedState;
   final FilamentColorsClient? filamentColorsClient;
+  final http.Client? supabaseHttpClient;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
   final Color customThemeColor;
@@ -4956,15 +6211,28 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final List<ShoppingListEntry> shoppingList;
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
+  late final List<SpoolUsageRecord> spoolUsage;
   late int historyLimit;
+  late bool alertSoundsEnabled;
+  late bool lowStockAlertsEnabled;
   late bool syncChimeEnabled;
   late bool dryingCompleteChimeEnabled;
   late bool moistureAlertChimeEnabled;
+  late int alertSoundVolumePercent;
+  late int alertSoundRecurrenceSeconds;
+  late AlertSoundProfile alertSoundProfile;
+  late bool cardEffectsEnabled;
+  late bool lowStockEffectsEnabled;
+  late bool moistureEffectsEnabled;
+  late bool remoteSyncEffectsEnabled;
+  late bool searchGlowEnabled;
+  late bool newItemGlowEnabled;
   late int animationDurationPercent;
   late int animationRecurrenceSeconds;
   late bool photoCardsEnabled;
   late CustomIconAnimationMode customIconAnimationMode;
   late final Set<String> _moistureAlertChimedCycles;
+  final Map<String, DateTime> _lastMoistureAlertChimeAt = {};
   late final Set<String> _readInventoryAlertKeys;
   late String deviceName;
   late String deviceId;
@@ -4977,6 +6245,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   InventoryType? type;
   String? customTypeFilterId;
   String? itemColorFilter;
+  String? filamentMaterialFilter;
+  String? filamentBrandFilter;
   final TextEditingController inventorySearchController =
       TextEditingController();
   final FocusNode inventorySearchFocusNode = FocusNode(
@@ -4987,9 +6257,13 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Set<String> selectedKitIds = {};
   final Set<String> selectedMachineIds = {};
   InventorySort sort = InventorySort.type;
+  bool sortAscending = true;
   static const _pageSizes = [12, 25, 100, 250, 1000];
   static const _minimumCardSizePercent = 75.0;
   static const _maximumCardSizePercent = 150.0;
+  // Thumbnail backfills can make a single changed-record patch tens of KiB.
+  // Keep remote transactions short enough for conservative PostgREST limits.
+  static const _syncUploadBatchSize = 1;
   final _pageSizeThumbShape = _GlassSliderThumbShape();
   final _cardSizeThumbShape = _GlassSliderThumbShape();
   final ValueNotifier<double> _pageSizeSliderValue = ValueNotifier(0);
@@ -5009,8 +6283,18 @@ class _InventoryHomeState extends State<InventoryHome> {
       ExpansibleController();
   final ExpansibleController colorFilterExpansionController =
       ExpansibleController();
+  final ExpansibleController metricsExpansionController =
+      ExpansibleController();
   bool typePanelExpanded = false;
   bool colorPanelExpanded = false;
+  bool metricsPanelExpanded = false;
+
+  /// Type keys (see [_inventoryTypeDefinitionKey]) excluded from the
+  /// metrics panel's stats and charts. Empty means every type is tracked.
+  Set<String> metricsUntrackedTypeKeys = {};
+  bool metricsUnifiedGrowth = false;
+  String metricsChartDimension = 'type';
+  bool metricsFilamentBreakdownExpanded = false;
   Timer? _syncDebounce;
   Timer? _deferredAutoSync;
   Timer? _syncPoll;
@@ -5019,7 +6303,13 @@ class _InventoryHomeState extends State<InventoryHome> {
   int _localStateRevision = 0;
   int _lastSyncedLocalRevision = 0;
   bool _syncRequestedWhileBusy = false;
+  final ValueNotifier<bool> _syncActivity = ValueNotifier(false);
+  final ValueNotifier<LocalSaveFeedback> _localSaveFeedback = ValueNotifier(
+    LocalSaveFeedback.idle,
+  );
+  Timer? _localSaveFeedbackTimer;
   bool _thumbnailBackfillRunning = false;
+  Timer? _thumbnailBackfillStartTimer;
   Timer? _clockTick;
   bool _syncing = false;
   bool _autoSyncPausedForAuthentication = false;
@@ -5030,6 +6320,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Map<String, int> _remoteQuantityAnimationVersions = {};
   final Map<String, int> _lowStockAnimationVersions = {};
   final Map<String, int> _moistureAnimationVersions = {};
+  int _newItemGlowVersion = 0;
+  String? _newItemGlowItemId;
   final Set<String> _moistureAnimationCycles = {};
   static final RegExp _searchNormalizationPattern = RegExp(r'[^a-z0-9]');
   int _searchDataRevision = 0;
@@ -5117,6 +6409,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     typeDepletionSettings = {...?restored?.typeDepletionSettings};
     typeStatusSettings = {...?restored?.typeStatusSettings};
     deletedTypeKeys = {...?restored?.deletedTypeKeys};
+    _restoreInventoryTypeFilter();
     products = restored?.products ?? [...starterProducts];
     machineTypes = restored?.machineTypes ?? [];
     machines = restored?.machines ?? [];
@@ -5130,12 +6423,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     auditLog = restored?.auditLog ?? [];
     additionHistory =
-        restored?.additionHistory ??
+      restored?.additionHistory ??
         (firstLaunch
             ? <AdditionHistoryEntry>[]
             : inventory.map(AdditionHistoryEntry.fromItem).toList());
+    spoolUsage = restored?.spoolUsage ?? [];
     historyLimit = restored?.historyLimit ?? 100;
     final initializedKitSections = _initializeKitSections();
+    alertSoundsEnabled =
+        widget.database?.loadBoolPreference(
+          'alert_sounds_enabled',
+          fallback: true,
+        ) ??
+        true;
+    lowStockAlertsEnabled =
+        widget.database?.loadBoolPreference(
+          'low_stock_alerts_enabled',
+          fallback: true,
+        ) ??
+        true;
     syncChimeEnabled =
         widget.database?.loadBoolPreference(
           'sync_chime_enabled',
@@ -5154,6 +6460,87 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: true,
         ) ??
         true;
+    alertSoundVolumePercent =
+        (int.tryParse(
+                  widget.database?.loadStringPreference(
+                        'alert_sound_volume_percent',
+                        fallback: '78',
+                      ) ??
+                      '78',
+                ) ??
+                78)
+            .clamp(0, 100);
+    final savedSoundRecurrenceSeconds = int.tryParse(
+      widget.database?.loadStringPreference(
+            'alert_sound_recurrence_seconds',
+            fallback: '0',
+          ) ??
+          '0',
+    );
+    alertSoundRecurrenceSeconds =
+        const [0, 3, 5, 10, 30].contains(savedSoundRecurrenceSeconds)
+        ? savedSoundRecurrenceSeconds!
+        : 0;
+    final savedSoundProfile = widget.database?.loadStringPreference(
+      'alert_sound_profile',
+      fallback: AlertSoundProfile.workshop.name,
+    );
+    alertSoundProfile = AlertSoundProfile.values.firstWhere(
+      (profile) => profile.name == savedSoundProfile,
+      orElse: () => AlertSoundProfile.workshop,
+    );
+    cardEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'card_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    lowStockEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'low_stock_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    moistureEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'moisture_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    remoteSyncEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'remote_sync_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    searchGlowEnabled =
+        widget.database?.loadBoolPreference(
+          'search_glow_enabled',
+          fallback: true,
+        ) ??
+        true;
+    newItemGlowEnabled =
+        widget.database?.loadBoolPreference(
+          'new_item_glow_enabled',
+          fallback: true,
+        ) ??
+        true;
+    final savedSortName = widget.database?.loadStringPreference(
+      'inventory_sort',
+      fallback: InventorySort.type.name,
+    );
+    sort = savedSortName == 'age'
+        ? InventorySort.addedDate
+        : InventorySort.values
+                  .where((value) => value.name == savedSortName)
+                  .firstOrNull ??
+              InventorySort.type;
+    sortAscending =
+        widget.database?.loadBoolPreference(
+          'inventory_sort_ascending',
+          fallback: defaultInventorySortAscending(sort),
+        ) ??
+        defaultInventorySortAscending(sort);
     cardSizePercent =
         (double.tryParse(
                   widget.database?.loadStringPreference(
@@ -5198,6 +6585,37 @@ class _InventoryHomeState extends State<InventoryHome> {
     hideZeroQuantityItems =
         widget.database?.loadBoolPreference(
           'hide_zero_quantity_items',
+          fallback: false,
+        ) ??
+        false;
+    metricsPanelExpanded =
+        widget.database?.loadBoolPreference(
+          'metrics_panel_expanded',
+          fallback: false,
+        ) ??
+        false;
+    metricsUntrackedTypeKeys =
+        widget.database
+            ?.loadStringPreference('metrics_untracked_types', fallback: '')
+            .split(',')
+            .where((key) => key.isNotEmpty)
+            .toSet() ??
+        {};
+    metricsUnifiedGrowth =
+        widget.database?.loadBoolPreference(
+          'metrics_unified_growth',
+          fallback: false,
+        ) ??
+        false;
+    metricsChartDimension =
+        widget.database?.loadStringPreference(
+          'metrics_chart_dimension',
+          fallback: 'type',
+        ) ??
+        'type';
+    metricsFilamentBreakdownExpanded =
+        widget.database?.loadBoolPreference(
+          'metrics_filament_breakdown_expanded',
           fallback: false,
         ) ??
         false;
@@ -5269,7 +6687,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       (_) => _advanceDryingTimers(),
     );
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_backfillInventoryThumbnails()),
+      (_) => unawaited(_startThumbnailBackfillWhenIdle()),
     );
     if (initializedDryingTimers ||
         initializedKitSections ||
@@ -5303,7 +6721,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         content: const SizedBox(
           width: 500,
           child: Text(
-            'Begin with an empty inventory, or load a few demo items to explore Inventorinator. Demo items can be deleted later.',
+            'Start empty creates no inventory records. Demo mode adds seven sample items that you can edit or delete later. Neither option enables Remote Sync; you choose that separately after the guide.',
           ),
         ),
         actions: [
@@ -5338,11 +6756,158 @@ class _InventoryHomeState extends State<InventoryHome> {
     _persist();
     _capturePersistedEntityReferences();
     _incrementalPersistenceReady = true;
+    await _openGettingStarted();
+    if (!mounted) return;
     if (_needsSyncOnboarding) {
       await _openSyncOnboarding();
     } else {
       _startAutoSync();
     }
+  }
+
+  Future<void> _openGettingStarted() async {
+    const steps = <({IconData icon, String title, String body})>[
+      (
+        icon: Icons.inventory_2_outlined,
+        title: 'Local inventory first',
+        body: 'Inventorinator works without an account. Your inventory is saved on this device. Remote Sync is optional and can connect devices after this guide.',
+      ),
+      (
+        icon: Icons.add_circle_outline_rounded,
+        title: 'Add and find items',
+        body: 'Use Add item or Scan to capture stock. Search matches names, types, brands, materials, and compatibility. Filters and sorting help narrow larger inventories.',
+      ),
+      (
+        icon: Icons.warehouse_outlined,
+        title: 'Organize the Stockroom',
+        body: 'Create rooms, shelves, cabinets, and bins in Stockroom. Location QR codes open an area so you can review or move its inventory.',
+      ),
+      (
+        icon: Icons.health_and_safety_outlined,
+        title: 'Protect your inventory',
+        body: 'Export a portable backup from Local database. Remote Sync can keep selected devices together, but it does not replace a backup.',
+      ),
+    ];
+    final database = widget.database;
+    final completed =
+        database?.loadBoolPreference(
+          'getting_started_completed',
+          fallback: false,
+        ) ??
+        false;
+    var step = completed
+        ? 0
+        : (int.tryParse(
+                    database?.loadStringPreference(
+                          'getting_started_step',
+                          fallback: '0',
+                        ) ??
+                        '0',
+                  ) ??
+                  0)
+              .clamp(0, steps.length - 1);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) {
+          final current = steps[step];
+          return AlertDialog(
+            key: const Key('getting-started-dialog'),
+            title: Row(
+              children: [
+                const Icon(Icons.help_outline_rounded),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('Getting started')),
+                IconButton(
+                  key: const Key('close-getting-started'),
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.pop(dialogContext),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  LinearProgressIndicator(
+                    value: (step + 1) / steps.length,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  const SizedBox(height: 24),
+                  Icon(
+                    current.icon,
+                    key: Key('getting-started-step-$step'),
+                    size: 52,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    current.title,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(current.body, textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${step + 1} of ${steps.length}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              if (step > 0)
+                TextButton(
+                  key: const Key('getting-started-back'),
+                  onPressed: () {
+                    step--;
+                    database?.saveStringPreference(
+                      'getting_started_step',
+                      '$step',
+                    );
+                    refresh(() {});
+                  },
+                  child: const Text('Back'),
+                ),
+              TextButton(
+                key: const Key('getting-started-skip'),
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Skip for now'),
+              ),
+              FilledButton(
+                key: const Key('getting-started-next'),
+                onPressed: () {
+                  if (step < steps.length - 1) {
+                    step++;
+                    database?.saveStringPreference(
+                      'getting_started_step',
+                      '$step',
+                    );
+                    refresh(() {});
+                    return;
+                  }
+                  database?.saveBoolPreference(
+                    'getting_started_completed',
+                    true,
+                  );
+                  database?.saveStringPreference('getting_started_step', '0');
+                  Navigator.pop(dialogContext);
+                },
+                child: Text(step == steps.length - 1 ? 'Done' : 'Next'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _loadAndroidDeviceName() async {
@@ -5385,6 +6950,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _deferredAutoSync?.cancel();
     _syncPoll?.cancel();
     _clockTick?.cancel();
+    _thumbnailBackfillStartTimer?.cancel();
     _pageSizeCommitTimer?.cancel();
     _cardSizeCommitTimer?.cancel();
     pageSizeIndex = _pageSizeSliderValue.value.round();
@@ -5395,6 +6961,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     _pageSizeSliderValue.dispose();
     _cardSizeSliderValue.dispose();
+    _syncActivity.dispose();
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.dispose();
     for (final timer in _quantityCommitTimers.values) {
       timer.cancel();
     }
@@ -5692,12 +7261,22 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _checkMoistureAlertChimes() {
-    if (!moistureAlertChimeEnabled) return;
+    if (!moistureAlertChimeEnabled || !alertSoundsEnabled) return;
     var changed = false;
+    final now = DateTime.now();
     for (final item in _moistureAlerts) {
       final cycle =
           '${item.id}:${item.lastDriedAt?.toIso8601String()}:${item.moistureAlertThresholdMinutes}';
-      if (_moistureAlertChimedCycles.add(cycle)) changed = true;
+      final previous = _lastMoistureAlertChimeAt[cycle];
+      final firstAlert = _moistureAlertChimedCycles.add(cycle);
+      final recurring =
+          alertSoundRecurrenceSeconds > 0 &&
+          previous != null &&
+          now.difference(previous).inSeconds >= alertSoundRecurrenceSeconds;
+      if (firstAlert || recurring) {
+        _lastMoistureAlertChimeAt[cycle] = now;
+        changed = true;
+      }
     }
     if (!changed) return;
     if (_moistureAlertChimedCycles.length > 200) {
@@ -6006,6 +7585,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       archivedOnly,
       type,
       customTypeFilterId,
+      filamentMaterialFilter,
+      filamentBrandFilter,
     );
     if (_availableItemColorFiltersCacheKey == cacheKey) {
       return _availableItemColorFiltersCache!;
@@ -6017,9 +7598,11 @@ class _InventoryHomeState extends State<InventoryHome> {
           (type == null || item.type == type) &&
           (customTypeFilterId == null ||
               item.customTypeId == customTypeFilterId) &&
-          item.itemColorName.isNotEmpty,
+          _matchesMaterialFilter(item) &&
+          _matchesBrandFilter(item) &&
+          _itemColorFilterValue(item).isNotEmpty,
     )) {
-      final value = item.itemColorName;
+      final value = _itemColorFilterValue(item);
       colors.putIfAbsent(
         value,
         () => (
@@ -6051,7 +7634,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       type,
       customTypeFilterId,
       itemColorFilter,
+      filamentMaterialFilter,
+      filamentBrandFilter,
       sort,
+      sortAscending,
     );
     if (_visibleItemsCacheKey == cacheKey) return _visibleItemsCache!;
     final needle = _normalized(query);
@@ -6062,7 +7648,17 @@ class _InventoryHomeState extends State<InventoryHome> {
           type != null && item.type != type ||
           customTypeFilterId != null &&
               item.customTypeId != customTypeFilterId ||
-          itemColorFilter != null && item.itemColorName != itemColorFilter) {
+          itemColorFilter != null &&
+              ((itemColorFilter == _unspecifiedItemColorKey &&
+                      _itemColorFilterValue(item).isNotEmpty) ||
+                  (itemColorFilter != _unspecifiedItemColorKey &&
+                      _itemColorFilterValue(item) != itemColorFilter)) ||
+          filamentMaterialFilter != null &&
+              (item.type != InventoryType.filament ||
+                  !_matchesMaterialFilter(item)) ||
+          filamentBrandFilter != null &&
+              (item.type != InventoryType.filament ||
+                  !_matchesBrandFilter(item))) {
         return false;
       }
       if (needle.isEmpty) return true;
@@ -6071,6 +7667,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           ? cached.$2
           : _normalized(
               '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
+              '${item.purposeTags.join(' ')} '
               '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
               '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
               '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
@@ -6086,24 +7683,302 @@ class _InventoryHomeState extends State<InventoryHome> {
       return searchable.contains(needle);
     }).toList();
     result.sort(
-      (a, b) => switch (sort) {
-        InventorySort.type => a.typeLabel.compareTo(b.typeLabel),
-        InventorySort.quantity => b.quantity.compareTo(a.quantity),
-        InventorySort.age => a.added.compareTo(b.added),
-        InventorySort.cost => b.cost.compareTo(a.cost),
-        InventorySort.dryingTime => (b.dryingMinutes ?? -1).compareTo(
-          a.dryingMinutes ?? -1,
-        ),
-        InventorySort.moistureRemaining => compareMoistureRemaining(
-          a,
-          b,
-          now: now,
-        ),
-      },
+      (a, b) => compareInventoryItems(
+        a,
+        b,
+        sort: sort,
+        ascending: sortAscending,
+        now: now,
+      ),
     );
     _visibleItemsCacheKey = cacheKey;
     return _visibleItemsCache = result;
   }
+
+  String _metricsTypeKey(InventoryItem item) =>
+      item.type == InventoryType.custom
+      ? 'custom:${item.customTypeId}'
+      : _inventoryTypeDefinitionKey(item.type);
+
+  bool _isMetricsTracked(InventoryItem item) =>
+      !metricsUntrackedTypeKeys.contains(_metricsTypeKey(item));
+
+  void _setMetricsUntrackedTypeKeys(Set<String> keys) {
+    setState(() => metricsUntrackedTypeKeys = keys);
+    widget.database?.saveStringPreference(
+      'metrics_untracked_types',
+      keys.join(','),
+    );
+  }
+
+  _InventoryMetrics get _inventoryMetrics {
+    var itemRecords = 0;
+    var totalUnits = 0.0;
+    var filamentSpools = 0.0;
+    var lowStockRecords = 0;
+    final filamentMaterials = <String, double>{};
+    final filamentColors = <String, double>{};
+    final filamentColorLabels = <String, String>{};
+    final filamentBrands = <String, double>{};
+    for (final item in inventory) {
+      if (item.archived || !_isMetricsTracked(item)) continue;
+      itemRecords++;
+      totalUnits += item.quantity;
+      if (item.type == InventoryType.filament) {
+        filamentSpools += item.quantity;
+        final materialKey = _metricsFilamentMaterialFilterValue(item);
+        final colorKey = _metricsFilamentColorFilterValue(item);
+        final colorLabel = _metricsFilamentColorLabel(item);
+        final brandKey = _metricsFilamentBrandFilterValue(item);
+        filamentMaterials[materialKey] =
+            (filamentMaterials[materialKey] ?? 0.0) + item.quantity;
+        if (colorKey.isNotEmpty) {
+          filamentColors[colorKey] =
+              (filamentColors[colorKey] ?? 0.0) + item.quantity;
+          filamentColorLabels[colorKey] = colorLabel;
+        }
+        filamentBrands[brandKey] =
+            (filamentBrands[brandKey] ?? 0.0) + item.quantity;
+      }
+      if (item.quantityAlertThreshold != null &&
+          item.quantity <= item.quantityAlertThreshold!) {
+        lowStockRecords++;
+      }
+    }
+    return _InventoryMetrics(
+      itemRecords: itemRecords,
+      totalUnits: totalUnits,
+      filamentSpools: filamentSpools,
+      lowStockRecords: lowStockRecords,
+      topFilamentMaterials: _topEntriesFromTotals(
+        filamentMaterials,
+        max: 6,
+        labelForFilter: (key) =>
+            key == _unspecifiedMaterialKey ? 'Unspecified material' : key,
+      ),
+      topFilamentColors: _topEntriesFromTotals(
+        filamentColors,
+        max: 6,
+        labelForFilter: (key) => filamentColorLabels[key] ?? key,
+      ),
+      topFilamentBrands: _topEntriesFromTotals(
+        filamentBrands,
+        max: 6,
+        labelForFilter: (key) =>
+            key == _unspecifiedBrandKey ? 'Unspecified brand' : key,
+      ),
+      filamentColorCount: filamentColors.values.where((v) => v > 0).length,
+      filamentMaterialCount: filamentMaterials.values
+          .where((v) => v > 0)
+          .length,
+      filamentBrandCount: filamentBrands.values.where((v) => v > 0).length,
+    );
+  }
+
+  static const String _unspecifiedItemColorKey = '__unspecified_item_color__';
+  static const String _unspecifiedMaterialKey = '__unspecified_material__';
+  static const String _unspecifiedBrandKey = '__unspecified_brand__';
+
+  String _metricsFilamentColorFilterValue(InventoryItem item) =>
+      _itemColorFilterValue(item).isNotEmpty
+      ? _itemColorFilterValue(item)
+      : _unspecifiedItemColorKey;
+
+  String _metricsFilamentMaterialFilterValue(InventoryItem item) =>
+      item.materialName.trim().isNotEmpty
+      ? item.materialName.trim()
+      : _unspecifiedMaterialKey;
+
+  String _metricsFilamentBrandFilterValue(InventoryItem item) =>
+      item.brand.trim().isNotEmpty ? item.brand.trim() : _unspecifiedBrandKey;
+
+  bool _matchesMaterialFilter(InventoryItem item) =>
+      filamentMaterialFilter == null ||
+      _metricsFilamentMaterialFilterValue(item) == filamentMaterialFilter;
+
+  bool _matchesBrandFilter(InventoryItem item) =>
+      filamentBrandFilter == null ||
+      _metricsFilamentBrandFilterValue(item) == filamentBrandFilter;
+
+  String _metricsFilamentColorLabel(InventoryItem item) {
+    final colorLabel = item.itemColorLabel.trim();
+    final colorValue = _itemColorFilterValue(item).trim();
+    if (colorValue.isEmpty) return 'Unspecified color';
+    final visibleLabel =
+        colorLabel.isNotEmpty &&
+            colorValue.isNotEmpty &&
+            colorValue.toUpperCase() != colorLabel.toUpperCase()
+        ? '$colorLabel · $colorValue'
+        : colorLabel.isNotEmpty
+        ? colorLabel
+        : colorValue;
+    return visibleLabel.isNotEmpty ? visibleLabel : 'Unspecified color';
+  }
+
+  String _itemColorFilterValue(InventoryItem item) {
+    if (item.itemColorName.isNotEmpty) return item.itemColorName.trim();
+    return item.itemColorLabel.trim();
+  }
+
+  List<_MetricBucket> _topEntriesFromTotals(
+    Map<String, double> totals, {
+    int max = 6,
+    String Function(String)? labelForFilter,
+  }) {
+    final items = totals.entries.where((entry) => entry.value > 0).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return [
+      for (final entry in items.take(max))
+        _MetricBucket(
+          label: labelForFilter?.call(entry.key) ?? entry.key,
+          value: entry.value,
+          filterValue: entry.key,
+        ),
+    ];
+  }
+
+  static const _monthAbbreviations = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  List<DateTime> get _metricsMonthStarts {
+    final now = DateTime.now();
+    return List.generate(6, (i) => DateTime(now.year, now.month - 5 + i, 1));
+  }
+
+  List<String> get _metricsMonthLabels => [
+    for (final monthStart in _metricsMonthStarts)
+      _monthAbbreviations[monthStart.month - 1],
+  ];
+
+  /// Cumulative non-archived unit count by the end of each of the last six
+  /// months, derived from each item's `added` timestamp. There is no
+  /// historical snapshot table, so this reflects units currently on hand
+  /// grouped by when they were added rather than true point-in-time stock.
+  List<({String label, double value})> get _inventoryGrowthSeries => [
+    for (final monthStart in _metricsMonthStarts)
+      (
+        label: _monthAbbreviations[monthStart.month - 1],
+        value: inventory
+            .where(
+              (item) =>
+                  !item.archived &&
+                  _isMetricsTracked(item) &&
+                  item.added.isBefore(
+                    DateTime(monthStart.year, monthStart.month + 1, 1),
+                  ),
+            )
+            .fold(0.0, (sum, item) => sum + item.quantity),
+      ),
+  ];
+
+  /// The same cumulative growth trend as [_inventoryGrowthSeries], split out
+  /// per [keyFor] bucket (largest first, capped so the overlay stays
+  /// legible), each assigned a hue-rotated shade of [baseColor]. Used for
+  /// the type/color/material/brand overlay views on the growth chart.
+  List<({String label, Color color, List<double> values})>
+  _inventoryDimensionGrowthSeries(
+    Color baseColor, {
+    required bool Function(InventoryItem) includeItem,
+    required String Function(InventoryItem) keyFor,
+    required String Function(InventoryItem) labelForItem,
+  }) {
+    final totals = <String, double>{};
+    final labels = <String, String>{};
+    for (final item in inventory) {
+      if (item.archived || !_isMetricsTracked(item) || !includeItem(item)) {
+        continue;
+      }
+      final key = keyFor(item);
+      totals[key] = (totals[key] ?? 0) + item.quantity;
+      labels[key] = labelForItem(item);
+    }
+    final topKeys =
+        (totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+            .where((entry) => entry.value > 0)
+            .take(5)
+            .map((entry) => entry.key)
+            .toList();
+    final monthStarts = _metricsMonthStarts;
+    return [
+      for (var i = 0; i < topKeys.length; i++)
+        (
+          label: labels[topKeys[i]]!,
+          color: _hueRotate(baseColor, i * 32.0),
+          values: [
+            for (final monthStart in monthStarts)
+              inventory
+                  .where(
+                    (item) =>
+                        !item.archived &&
+                        _isMetricsTracked(item) &&
+                        includeItem(item) &&
+                        keyFor(item) == topKeys[i] &&
+                        item.added.isBefore(
+                          DateTime(monthStart.year, monthStart.month + 1, 1),
+                        ),
+                  )
+                  .fold(0.0, (sum, item) => sum + item.quantity),
+          ],
+        ),
+    ];
+  }
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryTypeGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: (_) => true,
+        keyFor: _metricsTypeKey,
+        labelForItem: _itemTypeDisplayLabel,
+      );
+
+  bool _isFilamentItem(InventoryItem item) =>
+      item.type == InventoryType.filament;
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryColorGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentColorFilterValue,
+        labelForItem: _metricsFilamentColorLabel,
+      );
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryMaterialGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentMaterialFilterValue,
+        labelForItem: (item) {
+          final key = _metricsFilamentMaterialFilterValue(item);
+          return key == _unspecifiedMaterialKey ? 'Unspecified material' : key;
+        },
+      );
+
+  List<({String label, Color color, List<double> values})>
+  _inventoryBrandGrowthSeries(Color baseColor) =>
+      _inventoryDimensionGrowthSeries(
+        baseColor,
+        includeItem: _isFilamentItem,
+        keyFor: _metricsFilamentBrandFilterValue,
+        labelForItem: (item) {
+          final key = _metricsFilamentBrandFilterValue(item);
+          return key == _unspecifiedBrandKey ? 'Unspecified brand' : key;
+        },
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -6117,7 +7992,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         !archivedOnly &&
         type == null &&
         customTypeFilterId == null &&
-        itemColorFilter == null;
+        itemColorFilter == null &&
+        filamentMaterialFilter == null &&
+        filamentBrandFilter == null;
     final allRecords = showingCatalog
         ? allCatalogRecords
         : showingEverything
@@ -6231,6 +8108,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                   bottom: 0,
                   child: _bottomActionBar(),
                 ),
+              if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
+                Positioned(right: 20, bottom: 82, child: _jumpToTopButton()),
             ],
           ),
           bottomNavigationBar: selectedInventoryIds.isNotEmpty
@@ -6293,6 +8172,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       quantitySyncVersion: _remoteQuantityAnimationVersions[record.id] ?? 0,
       lowStockAnimationVersion: _lowStockAnimationVersions[record.id] ?? 0,
       moistureAnimationVersion: _moistureAnimationVersions[record.id] ?? 0,
+      cardEffectsEnabled: cardEffectsEnabled,
+      lowStockEffectsEnabled: lowStockEffectsEnabled,
+      moistureEffectsEnabled: moistureEffectsEnabled,
+      remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
       showStatus: _itemShowsStatus(record),
     );
     final Widget card;
@@ -6307,6 +8190,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         quantitySyncVersion: common.quantitySyncVersion,
         lowStockAnimationVersion: common.lowStockAnimationVersion,
         moistureAnimationVersion: common.moistureAnimationVersion,
+        cardEffectsEnabled: common.cardEffectsEnabled,
+        lowStockEffectsEnabled: common.lowStockEffectsEnabled,
+        moistureEffectsEnabled: common.moistureEffectsEnabled,
+        remoteSyncEffectsEnabled: common.remoteSyncEffectsEnabled,
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
@@ -6332,6 +8219,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         quantitySyncVersion: common.quantitySyncVersion,
         lowStockAnimationVersion: common.lowStockAnimationVersion,
         moistureAnimationVersion: common.moistureAnimationVersion,
+        cardEffectsEnabled: common.cardEffectsEnabled,
+        lowStockEffectsEnabled: common.lowStockEffectsEnabled,
+        moistureEffectsEnabled: common.moistureEffectsEnabled,
+        remoteSyncEffectsEnabled: common.remoteSyncEffectsEnabled,
         showStatus: common.showStatus,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
@@ -6346,7 +8237,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
       );
     }
-    return card;
+    if (!newItemGlowEnabled || _newItemGlowItemId != record.id) return card;
+    return _NewItemLaserGlow(
+      enabled: true,
+      trigger: _newItemGlowVersion,
+      child: card,
+    );
   }
 
   void _publishInventoryItem(InventoryItem item) {
@@ -6364,6 +8260,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     inventory.add(item);
     _inventoryItemNotifiers.remove(item.id)?.dispose();
     _inventoryItemNotifiers[item.id] = ValueNotifier(item);
+    if (!_applyingCloudState && newItemGlowEnabled) {
+      _newItemGlowItemId = item.id;
+      _newItemGlowVersion++;
+    }
   }
 
   void _removeInventoryItem(String itemId) {
@@ -7688,6 +9588,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           machines: machines,
           machineTypes: machineTypes,
           spoolTypes: spoolTypes,
+          spoolUsage: spoolUsage,
+          onSpoolUsageAdded: _addSpoolUsage,
           onChanged: (updated) =>
               _updateItemById(_withoutFullInventoryImages(updated)),
           onEdit: currentRole.canEditInventory
@@ -7984,6 +9886,21 @@ class _InventoryHomeState extends State<InventoryHome> {
     _checkMoistureThresholdAnimations();
   }
 
+  void _addSpoolUsage(SpoolUsageRecord entry) {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return;
+    }
+    setState(() {
+      spoolUsage.insert(0, entry);
+      _recordAudit('spool_usage', 'inventory', entry.spoolId, {
+        'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
+        'outcome': entry.outcome.name,
+      });
+    });
+    _persist();
+  }
+
   void _adjustItemQuantity(InventoryItem item, double delta) {
     if (!currentRole.canEditInventory) {
       _showPermissionDenied('Your role is view/build only.');
@@ -7996,6 +9913,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     final quantity = math.max(0, current.quantity + delta).toDouble();
     if (quantity == current.quantity) return;
     _quantityCommitOriginals.putIfAbsent(item.id, () => current);
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.value = LocalSaveFeedback.saving;
     _publishInventoryItem(current.copyWith(quantity: quantity));
     _invalidateSearchCaches();
     _quantityCommitTimers.remove(item.id)?.cancel();
@@ -8010,12 +9929,23 @@ class _InventoryHomeState extends State<InventoryHome> {
     final original = _quantityCommitOriginals.remove(itemId);
     if (original == null || !mounted) return;
     final changed = _recordPendingQuantityAudit(itemId, original);
-    if (!changed) return;
+    if (!changed) {
+      if (_quantityCommitTimers.isEmpty) {
+        _localSaveFeedback.value = LocalSaveFeedback.idle;
+      }
+      return;
+    }
     final current = inventory
         .where((candidate) => candidate.id == itemId)
         .firstOrNull;
     if (current != null) _publishInventoryItem(current.copyWith());
     if (current != null) _persistInventoryItem(current);
+    if (_quantityCommitTimers.isEmpty) {
+      _localSaveFeedback.value = LocalSaveFeedback.saved;
+      _localSaveFeedbackTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) _localSaveFeedback.value = LocalSaveFeedback.idle;
+      });
+    }
     _checkMoistureThresholdAnimations();
   }
 
@@ -9569,16 +11499,17 @@ class _InventoryHomeState extends State<InventoryHome> {
         return left.compareTo(right);
       });
 
-  List<InventoryItem> get _quantityAlerts =>
-      inventory
-          .where(
-            (item) =>
-                !item.archived &&
-                item.quantityAlertThreshold != null &&
-                item.quantity <= item.quantityAlertThreshold!,
-          )
-          .toList()
-        ..sort((a, b) => a.quantity.compareTo(b.quantity));
+  List<InventoryItem> get _quantityAlerts => lowStockAlertsEnabled
+      ? (inventory
+            .where(
+              (item) =>
+                  !item.archived &&
+                  item.quantityAlertThreshold != null &&
+                  item.quantity <= item.quantityAlertThreshold!,
+            )
+            .toList()
+          ..sort((a, b) => a.quantity.compareTo(b.quantity)))
+      : const [];
 
   String _quantityAlertKey(InventoryItem item) =>
       'quantity:${item.id}:${item.quantityAlertThreshold}';
@@ -9644,10 +11575,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (result == null || !mounted) return;
     setState(() {
+      if (result.effect == DebugCardEffect.newItemGlow) {
+        _newItemGlowItemId = result.itemId;
+        _newItemGlowVersion++;
+        return;
+      }
       final versions = switch (result.effect) {
         DebugCardEffect.remoteQuantity => _remoteQuantityAnimationVersions,
         DebugCardEffect.lowStock => _lowStockAnimationVersions,
         DebugCardEffect.moistureThreshold => _moistureAnimationVersions,
+        DebugCardEffect.newItemGlow => _remoteQuantityAnimationVersions,
       };
       versions[result.itemId] = (versions[result.itemId] ?? 0) + 1;
     });
@@ -9663,10 +11600,107 @@ class _InventoryHomeState extends State<InventoryHome> {
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
       customThemeColor: widget.customThemeColor,
+      alertSoundsEnabled: alertSoundsEnabled,
+      lowStockAlertsEnabled: lowStockAlertsEnabled,
+      hideZeroQuantityItems: hideZeroQuantityItems,
+      syncChimeEnabled: syncChimeEnabled,
+      dryingCompleteChimeEnabled: dryingCompleteChimeEnabled,
+      moistureAlertChimeEnabled: moistureAlertChimeEnabled,
+      alertSoundVolumePercent: alertSoundVolumePercent,
+      alertSoundRecurrenceSeconds: alertSoundRecurrenceSeconds,
+      alertSoundProfile: alertSoundProfile,
+      cardEffectsEnabled: cardEffectsEnabled,
+      lowStockEffectsEnabled: lowStockEffectsEnabled,
+      moistureEffectsEnabled: moistureEffectsEnabled,
+      remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
+      searchGlowEnabled: searchGlowEnabled,
+      newItemGlowEnabled: newItemGlowEnabled,
       onSettingsChanged: _updateAnimationSettings,
       onColorThemeChanged: widget.onColorThemeChanged ?? (_) {},
       onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
       onCustomThemeColorChanged: widget.onCustomThemeColorChanged ?? (_) {},
+      onAlertSoundsChanged: (value) {
+        setState(() => alertSoundsEnabled = value);
+        widget.database?.saveBoolPreference('alert_sounds_enabled', value);
+      },
+      onLowStockAlertsChanged: (value) {
+        setState(() => lowStockAlertsEnabled = value);
+        widget.database?.saveBoolPreference('low_stock_alerts_enabled', value);
+      },
+      onHideZeroQuantityItemsChanged: (value) {
+        setState(() {
+          hideZeroQuantityItems = value;
+          currentPage = 0;
+        });
+        widget.database?.saveBoolPreference('hide_zero_quantity_items', value);
+      },
+      onSyncChimeChanged: (value) {
+        setState(() => syncChimeEnabled = value);
+        widget.database?.saveBoolPreference('sync_chime_enabled', value);
+      },
+      onDryingCompleteChimeChanged: (value) {
+        setState(() => dryingCompleteChimeEnabled = value);
+        widget.database?.saveBoolPreference(
+          'drying_complete_chime_enabled',
+          value,
+        );
+      },
+      onMoistureAlertChimeChanged: (value) {
+        setState(() => moistureAlertChimeEnabled = value);
+        widget.database?.saveBoolPreference(
+          'moisture_alert_chime_enabled',
+          value,
+        );
+      },
+      onAlertSoundVolumeChanged: (value) {
+        setState(() => alertSoundVolumePercent = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_volume_percent',
+          '$value',
+        );
+      },
+      onAlertSoundRecurrenceChanged: (value) {
+        setState(() => alertSoundRecurrenceSeconds = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_recurrence_seconds',
+          '$value',
+        );
+      },
+      onAlertSoundProfileChanged: (value) {
+        setState(() => alertSoundProfile = value);
+        widget.database?.saveStringPreference(
+          'alert_sound_profile',
+          value.name,
+        );
+      },
+      onCardEffectsChanged: (value) {
+        setState(() => cardEffectsEnabled = value);
+        widget.database?.saveBoolPreference('card_effects_enabled', value);
+      },
+      onLowStockEffectsChanged: (value) {
+        setState(() => lowStockEffectsEnabled = value);
+        widget.database?.saveBoolPreference('low_stock_effects_enabled', value);
+      },
+      onMoistureEffectsChanged: (value) {
+        setState(() => moistureEffectsEnabled = value);
+        widget.database?.saveBoolPreference('moisture_effects_enabled', value);
+      },
+      onRemoteSyncEffectsChanged: (value) {
+        setState(() => remoteSyncEffectsEnabled = value);
+        widget.database?.saveBoolPreference(
+          'remote_sync_effects_enabled',
+          value,
+        );
+      },
+      onSearchGlowChanged: (value) {
+        setState(() => searchGlowEnabled = value);
+        widget.database?.saveBoolPreference('search_glow_enabled', value);
+      },
+      onNewItemGlowChanged: (value) {
+        setState(() => newItemGlowEnabled = value);
+        widget.database?.saveBoolPreference('new_item_glow_enabled', value);
+      },
+      onPreviewAlertSound: () => unawaited(_playSyncChime(force: true)),
       onPhotoCardsChanged: (value) {
         setState(() => photoCardsEnabled = value);
         widget.database?.saveBoolPreference('photo_cards_enabled', value);
@@ -9850,117 +11884,359 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Future<void> _openAdditionHistory() => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.new_releases_outlined),
-            SizedBox(width: 10),
-            Text('New items'),
-          ],
-        ),
-        content: SizedBox(
-          width: 520,
-          height: 520,
-          child: Column(
+  Future<void> _openAdditionHistory() async {
+    final selectedItem = await showDialog<InventoryItem>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Row(
             children: [
-              Row(
-                children: [
-                  Text('${additionHistory.length} additions preserved'),
-                  const Spacer(),
-                  const Text('Keep'),
-                  const SizedBox(width: 8),
-                  DropdownButton<int>(
-                    key: const Key('history-limit'),
-                    value: historyLimit,
-                    items: const [20, 50, 100, 500, 2000]
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text('$value'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() {
-                        historyLimit = value;
-                        _trimAdditionHistory();
-                      });
-                      setDialogState(() {});
-                      _persist();
-                    },
-                  ),
-                ],
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.devices_outlined),
-                title: const Text('This device'),
-                subtitle: Text(deviceName),
-                trailing: IconButton(
-                  key: const Key('rename-device'),
-                  tooltip: 'Rename this device',
-                  onPressed: () async {
-                    if (await _renameThisDevice()) setDialogState(() {});
-                  },
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-              ),
-              SwitchListTile(
-                key: const Key('sync-chime-toggle'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Chime for remotely added items'),
-                subtitle: const Text(
-                  'This setting applies only to this device.',
-                ),
-                value: syncChimeEnabled,
-                onChanged: (value) {
-                  setState(() => syncChimeEnabled = value);
-                  setDialogState(() {});
-                  widget.database?.saveBoolPreference(
-                    'sync_chime_enabled',
-                    value,
-                  );
-                },
-              ),
-              const Divider(),
-              Expanded(
-                child: additionHistory.isEmpty
-                    ? const Center(child: Text('No additions recorded yet.'))
-                    : ListView.separated(
-                        itemCount: additionHistory.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final entry = additionHistory[index];
-                          final local = entry.addedAt.toLocal();
-                          final when =
-                              '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
-                              '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
-                          return ListTile(
-                            leading: const Icon(Icons.add_circle_outline),
-                            title: Text(entry.name),
-                            subtitle: Text(
-                              '${_inventoryTypeDisplayLabel(entry.type)} · ${entry.deviceName} · $when',
-                            ),
-                          );
-                        },
-                      ),
-              ),
+              Icon(Icons.new_releases_outlined),
+              SizedBox(width: 10),
+              Text('New items'),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
+          content: SizedBox(
+            width: 520,
+            height: 520,
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final count = Text(
+                      '${additionHistory.length} additions preserved',
+                    );
+                    final retention = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Keep'),
+                        const SizedBox(width: 8),
+                        DropdownButton<int>(
+                          key: const Key('history-limit'),
+                          value: historyLimit,
+                          items: const [20, 50, 100, 500, 2000]
+                              .map(
+                                (value) => DropdownMenuItem(
+                                  value: value,
+                                  child: Text('$value'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              historyLimit = value;
+                              _trimAdditionHistory();
+                            });
+                            setDialogState(() {});
+                            _persist();
+                          },
+                        ),
+                      ],
+                    );
+                    if (constraints.maxWidth < 400) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [count, retention],
+                      );
+                    }
+                    return Row(children: [count, const Spacer(), retention]);
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.devices_outlined),
+                  title: const Text('This device'),
+                  subtitle: Text(deviceName),
+                  trailing: IconButton(
+                    key: const Key('rename-device'),
+                    tooltip: 'Rename this device',
+                    onPressed: () async {
+                      if (await _renameThisDevice()) setDialogState(() {});
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ),
+                SwitchListTile(
+                  key: const Key('sync-chime-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Chime for remotely added items'),
+                  subtitle: const Text(
+                    'This setting applies only to this device.',
+                  ),
+                  value: syncChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => syncChimeEnabled = value);
+                    setDialogState(() {});
+                    widget.database?.saveBoolPreference(
+                      'sync_chime_enabled',
+                      value,
+                    );
+                  },
+                ),
+                const Divider(),
+                Expanded(
+                  child: additionHistory.isEmpty
+                      ? const Center(child: Text('No additions recorded yet.'))
+                      : ListView.separated(
+                          itemCount: additionHistory.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final entry = additionHistory[index];
+                            final item = inventory
+                                .where(
+                                  (candidate) => candidate.id == entry.itemId,
+                                )
+                                .firstOrNull;
+                            final colorLabel = switch (item) {
+                              null => 'Color unavailable',
+                              final value
+                                  when value.itemColorLabel.trim().isNotEmpty =>
+                                value.itemColorLabel.trim(),
+                              final value
+                                  when value.itemColorName.trim().isNotEmpty =>
+                                value.itemColorName.trim(),
+                              _ => 'No color',
+                            };
+                            final locationLabel = switch (item) {
+                              null => 'Location unavailable',
+                              final value
+                                  when value.storageLocationId.isNotEmpty &&
+                                      _locationPath(value.storageLocationId)
+                                          .isNotEmpty =>
+                                _locationPath(value.storageLocationId),
+                              final value
+                                  when value.storageLocation
+                                      .trim()
+                                      .isNotEmpty =>
+                                value.storageLocation.trim(),
+                              _ => 'No location',
+                            };
+                            final quietColor = Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant;
+                            final local = entry.addedAt.toLocal();
+                            final when =
+                                '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+                                '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+                            return InkWell(
+                              key: Key('addition-entry-${entry.itemId}'),
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: item == null
+                                  ? null
+                                  : () => Navigator.pop(dialogContext, item),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                  horizontal: 8,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 2),
+                                      child: Icon(Icons.add_circle_outline),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Wrap(
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: [
+                                              Text(
+                                                entry.name,
+                                                key: Key(
+                                                  'addition-name-${entry.itemId}',
+                                                ),
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodyLarge,
+                                              ),
+                                              if (item == null)
+                                                _additionHistoryDeletedTag(
+                                                  entry.itemId,
+                                                ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 5),
+                                          Wrap(
+                                            spacing: 14,
+                                            runSpacing: 4,
+                                            children: [
+                                              _additionHistoryColorDetail(
+                                                key: Key(
+                                                  'addition-color-${entry.itemId}',
+                                                ),
+                                                item: item,
+                                                label: colorLabel,
+                                              ),
+                                              _additionHistoryDetail(
+                                                key: Key(
+                                                  'addition-location-${entry.itemId}',
+                                                ),
+                                                icon:
+                                                    Icons.location_on_outlined,
+                                                label: locationLabel,
+                                                muted:
+                                                    item == null ||
+                                                    (item
+                                                            .storageLocationId
+                                                            .isEmpty &&
+                                                        item.storageLocation
+                                                            .trim()
+                                                            .isEmpty),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${_inventoryTypeDisplayLabel(entry.type)} · ${entry.deviceName} · $when',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(color: quietColor),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+    if (selectedItem != null && mounted) {
+      await _openDetails(selectedItem);
+    }
+  }
+
+  Widget _additionHistoryDetail({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required bool muted,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Row(
+      key: key,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: 15,
+          color: muted ? colors.onSurfaceVariant : colors.primary,
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: muted ? colors.onSurfaceVariant : colors.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _additionHistoryDeletedTag(String itemId) {
+    const warning = Color(0xffffa552);
+    return Tooltip(
+      message: 'This item was deleted, so its details are unavailable.',
+      child: Container(
+        key: Key('addition-deleted-$itemId'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: warning.withValues(alpha: .13),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: warning.withValues(alpha: .65)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.delete_outline_rounded, size: 14, color: warning),
+            SizedBox(width: 4),
+            Text(
+              'Deleted',
+              style: TextStyle(
+                color: warning,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _additionHistoryColorDetail({
+    required Key key,
+    required InventoryItem? item,
+    required String label,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    final colorValue = item?.itemColorName.trim() ?? '';
+    final swatch = _itemColorSwatch(colorValue);
+    if (colorValue.isEmpty || swatch == null) {
+      return _additionHistoryDetail(
+        key: key,
+        icon: Icons.palette_outlined,
+        label: colorValue.isEmpty ? label : '$label · No hex',
+        muted: true,
+      );
+    }
+    final hex = _colorHex(swatch);
+    final itemId = item!.id;
+    return Row(
+      key: key,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          key: Key('addition-color-swatch-$itemId'),
+          width: 17,
+          height: 17,
+          decoration: BoxDecoration(
+            color: swatch,
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '$label · ',
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: colors.onSurface),
+        ),
+        Text(
+          hex,
+          key: Key('addition-color-hex-$itemId'),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: colors.onSurfaceVariant,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
 
   Future<bool> _renameThisDevice() async {
     final name = await showDeviceNameDialog(
@@ -9981,22 +12257,37 @@ class _InventoryHomeState extends State<InventoryHome> {
     _invalidateSearchCaches();
     _synchronizeInventoryNotifiers();
     final database = widget.database;
+    var wroteChange = false;
     if (database != null) {
       if (_incrementalPersistenceReady) {
-        _persistChangedEntities(database);
+        wroteChange = _persistChangedEntities(database);
       } else {
         final previous = database.loadState();
         final current = _currentStateJson();
-        database.saveStateAndQueueChanges(
-          current,
-          diffWorkshopStates(previous, current),
-        );
+        final changes = diffWorkshopStates(previous, current);
+        wroteChange = changes.isNotEmpty;
+        database.saveStateAndQueueChanges(current, changes);
       }
     }
+    if (wroteChange) _pulseLocalSaveFeedback();
     if (!_applyingCloudState) {
       _localStateRevision++;
       _scheduleAutomaticSync();
     }
+  }
+
+  // Quantity edits own the indicator during their debounce window (see
+  // _adjustItemQuantity/_commitPendingQuantityChange) -- every other
+  // save-triggering edit (status, location, lifecycle, item-detail fields)
+  // funnels through _persist(), so a single pulse here covers all of them
+  // while the database commit is deferred through the local write queue.
+  void _pulseLocalSaveFeedback() {
+    if (_quantityCommitTimers.isNotEmpty) return;
+    _localSaveFeedbackTimer?.cancel();
+    _localSaveFeedback.value = LocalSaveFeedback.saved;
+    _localSaveFeedbackTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) _localSaveFeedback.value = LocalSaveFeedback.idle;
+    });
   }
 
   Map<String, List<Object>> _entityCollections() => {
@@ -10015,6 +12306,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     'materials': materials,
     'products': products,
     'additionHistory': additionHistory,
+    'spoolUsage': spoolUsage,
   };
 
   String _entityId(Object record) => switch (record) {
@@ -10033,6 +12325,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     MaterialRecord value => value.id,
     CatalogProduct value => value.id,
     AdditionHistoryEntry value => value.id,
+    SpoolUsageRecord value => value.id,
     _ => throw ArgumentError.value(record, 'record', 'Unknown entity type'),
   };
 
@@ -10061,7 +12354,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  void _persistChangedEntities(LocalDatabase database) {
+  bool _persistChangedEntities(LocalDatabase database) {
+    var wroteChange = false;
     for (final collection in _entityCollections().entries) {
       final previous = _persistedEntityReferences[collection.key] ?? const {};
       final current = <String, Object>{
@@ -10070,37 +12364,66 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final entry in current.entries) {
         if (identical(previous[entry.key], entry.value)) continue;
         if (collection.key == 'inventory') {
-          _saveInventoryEntity(
-            database,
-            entry.value as InventoryItem,
-            previous: previous[entry.key] as InventoryItem?,
+          final item = entry.value as InventoryItem;
+          final fields = _changedInventoryFields(
+            previous[entry.key] as InventoryItem?,
+            item,
           );
+          if (fields.isNotEmpty) {
+            unawaited(
+              database.queueWorkshopChanges([
+                WorkshopEntityChange(
+                  entityType: 'inventory',
+                  entityId: item.id,
+                  fields: fields,
+                ),
+              ]),
+            );
+            wroteChange = true;
+          }
         } else {
-          database.saveEntityPayloadAndQueue(
-            collection.key,
-            entry.key,
-            encodeWorkshopEntityPayload(collection.key, entry.value),
+          unawaited(
+            database.queueEntityPayloadChange(
+              collection.key,
+              entry.key,
+              encodeWorkshopEntityPayload(collection.key, entry.value),
+            ),
           );
+          wroteChange = true;
         }
       }
       for (final removedId in previous.keys.where(
         (id) => !current.containsKey(id),
       )) {
-        database.deleteEntityAndQueue(collection.key, removedId);
+        unawaited(
+          database.queueWorkshopChanges([
+            WorkshopEntityChange(
+              entityType: collection.key,
+              entityId: removedId,
+              fields: const {},
+              deleted: true,
+            ),
+          ]),
+        );
+        wroteChange = true;
       }
       _persistedEntityReferences[collection.key] = current;
     }
     final metadata = _workshopMetadata();
     if (jsonEncode(metadata) != jsonEncode(_persistedMetadata)) {
-      database.saveEntityPayloadAndQueue(
-        workshopMetadataEntityType,
-        workshopMetadataEntityId,
-        metadata,
+      unawaited(
+        database.queueEntityPayloadChange(
+          workshopMetadataEntityType,
+          workshopMetadataEntityId,
+          metadata,
+        ),
       );
       _persistedMetadata = Map<String, dynamic>.from(
         jsonDecode(jsonEncode(metadata)) as Map,
       );
+      wroteChange = true;
     }
+    return wroteChange;
   }
 
   Map<String, dynamic> _changedInventoryFields(
@@ -10124,13 +12447,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     return fields;
   }
 
-  void _saveInventoryEntity(
+  bool _saveInventoryEntity(
     LocalDatabase database,
     InventoryItem item, {
     InventoryItem? previous,
   }) {
     final fields = _changedInventoryFields(previous, item);
-    if (fields.isEmpty) return;
+    if (fields.isEmpty) return false;
     database.applyAndQueueWorkshopChanges([
       WorkshopEntityChange(
         entityType: 'inventory',
@@ -10138,6 +12461,25 @@ class _InventoryHomeState extends State<InventoryHome> {
         fields: fields,
       ),
     ]);
+    return true;
+  }
+
+  void _queueInventoryEntity(
+    LocalDatabase database,
+    InventoryItem item, {
+    InventoryItem? previous,
+  }) {
+    final fields = _changedInventoryFields(previous, item);
+    if (fields.isEmpty) return;
+    unawaited(
+      database.queueWorkshopChanges([
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: item.id,
+          fields: fields,
+        ),
+      ]),
+    );
   }
 
   void _persistInventoryItem(InventoryItem item) {
@@ -10145,7 +12487,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _invalidateSearchCaches();
     final database = widget.database;
     if (database != null) {
-      _saveInventoryEntity(
+      _queueInventoryEntity(
         database,
         item,
         previous:
@@ -10197,7 +12539,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (latest == null || !listEquals(latestSource, source)) continue;
         final updated = latest.copyWith(thumbnailBytes: thumbnail);
         _publishInventoryItem(updated);
-        _saveInventoryEntity(widget.database!, updated, previous: latest);
+        _queueInventoryEntity(widget.database!, updated, previous: latest);
         _persistedEntityReferences.putIfAbsent(
           'inventory',
           () => {},
@@ -10211,6 +12553,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       _localStateRevision++;
       _scheduleAutomaticSync();
     }
+  }
+
+  Future<void> _startThumbnailBackfillWhenIdle() async {
+    // Let the first screen settle before opening image rows and spawning
+    // thumbnail workers. On Android this keeps first interaction responsive.
+    _thumbnailBackfillStartTimer?.cancel();
+    _thumbnailBackfillStartTimer = Timer(const Duration(milliseconds: 750), () {
+      if (mounted) unawaited(_backfillInventoryThumbnails());
+    });
   }
 
   void _scheduleAutomaticSync({
@@ -10255,6 +12606,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     shoppingList: shoppingList,
     auditLog: auditLog,
     additionHistory: additionHistory,
+    spoolUsage: spoolUsage,
     historyLimit: historyLimit,
   );
 
@@ -10294,6 +12646,23 @@ class _InventoryHomeState extends State<InventoryHome> {
     _trimAdditionHistory();
   }
 
+  // A field a locally-queued edit and an incoming remote change both
+  // touched, with different values. The local value always wins (see
+  // mergeRemoteChangesWithPending) -- this just puts the collision on
+  // record instead of resolving it silently.
+  void _recordSyncConflicts(List<WorkshopFieldConflict> conflicts) {
+    for (final conflict in conflicts) {
+      _recordAudit(
+        'sync_conflict_kept_local',
+        conflict.entityType,
+        conflict.entityId,
+        {
+          conflict.field: 'kept local value pending sync; another device changed this field too',
+        },
+      );
+    }
+  }
+
   void _recordAudit(
     String action,
     String entityType,
@@ -10311,15 +12680,20 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     auditLog.insert(0, entry);
     if (auditLog.length > 2000) auditLog.removeRange(2000, auditLog.length);
-    widget.database?.saveEntityPayloadAndQueue('auditLog', entry.id, {
-      'id': entry.id,
-      'timestamp': entry.timestamp.toIso8601String(),
-      'actor': entry.actor,
-      'action': entry.action,
-      'entityType': entry.entityType,
-      'entityId': entry.entityId,
-      'changes': entry.changes,
-    });
+    final database = widget.database;
+    if (database != null) {
+      unawaited(
+        database.queueEntityPayloadChange('auditLog', entry.id, {
+          'id': entry.id,
+          'timestamp': entry.timestamp.toIso8601String(),
+          'actor': entry.actor,
+          'action': entry.action,
+          'entityType': entry.entityType,
+          'entityId': entry.entityId,
+          'changes': entry.changes,
+        }),
+      );
+    }
     _pendingAuditEvents.add({
       'action': action,
       'entityType': entityType,
@@ -10412,6 +12786,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       additionHistory
         ..clear()
         ..addAll(restored.additionHistory);
+      spoolUsage
+        ..clear()
+        ..addAll(restored.spoolUsage);
       historyLimit = restored.historyLimit;
       _trimAdditionHistory();
     });
@@ -10767,6 +13144,18 @@ class _InventoryHomeState extends State<InventoryHome> {
               replaceById(additionHistory, change.entityId, value, (e) => e.id);
             }
           }
+        case 'spoolUsage':
+          if (change.deleted) {
+            spoolUsage.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<SpoolUsageRecord>(
+              change,
+              (s) => s.spoolUsage.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(spoolUsage, change.entityId, value, (e) => e.id);
+            }
+          }
       }
       rememberAppliedChange(change);
     }
@@ -10776,11 +13165,47 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (inventoryChanged) unawaited(_playSyncChime());
   }
 
-  Future<void> _playSyncChime() async {
-    if (!syncChimeEnabled) return;
+  Future<void> _playSyncChime({bool force = false}) =>
+      _playAlertSound('sync', enabled: syncChimeEnabled, force: force);
+
+  Future<void> _playDryingCompleteChime({bool force = false}) =>
+      _playAlertSound(
+        'drying',
+        enabled: dryingCompleteChimeEnabled,
+        force: force,
+      );
+
+  Future<void> _playMoistureAlertChime({bool force = false}) => _playAlertSound(
+    'moisture',
+    enabled: moistureAlertChimeEnabled,
+    force: force,
+  );
+
+  Future<void> _playAlertSound(
+    String event, {
+    required bool enabled,
+    bool force = false,
+  }) async {
+    if (!force && (!alertSoundsEnabled || !enabled)) return;
     try {
+      if (alertSoundProfile == AlertSoundProfile.system) {
+        await SystemSound.play(SystemSoundType.alert);
+        return;
+      }
+      final method = switch (event) {
+        'sync' => 'playSyncChime',
+        'drying' => 'playDryingCompleteChime',
+        _ => 'playMoistureAlertChime',
+      };
+      final fileName = switch (event) {
+        'sync' => 'transhuman_sync.wav',
+        'drying' => 'drying_complete.wav',
+        _ => 'moisture_alert.wav',
+      };
       if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playSyncChime');
+        await _audioChannel.invokeMethod<void>(method, {
+          'volume': alertSoundVolumePercent,
+        });
         return;
       }
       if (Platform.isLinux) {
@@ -10788,57 +13213,17 @@ class _InventoryHomeState extends State<InventoryHome> {
             .parent
             .path;
         final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/transhuman_sync.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
+            '$executableDirectory/data/flutter_assets/assets/audio/$fileName';
+        final volume = (alertSoundVolumePercent * 65536 / 100).round();
+        final result = await Process.run('/usr/bin/paplay', [
+          '--volume=$volume',
+          sound,
+        ]);
         if (result.exitCode == 0) return;
       }
       await SystemSound.play(SystemSoundType.alert);
     } catch (error) {
       debugPrint('Could not play sync chime: $error');
-    }
-  }
-
-  Future<void> _playDryingCompleteChime() async {
-    if (!dryingCompleteChimeEnabled) return;
-    try {
-      if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playDryingCompleteChime');
-        return;
-      }
-      if (Platform.isLinux) {
-        final executableDirectory = File(Platform.resolvedExecutable)
-            .parent
-            .path;
-        final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/drying_complete.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
-        if (result.exitCode == 0) return;
-      }
-      await SystemSound.play(SystemSoundType.alert);
-    } catch (error) {
-      debugPrint('Could not play drying-complete chime: $error');
-    }
-  }
-
-  Future<void> _playMoistureAlertChime() async {
-    if (!moistureAlertChimeEnabled) return;
-    try {
-      if (Platform.isAndroid || Platform.isWindows) {
-        await _audioChannel.invokeMethod<void>('playMoistureAlertChime');
-        return;
-      }
-      if (Platform.isLinux) {
-        final executableDirectory = File(Platform.resolvedExecutable)
-            .parent
-            .path;
-        final sound =
-            '$executableDirectory/data/flutter_assets/assets/audio/moisture_alert.wav';
-        final result = await Process.run('/usr/bin/paplay', [sound]);
-        if (result.exitCode == 0) return;
-      }
-      await SystemSound.play(SystemSoundType.alert);
-    } catch (error) {
-      debugPrint('Could not play moisture-alert chime: $error');
     }
   }
 
@@ -10854,57 +13239,32 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _sameJson(Object? a, Object? b) =>
       jsonEncode(_sortedJson(a)) == jsonEncode(_sortedJson(b));
 
+  // A dead refresh token usually means a concurrent window or another
+  // install on this device already refreshed and saved a newer session,
+  // not that this device's identity is actually gone. Recovering via the
+  // owner recovery key is a destructive ownership transfer -- it locks out
+  // every other device claiming ownership and rotates the shared recovery
+  // key -- so it must never fire automatically just because one of
+  // several racing sync attempts lost a refresh-token race. Only adopt an
+  // already-fresher session here; genuine recovery stays a deliberate,
+  // user-initiated action in the Remote Sync dialog.
   Future<bool> _recoverExpiredOwnerSession(
     LocalDatabase database,
     SupabaseConfig failedConfig,
   ) async {
     final workspaceId = failedConfig.workspaceId;
-    if (failedConfig.workspaceRole != 'owner' || workspaceId == null) {
-      return false;
-    }
-    final recoveryKey = database.loadWorkspaceRecoveryKey(workspaceId);
-    if (recoveryKey == null) return false;
+    if (workspaceId == null) return false;
+    final source = database.loadSyncConfig();
+    if (source == null) return false;
     try {
-      return await database.withSyncSessionLock(() async {
-        final source = database.loadSyncConfig();
-        final latest = source == null
-            ? failedConfig
-            : SupabaseConfig.fromJson(
-                jsonDecode(source) as Map<String, dynamic>,
-              );
-        final service = SupabaseSyncService(latest);
-        final session = await service.signInAnonymously();
-        await service.requireCurrentSchema(session);
-        final replacement = await service.recoverWorkspace(
-          session,
-          workspaceId: workspaceId,
-          recoveryKey: recoveryKey,
-          deviceName: deviceName,
-        );
-        final recovered = latest.copyWith(
-          userId: session.userId,
-          workspaceId: replacement.workspaceId,
-          workspaceRole: 'owner',
-          accessToken: session.accessToken,
-          accessTokenExpiresAt: session.expiresAt,
-          refreshToken: session.refreshToken,
-        );
-        database.saveWorkspaceRecoveryKey(
-          replacement.workspaceId,
-          replacement.key,
-        );
-        database.saveSyncConfig(jsonEncode(recovered.toJson()));
-        if (mounted) {
-          setState(() {
-            currentRole = WorkspaceRole.admin;
-            workspaceOwner = true;
-            currentUserId = session.userId;
-          });
-        }
-        return true;
-      });
+      final latest = SupabaseConfig.fromJson(
+        jsonDecode(source) as Map<String, dynamic>,
+      );
+      return latest.workspaceId == workspaceId &&
+          latest.refreshToken != null &&
+          latest.refreshToken != failedConfig.refreshToken;
     } catch (error) {
-      debugPrint('Automatic owner-session recovery failed: $error');
+      debugPrint('Could not read the latest sync config: $error');
       return false;
     }
   }
@@ -10921,6 +13281,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       _syncRequestedWhileBusy = true;
       return;
     }
+    // Drain deferred local commits before taking a sync snapshot. This keeps
+    // a just-edited field in the outbox before any remote merge can run.
+    await database.waitForPendingWrites();
+    if (!mounted || database.isClosed) return;
     if (_quantityCommitTimers.isNotEmpty) return;
     if (_inventoryIsScrolling.value) {
       _deferredAutoSync?.cancel();
@@ -10950,7 +13314,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     var retryAfterRecovery = false;
     var syncSucceeded = false;
+    // This revision belongs to the state at the start of this sync pass. Any
+    // local edit after this point needs another pass, even if it lands while
+    // we are waiting to apply or confirm remote changes.
+    final syncingRevision = _localStateRevision;
     _syncing = true;
+    _syncActivity.value = true;
     _syncRequestedWhileBusy = false;
     try {
       final refreshed = await database.withSyncSessionLock(() async {
@@ -10964,7 +13333,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (cachedSession != null) {
           return (config: latest, session: cachedSession);
         }
-        final nextSession = await SupabaseSyncService(latest).refresh();
+        final nextSession = await SupabaseSyncService(
+          latest,
+          client: widget.supabaseHttpClient,
+        ).refresh();
         final nextConfig = latest.copyWith(
           userId: nextSession.userId,
           accessToken: nextSession.accessToken,
@@ -10979,7 +13351,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
       config = refreshed.config;
       final session = refreshed.session;
-      var service = SupabaseSyncService(config);
+      var service = SupabaseSyncService(
+        config,
+        client: widget.supabaseHttpClient,
+      );
       await service.requireCurrentSchema(session);
       try {
         final role = await service.currentRole(session);
@@ -11009,7 +13384,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             currentUserId = session.userId;
           });
         }
-        service = SupabaseSyncService(config);
+        service = SupabaseSyncService(
+          config,
+          client: widget.supabaseHttpClient,
+        );
       } catch (error) {
         debugPrint('Could not refresh workspace role: $error');
       }
@@ -11032,44 +13410,52 @@ class _InventoryHomeState extends State<InventoryHome> {
         _syncRequestedWhileBusy = true;
         return;
       }
-      var pending = database.loadPendingWorkshopChanges();
-      var pendingByKey = {
-        for (final entry in pending)
-          '${entry.change.entityType}\u0000${entry.change.entityId}':
-              entry.change,
-      };
       if (incoming.changes.isNotEmpty && mounted) {
         await _waitForInventoryScrollIdle();
         if (!mounted) return;
-        final mergedIncoming = incoming.changes.map((change) {
-          final local =
-              pendingByKey['${change.entityType}\u0000${change.entityId}'];
-          if (local == null) return change;
-          if (local.deleted) return local;
-          return WorkshopEntityChange(
-            entityType: change.entityType,
-            entityId: change.entityId,
-            fields: {...change.fields, ...local.fields},
-            revision: change.revision,
-          );
-        }).toList();
-        database.applyRemoteWorkshopChanges(mergedIncoming);
-        _applyRemoteEntityChanges(mergedIncoming);
+        // Re-read after the await. A user can edit this item while the remote
+        // request or scroll-settle wait is in flight.
+        await database.waitForPendingWrites();
+        final latestPending = database.loadPendingWorkshopChanges();
+        final incomingMerge = mergeRemoteChangesWithPending(
+          incoming.changes,
+          latestPending.map((entry) => entry.change),
+        );
+        _recordSyncConflicts(incomingMerge.conflicts);
+        database.applyRemoteWorkshopChanges(incomingMerge.changes);
+        _applyRemoteEntityChanges(incomingMerge.changes);
       }
       cursor = incoming.revision;
       database.saveSyncCursor(config.workspaceId!, cursor);
 
-      final syncingRevision = _localStateRevision;
       final auditBatch = _pendingAuditBatch();
+      // Include edits made while the incoming batch was being applied. The
+      // versioned acknowledgement leaves any still-newer edit in the outbox.
+      await database.waitForPendingWrites();
+      var pending = database.loadPendingWorkshopChanges();
       if (pending.isNotEmpty) {
-        await service.uploadChanges(
-          session,
-          pending.map((entry) => entry.change),
-          deviceId: deviceId,
-          auditEvents: auditBatch,
-        );
-        database.acknowledgePendingWorkshopChanges(pending);
-        _acknowledgeAuditBatch(auditBatch);
+        var auditAcknowledged = false;
+        for (
+          var offset = 0;
+          offset < pending.length;
+          offset += _syncUploadBatchSize
+        ) {
+          final end = math.min(offset + _syncUploadBatchSize, pending.length);
+          final batch = pending.sublist(offset, end);
+          await service.uploadChanges(
+            session,
+            batch.map((entry) => entry.change),
+            deviceId: deviceId,
+            auditEvents: auditAcknowledged ? const [] : auditBatch,
+          );
+          // Acknowledge each completed batch immediately. Version matching
+          // preserves any newer edit made to the same record during upload.
+          database.acknowledgePendingWorkshopChanges(batch);
+          if (!auditAcknowledged) {
+            _acknowledgeAuditBatch(auditBatch);
+            auditAcknowledged = true;
+          }
+        }
       }
 
       // Pull again from the previous cursor. This includes our confirmed rows
@@ -11086,26 +13472,15 @@ class _InventoryHomeState extends State<InventoryHome> {
           _syncRequestedWhileBusy = true;
           return;
         }
+        await database.waitForPendingWrites();
         pending = database.loadPendingWorkshopChanges();
-        pendingByKey = {
-          for (final entry in pending)
-            '${entry.change.entityType}\u0000${entry.change.entityId}':
-                entry.change,
-        };
-        final mergedConfirmed = confirmed.changes.map((change) {
-          final local =
-              pendingByKey['${change.entityType}\u0000${change.entityId}'];
-          if (local == null) return change;
-          if (local.deleted) return local;
-          return WorkshopEntityChange(
-            entityType: change.entityType,
-            entityId: change.entityId,
-            fields: {...change.fields, ...local.fields},
-            revision: change.revision,
-          );
-        }).toList();
-        database.applyRemoteWorkshopChanges(mergedConfirmed);
-        _applyRemoteEntityChanges(mergedConfirmed);
+        final confirmedMerge = mergeRemoteChangesWithPending(
+          confirmed.changes,
+          pending.map((entry) => entry.change),
+        );
+        _recordSyncConflicts(confirmedMerge.conflicts);
+        database.applyRemoteWorkshopChanges(confirmedMerge.changes);
+        _applyRemoteEntityChanges(confirmedMerge.changes);
       }
       database.saveSyncCursor(config.workspaceId!, confirmed.revision);
       config = config.copyWith(
@@ -11147,13 +13522,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       _syncing = false;
       final newerStateNeedsSync =
           syncSucceeded && _localStateRevision != _lastSyncedLocalRevision;
-      final runAgain = _syncRequestedWhileBusy || newerStateNeedsSync;
+      // A poll that arrived while a failed request was in flight must wait for
+      // the normal retry interval. Immediate retries can otherwise keep a
+      // degraded server continuously busy.
+      final runAgain =
+          syncSucceeded && (_syncRequestedWhileBusy || newerStateNeedsSync);
       _syncRequestedWhileBusy = false;
+      var continuing = false;
       if (runAgain &&
           mounted &&
           !_autoSyncPausedForAuthentication &&
           !retryAfterRecovery) {
+        continuing = true;
         _scheduleAutomaticSync(delay: Duration.zero);
+      }
+      if (mounted && !continuing && !retryAfterRecovery) {
+        _syncActivity.value = false;
       }
     }
     if (retryAfterRecovery && mounted) {
@@ -11503,6 +13887,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       type = null;
       customTypeFilterId = null;
       itemColorFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
     });
     _persist();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -11611,6 +13997,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 920;
       final narrow = constraints.maxWidth < 600;
+      final phoneNarrow = constraints.maxWidth < 400;
       return Padding(
         padding: EdgeInsets.fromLTRB(
           compact ? 12 : 20,
@@ -11621,20 +14008,22 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              key: const Key('inventory-search'),
+            if (catalogFilter == null) ...[
+              _metricsPanel(),
+              const SizedBox(height: 14),
+            ],
+            _EdgeLitSearchField(
+              fieldKey: const Key('inventory-search'),
               controller: inventorySearchController,
               focusNode: inventorySearchFocusNode,
+              enabled: searchGlowEnabled,
               onChanged: (value) => setState(() {
                 query = value;
                 currentPage = 0;
               }),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search_rounded),
-                hintText: compact
-                    ? 'Search inventory…'
-                    : 'Search items, types, compatibility…  Try “E3DV6”',
-              ),
+              hintText: compact
+                  ? 'Search inventory…'
+                  : 'Search items, types, compatibility…  Try “E3DV6”',
             ),
             const SizedBox(height: 14),
             if (catalogFilter == null &&
@@ -11660,6 +14049,18 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
                 const SizedBox(height: 10),
                 _mobileSizeControls(),
+              ] else if (compact) ...[
+                Row(
+                  children: [
+                    _resultCount(),
+                    const Spacer(),
+                    _sortControl(),
+                    const SizedBox(width: 8),
+                    _viewOptions(),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _sizeControls(expandSliders: true),
               ] else
                 Row(
                   children: [
@@ -11672,6 +14073,20 @@ class _InventoryHomeState extends State<InventoryHome> {
                     _viewOptions(),
                   ],
                 ),
+            ] else if (phoneNarrow) ...[
+              _typeFilterPanel(compact: true),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _resultCount(),
+                  const Spacer(),
+                  if (catalogFilter == null) ...[_sortControl(compact: true)],
+                ],
+              ),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerRight, child: _viewOptions()),
+              const SizedBox(height: 10),
+              _mobileSizeControls(),
             ] else if (compact) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -11826,7 +14241,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ? '${visibleItems.length} archived'
                   : type == null &&
                         customTypeFilterId == null &&
-                        itemColorFilter == null
+                        itemColorFilter == null &&
+                        filamentMaterialFilter == null &&
+                        filamentBrandFilter == null
                   ? '${visibleItems.length + visibleEverythingCatalogRecords.length} records'
                   : '${visibleItems.length} items'
             : '${visibleCatalogRecords.length} ${_catalogViewDisplayLabel(catalogFilter!).toLowerCase()}',
@@ -11853,7 +14270,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     String label(InventorySort value) => switch (value) {
       InventorySort.type => 'Type',
       InventorySort.quantity => 'Quantity',
-      InventorySort.age => 'Age',
+      InventorySort.addedDate => 'Added date',
       InventorySort.cost => 'Cost',
       InventorySort.dryingTime => 'Drying time',
       InventorySort.moistureRemaining => 'Moisture remaining',
@@ -11861,7 +14278,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     IconData icon(InventorySort value) => switch (value) {
       InventorySort.type => Icons.category_outlined,
       InventorySort.quantity => Icons.numbers_rounded,
-      InventorySort.age => Icons.schedule_rounded,
+      InventorySort.addedDate => Icons.calendar_today_outlined,
       InventorySort.cost => Icons.attach_money_rounded,
       InventorySort.dryingTime => Icons.local_fire_department_outlined,
       InventorySort.moistureRemaining => Icons.water_drop_outlined,
@@ -11875,7 +14292,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       constraints: const BoxConstraints(minWidth: 230, maxWidth: 280),
       onSelected: (value) => setState(() {
         sort = value;
+        sortAscending = defaultInventorySortAscending(value);
         currentPage = 0;
+        widget.database?.saveStringPreference('inventory_sort', value.name);
+        widget.database?.saveBoolPreference(
+          'inventory_sort_ascending',
+          sortAscending,
+        );
       }),
       itemBuilder: (context) => [
         for (final value in InventorySort.values)
@@ -11895,7 +14318,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         key: const Key('sort-glass-surface'),
         selected: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 9, 8),
+          padding: compact
+              ? const EdgeInsets.fromLTRB(10, 8, 7, 8)
+              : const EdgeInsets.fromLTRB(12, 8, 9, 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -11926,6 +14351,44 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       ),
     );
+    final direction = Tooltip(
+      message: sortAscending
+          ? 'Ascending · click for descending'
+          : 'Descending · click for ascending',
+      child: InkWell(
+        key: const Key('sort-direction-toggle'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() {
+          sortAscending = !sortAscending;
+          currentPage = 0;
+          widget.database?.saveBoolPreference(
+            'inventory_sort_ascending',
+            sortAscending,
+          );
+        }),
+        child: _GlassFilterChip(
+          selected: false,
+          child: SizedBox.square(
+            dimension: _inventorySquareControlSize,
+            child: Icon(
+              sortAscending
+                  ? Icons.arrow_upward_rounded
+                  : Icons.arrow_downward_rounded,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      ),
+    );
+    final controls = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: compact ? 56 : 150, child: dropdown),
+        const SizedBox(width: 5),
+        direction,
+      ],
+    );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -11935,9 +14398,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             style: TextStyle(color: Color(0xff7f8798), fontSize: 12),
           ),
           const SizedBox(width: 8),
-          dropdown,
+          controls,
         ] else
-          SizedBox(width: compact ? 64 : 180, child: dropdown),
+          controls,
       ],
     );
   }
@@ -11970,26 +14433,37 @@ class _InventoryHomeState extends State<InventoryHome> {
           onChanged: _previewPageSize,
         ),
       );
-      return Row(
-        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
-        children: [
-          Text(
-            compactLabel ? 'Page' : 'Page size',
-            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
-          ),
-          if (expandSlider)
-            Expanded(child: slider)
-          else
-            SizedBox(width: 190, child: slider),
-          SizedBox(
-            width: compactLabel ? 28 : 38,
-            child: Text(
-              '${_pageSizes[previewIndex]}',
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Below this width there isn't room for a label next to a usable
+          // slider; drop it rather than let the row overflow.
+          final showLabel = !expandSlider || constraints.maxWidth >= 100;
+          return Row(
+            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              if (showLabel)
+                Text(
+                  compactLabel ? 'Page' : 'Page size',
+                  style: const TextStyle(
+                    color: Color(0xff7f8798),
+                    fontSize: 12,
+                  ),
+                ),
+              if (expandSlider)
+                Expanded(child: slider)
+              else
+                SizedBox(width: 190, child: slider),
+              SizedBox(
+                width: compactLabel ? 28 : 38,
+                child: Text(
+                  '${_pageSizes[previewIndex]}',
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          );
+        },
       );
     },
   );
@@ -12084,26 +14558,37 @@ class _InventoryHomeState extends State<InventoryHome> {
           onChanged: _previewCardSize,
         ),
       );
-      return Row(
-        mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
-        children: [
-          Text(
-            compactLabel ? 'Card' : 'Card size',
-            style: const TextStyle(color: Color(0xff7f8798), fontSize: 12),
-          ),
-          if (expandSlider)
-            Expanded(child: slider)
-          else
-            SizedBox(width: 120, child: slider),
-          SizedBox(
-            width: compactLabel ? 38 : 42,
-            child: Text(
-              '${previewValue.round()}%',
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Below this width there isn't room for a label next to a usable
+          // slider; drop it rather than let the row overflow.
+          final showLabel = !expandSlider || constraints.maxWidth >= 100;
+          return Row(
+            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              if (showLabel)
+                Text(
+                  compactLabel ? 'Card' : 'Card size',
+                  style: const TextStyle(
+                    color: Color(0xff7f8798),
+                    fontSize: 12,
+                  ),
+                ),
+              if (expandSlider)
+                Expanded(child: slider)
+              else
+                SizedBox(width: 120, child: slider),
+              SizedBox(
+                width: compactLabel ? 38 : 42,
+                child: Text(
+                  '${previewValue.round()}%',
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          );
+        },
       );
     },
   );
@@ -12172,50 +14657,70 @@ class _InventoryHomeState extends State<InventoryHome> {
         ],
       );
 
-  Widget _compactHeaderActionStrip({required bool showOverflowHint}) => Stack(
-    alignment: Alignment.centerRight,
-    children: [
-      SingleChildScrollView(
-        key: const Key('compact-header-actions'),
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.only(right: showOverflowHint ? 36 : 0),
-        child: Row(
-          children: [
-            ..._centerHeaderActions(),
-            const SizedBox(width: 8),
-            ..._databaseHeaderActions(),
-          ],
-        ),
-      ),
-      if (showOverflowHint)
-        Positioned(
-          right: 0,
-          top: 0,
-          bottom: 0,
-          child: IgnorePointer(
-            child: Container(
-              key: const Key('header-more-indicator'),
-              width: 42,
-              alignment: Alignment.centerRight,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Theme.of(context).scaffoldBackgroundColor
-                        .withValues(alpha: 0),
-                    Theme.of(context).scaffoldBackgroundColor,
-                  ],
+  Widget _compactHeaderActionStrip({required bool showOverflowHint}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          // Both action groups fit comfortably at this width. Anchor them to
+          // opposite sides of the bar instead of letting Stack place the
+          // intrinsic-width scroll view against the right edge.
+          if (!showOverflowHint && constraints.maxWidth >= 520) {
+            return Row(
+              key: const Key('compact-header-actions'),
+              children: [
+                ..._centerHeaderActions(),
+                const Spacer(),
+                ..._databaseHeaderActions(),
+              ],
+            );
+          }
+          return Stack(
+            alignment: Alignment.centerRight,
+            children: [
+              Positioned.fill(
+                child: SingleChildScrollView(
+                  key: const Key('compact-header-actions'),
+                  scrollDirection: Axis.horizontal,
+                  padding: EdgeInsets.only(right: showOverflowHint ? 36 : 0),
+                  child: Row(
+                    children: [
+                      ..._centerHeaderActions(),
+                      const SizedBox(width: 8),
+                      ..._databaseHeaderActions(),
+                    ],
+                  ),
                 ),
               ),
-              child: Icon(
-                Icons.chevron_right_rounded,
-                color: Theme.of(context).colorScheme.primary,
-                size: 28,
-              ),
-            ),
-          ),
-        ),
-    ],
-  );
+              if (showOverflowHint)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      key: const Key('header-more-indicator'),
+                      width: 42,
+                      alignment: Alignment.centerRight,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Theme.of(context).scaffoldBackgroundColor
+                                .withValues(alpha: 0),
+                            Theme.of(context).scaffoldBackgroundColor,
+                          ],
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.chevron_right_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 28,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      );
 
   Widget _glassQuickAction({
     required Key key,
@@ -13560,6 +16065,38 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  Widget _jumpToTopButton() => AnimatedBuilder(
+    animation: inventoryScrollController,
+    builder: (context, _) {
+      final visible =
+          inventoryScrollController.hasClients &&
+          inventoryScrollController.offset > 80;
+      return IgnorePointer(
+        ignoring: !visible,
+        child: AnimatedOpacity(
+          key: const Key('jump-to-top-visibility'),
+          duration: const Duration(milliseconds: 180),
+          opacity: visible ? 1 : 0,
+          child: _glassQuickAction(
+            key: const Key('jump-to-top-button'),
+            onPressed: () {
+              if (!inventoryScrollController.hasClients) return;
+              inventoryScrollController.animateTo(
+                0,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            },
+            icon: Icons.keyboard_arrow_up_rounded,
+            label: 'Jump to top',
+            iconOnly: true,
+            iconOnlyWidth: 48,
+          ),
+        ),
+      );
+    },
+  );
+
   ButtonStyle get _quickActionStyle => ButtonStyle(
     foregroundColor: WidgetStatePropertyAll(
       Theme.of(context).colorScheme.onSurface,
@@ -13616,18 +16153,53 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _configBlockButton(
-              key: const Key('database-settings'),
-              tooltip: 'Local database',
-              onPressed: widget.database == null ? null : _openDatabaseSettings,
-              icon: Icons.storage_rounded,
+            ValueListenableBuilder<LocalSaveFeedback>(
+              valueListenable: _localSaveFeedback,
+              builder: (context, feedback, _) {
+                final saving = feedback == LocalSaveFeedback.saving;
+                final saved = feedback == LocalSaveFeedback.saved;
+                return _configBlockButton(
+                  key: const Key('database-settings'),
+                  tooltip: saving
+                      ? 'Saving changes…'
+                      : saved
+                      ? 'Changes saved'
+                      : 'Local database',
+                  onPressed: widget.database == null
+                      ? null
+                      : _openDatabaseSettings,
+                  icon: Icons.storage_rounded,
+                  iconWidget: feedback == LocalSaveFeedback.idle
+                      ? null
+                      : Icon(
+                          saving
+                              ? Icons.sync_rounded
+                              : Icons.check_circle_outline,
+                          key: const Key('local-save-feedback'),
+                          size: 18,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                );
+              },
             ),
             _configBlockDivider(),
-            _configBlockButton(
-              key: const Key('cloud-sync'),
-              tooltip: 'Remote Sync',
-              onPressed: widget.database == null ? null : _openCloudSync,
-              icon: Icons.cloud_sync_outlined,
+            ValueListenableBuilder<bool>(
+              valueListenable: _syncActivity,
+              builder: (context, syncing, _) => _configBlockButton(
+                key: const Key('cloud-sync'),
+                tooltip: syncing ? 'Syncing changes…' : 'Remote Sync',
+                onPressed: widget.database == null ? null : _openCloudSync,
+                icon: Icons.cloud_sync_outlined,
+                iconWidget: syncing
+                    ? SizedBox.square(
+                        dimension: 17,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      )
+                    : null,
+              ),
             ),
             _configBlockDivider(),
             _configBlockButton(
@@ -13650,6 +16222,13 @@ class _InventoryHomeState extends State<InventoryHome> {
               onPressed: _openAuditLog,
               icon: Icons.history_rounded,
             ),
+            _configBlockDivider(),
+            _configBlockButton(
+              key: const Key('getting-started-help'),
+              tooltip: 'Getting started',
+              onPressed: _openGettingStarted,
+              icon: Icons.help_outline_rounded,
+            ),
           ],
         ),
       ),
@@ -13661,6 +16240,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     required String tooltip,
     required VoidCallback? onPressed,
     required IconData icon,
+    Widget? iconWidget,
   }) {
     Widget joinedGlassLayer(
       BuildContext context,
@@ -13681,7 +16261,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         hoverColor: Colors.transparent,
         highlightColor: Colors.transparent,
       ).copyWith(backgroundBuilder: joinedGlassLayer),
-      icon: Icon(icon),
+      icon: iconWidget ?? Icon(icon),
     );
   }
 
@@ -13805,7 +16385,12 @@ class _InventoryHomeState extends State<InventoryHome> {
           icon: const Icon(Icons.visibility_outlined),
           selectedIcon: const Icon(Icons.visibility_off_outlined),
           style: ButtonStyle(
-            minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+            minimumSize: const WidgetStatePropertyAll(
+              Size(_inventorySquareControlSize, _inventorySquareControlSize),
+            ),
+            maximumSize: const WidgetStatePropertyAll(
+              Size(_inventorySquareControlSize, _inventorySquareControlSize),
+            ),
             backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
             overlayColor: const WidgetStatePropertyAll(Colors.transparent),
             foregroundColor: WidgetStateProperty.resolveWith(
@@ -13827,6 +16412,26 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (archivedOnly) return 'Archived';
     if (catalogFilter case final filter?) {
       return _catalogViewDisplayLabel(filter);
+    }
+    if (filamentBrandFilter != null) {
+      return filamentBrandFilter == _unspecifiedBrandKey
+          ? 'Brand · Unspecified brand'
+          : 'Brand · ${filamentBrandFilter!}';
+    }
+    if (filamentMaterialFilter != null) {
+      return filamentMaterialFilter == _unspecifiedMaterialKey
+          ? 'Material · Unspecified material'
+          : 'Material · ${filamentMaterialFilter!}';
+    }
+    if (itemColorFilter != null) {
+      if (itemColorFilter == _unspecifiedItemColorKey) {
+        return 'Color · Unspecified color';
+      }
+      final selected = availableItemColorFilters
+          .where((color) => color.value == itemColorFilter)
+          .firstOrNull;
+      if (selected != null) return 'Color · ${selected.label}';
+      return 'Color filter';
     }
     if (customTypeFilterId case final id?) {
       return customItemTypes
@@ -13850,6 +16455,15 @@ class _InventoryHomeState extends State<InventoryHome> {
         size: 20,
       );
     }
+    if (filamentBrandFilter != null) {
+      return const Icon(Icons.storefront_outlined, size: 20);
+    }
+    if (filamentMaterialFilter != null) {
+      return const Icon(Icons.layers_outlined, size: 20);
+    }
+    if (itemColorFilter != null) {
+      return const Icon(Icons.palette_outlined, size: 20);
+    }
     if (customTypeFilterId case final id?) {
       final custom = customItemTypes
           .where((candidate) => candidate.id == id)
@@ -13865,6 +16479,472 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     return const Icon(Icons.category_outlined, size: 20);
   }
+
+  Widget _metricsPanel() {
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final metrics = _inventoryMetrics;
+    final filamentTracked = !metricsUntrackedTypeKeys.contains(
+      _inventoryTypeDefinitionKey(InventoryType.filament),
+    );
+    final stats = [
+      _MetricStat(
+        'Filament spools',
+        _formatBomQuantity(metrics.filamentSpools),
+        Icons.inventory_2_outlined,
+      ),
+      _MetricStat(
+        'Total units',
+        _formatBomQuantity(metrics.totalUnits),
+        Icons.widgets_outlined,
+      ),
+      _MetricStat(
+        'Item records',
+        metrics.itemRecords.toString(),
+        Icons.list_alt_outlined,
+      ),
+      _MetricStat(
+        'Low stock',
+        metrics.lowStockRecords.toString(),
+        Icons.warning_amber_rounded,
+      ),
+      if (filamentTracked) ...[
+        _MetricStat(
+          'Colors',
+          metrics.filamentColorCount.toString(),
+          Icons.palette_outlined,
+        ),
+        _MetricStat(
+          'Materials',
+          metrics.filamentMaterialCount.toString(),
+          Icons.layers_outlined,
+        ),
+        _MetricStat(
+          'Brands',
+          metrics.filamentBrandCount.toString(),
+          Icons.storefront_outlined,
+        ),
+      ],
+    ];
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: const Key('metrics-panel'),
+          controller: metricsExpansionController,
+          initiallyExpanded: metricsPanelExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => metricsPanelExpanded = expanded);
+            widget.database?.saveBoolPreference(
+              'metrics_panel_expanded',
+              expanded,
+            );
+          },
+          leading: const Icon(Icons.query_stats_rounded),
+          title: const Text(
+            'Metrics',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text(
+            '${_formatBomQuantity(metrics.filamentSpools)} filament spools · '
+            '${metrics.itemRecords} item records',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Color(0xff9da5b7)),
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            _metricsTypeTracker(palette),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final stat in stats) _metricStatTile(stat, palette),
+              ],
+            ),
+            if (filamentTracked &&
+                (metrics.topFilamentMaterials.isNotEmpty ||
+                    metrics.topFilamentColors.isNotEmpty ||
+                    metrics.topFilamentBrands.isNotEmpty)) ...[
+              const SizedBox(height: 12),
+              _metricsFilamentBreakdown(metrics, palette),
+            ],
+            const SizedBox(height: 16),
+            _metricsCharts(palette),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Tucks the "Top filament colors/materials/brands" drill-down cards into
+  /// their own collapsed-by-default sub-section so they don't dominate the
+  /// Metrics panel the moment it's opened — the counts on the stat tiles
+  /// above are the always-visible summary; this is the opt-in detail view.
+  Widget _metricsFilamentBreakdown(
+    _InventoryMetrics metrics,
+    InventorinatorColors palette,
+  ) => Material(
+    color: palette.panel,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: BorderSide(color: palette.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('metrics-filament-breakdown'),
+        initiallyExpanded: metricsFilamentBreakdownExpanded,
+        onExpansionChanged: (expanded) {
+          setState(() => metricsFilamentBreakdownExpanded = expanded);
+          widget.database?.saveBoolPreference(
+            'metrics_filament_breakdown_expanded',
+            expanded,
+          );
+        },
+        leading: const Icon(Icons.donut_large_rounded, size: 20),
+        title: const Text(
+          'Filament breakdown',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        ),
+        subtitle: Text(
+          '${metrics.filamentColorCount} colors · '
+          '${metrics.filamentMaterialCount} materials · '
+          '${metrics.filamentBrandCount} brands',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        children: [
+          if (metrics.topFilamentMaterials.isNotEmpty) ...[
+            _metricsDistributionPanel(
+              'Top filament materials',
+              metrics.topFilamentMaterials,
+              Icons.layers_outlined,
+              palette,
+              selected: filamentMaterialFilter,
+              onTap: (bucket) => _setMaterialFilter(
+                filamentMaterialFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (metrics.topFilamentColors.isNotEmpty) ...[
+            _metricsDistributionPanel(
+              'Top filament colors',
+              metrics.topFilamentColors,
+              Icons.palette_outlined,
+              palette,
+              selected: itemColorFilter,
+              onTap: (bucket) => _setItemColorFilter(
+                itemColorFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (metrics.topFilamentBrands.isNotEmpty)
+            _metricsDistributionPanel(
+              'Top filament brands',
+              metrics.topFilamentBrands,
+              Icons.storefront_outlined,
+              palette,
+              selected: filamentBrandFilter,
+              onTap: (bucket) => _setBrandFilter(
+                filamentBrandFilter == bucket.filterValue
+                    ? null
+                    : bucket.filterValue,
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _metricsDistributionPanel(
+    String title,
+    List<_MetricBucket> entries,
+    IconData icon,
+    InventorinatorColors palette, {
+    String? selected,
+    required void Function(_MetricBucket) onTap,
+  }) => _JewelPanel(
+    title: title,
+    palette: palette,
+    trailing: Icon(icon, size: 18, color: const Color(0xff9da5b7)),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final entry in entries)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => onTap(entry),
+              child: Container(
+                width: 176,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: selected == entry.filterValue
+                      ? palette.surface
+                      : palette.input,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected == entry.filterValue
+                        ? palette.accent.withValues(alpha: .75)
+                        : palette.outlineVariant,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xff9da5b7),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _formatBomQuantity(entry.value),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Text(
+                      'spools',
+                      style: TextStyle(color: Color(0xff9da5b7), fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  List<({String key, String label, IconData icon})>
+  get _metricsTrackableTypes => [
+    for (final value in InventoryType.values.where(
+      (value) => value != InventoryType.custom,
+    ))
+      if (!deletedTypeKeys.contains(_inventoryTypeDefinitionKey(value)))
+        (
+          key: _inventoryTypeDefinitionKey(value),
+          label:
+              typeLabelOverrides[_inventoryTypeDefinitionKey(value)] ??
+              _typeLabel(value),
+          icon: _iconFromKey(
+            typeIconOverrides[_inventoryTypeDefinitionKey(value)],
+            _typeIcon(value),
+          ),
+        ),
+    for (final customType in customItemTypes)
+      if (!deletedTypeKeys.contains('custom:${customType.id}'))
+        (
+          key: 'custom:${customType.id}',
+          label: customType.name,
+          icon: _iconFromKey(customType.iconKey, Icons.tune_rounded),
+        ),
+  ];
+
+  Widget _metricsTypeTracker(InventorinatorColors palette) {
+    final types = _metricsTrackableTypes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Tracked types',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: _GlassFilterChip(
+                selected: metricsUntrackedTypeKeys.isEmpty,
+                child: FilterChip(
+                  key: const Key('metrics-track-all'),
+                  label: const Text('All types'),
+                  selected: metricsUntrackedTypeKeys.isEmpty,
+                  onSelected: (_) => _setMetricsUntrackedTypeKeys(const {}),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 8,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  selectedColor: Colors.transparent,
+                  side: BorderSide.none,
+                ),
+              ),
+            ),
+            for (final type in types)
+              _GlassFilterChip(
+                selected: !metricsUntrackedTypeKeys.contains(type.key),
+                child: FilterChip(
+                  key: Key('metrics-track-${type.key}'),
+                  avatar: Icon(type.icon, size: 18),
+                  label: Text(type.label),
+                  selected: !metricsUntrackedTypeKeys.contains(type.key),
+                  onSelected: (selected) {
+                    final updated = {...metricsUntrackedTypeKeys};
+                    if (selected) {
+                      updated.remove(type.key);
+                    } else {
+                      updated.add(type.key);
+                    }
+                    _setMetricsUntrackedTypeKeys(updated);
+                  },
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 8,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  selectedColor: Colors.transparent,
+                  side: BorderSide.none,
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _metricStatTile(_MetricStat stat, InventorinatorColors palette) =>
+      Container(
+        width: 150,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: palette.panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: palette.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(stat.icon, size: 18, color: palette.accent),
+            const SizedBox(height: 8),
+            Text(
+              stat.value,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+            Text(
+              stat.label,
+              style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+
+  static const _metricsChartDimensions = [
+    (key: 'type', label: 'Type'),
+    (key: 'color', label: 'Color'),
+    (key: 'material', label: 'Material'),
+    (key: 'brand', label: 'Brand'),
+  ];
+
+  void _setMetricsChartDimension(String key) {
+    setState(() => metricsChartDimension = key);
+    widget.database?.saveStringPreference('metrics_chart_dimension', key);
+  }
+
+  List<({String label, Color color, List<double> values})> _metricsChartSeries(
+    Color accent,
+  ) => switch (metricsChartDimension) {
+    'color' => _inventoryColorGrowthSeries(accent),
+    'material' => _inventoryMaterialGrowthSeries(accent),
+    'brand' => _inventoryBrandGrowthSeries(accent),
+    _ => _inventoryTypeGrowthSeries(accent),
+  };
+
+  Widget _metricsCharts(InventorinatorColors palette) => _JewelPanel(
+    title: 'Inventory growth',
+    palette: palette,
+    trailing: _GlassFilterChip(
+      selected: metricsUnifiedGrowth,
+      child: FilterChip(
+        key: const Key('metrics-unified-toggle'),
+        label: const Text('Unified'),
+        selected: metricsUnifiedGrowth,
+        onSelected: (selected) {
+          setState(() => metricsUnifiedGrowth = selected);
+          widget.database?.saveBoolPreference(
+            'metrics_unified_growth',
+            selected,
+          );
+        },
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        side: BorderSide.none,
+        visualDensity: VisualDensity.compact,
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!metricsUnifiedGrowth) ...[
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final dimension in _metricsChartDimensions)
+                _GlassFilterChip(
+                  selected: metricsChartDimension == dimension.key,
+                  child: FilterChip(
+                    key: Key('metrics-dimension-${dimension.key}'),
+                    label: Text(dimension.label),
+                    selected: metricsChartDimension == dimension.key,
+                    onSelected: (_) => _setMetricsChartDimension(dimension.key),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    backgroundColor: Colors.transparent,
+                    selectedColor: Colors.transparent,
+                    side: BorderSide.none,
+                    visualDensity: VisualDensity.compact,
+                    labelStyle: const TextStyle(fontSize: 11),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+        ],
+        metricsUnifiedGrowth
+            ? _JewelAreaChart(
+                series: _inventoryGrowthSeries,
+                color: palette.accent,
+              )
+            : _JewelMultiAreaChart(
+                series: _metricsChartSeries(palette.accent),
+                monthLabels: _metricsMonthLabels,
+              ),
+      ],
+    ),
+  );
 
   Widget _typeFilterPanel({bool compact = false}) => Material(
     color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -13934,12 +17014,15 @@ class _InventoryHomeState extends State<InventoryHome> {
                               archivedOnly = selected;
                               catalogFilter = null;
                               itemColorFilter = null;
+                              filamentMaterialFilter = null;
+                              filamentBrandFilter = null;
                               if (selected) {
                                 type = null;
                                 customTypeFilterId = null;
                               }
                               currentPage = 0;
                             });
+                            _saveInventoryTypeFilter();
                             _scrollToFilteredResults();
                           },
                           padding: const EdgeInsets.symmetric(
@@ -14005,6 +17088,150 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
+  void _saveInventoryTypeFilter() {
+    widget.database?.saveStringPreference(
+      'inventory_type_filter',
+      jsonEncode({
+        'archived': archivedOnly,
+        'catalog': catalogFilter?.name,
+        'type': type?.name,
+        'customTypeId': customTypeFilterId,
+        'color': itemColorFilter,
+        'material': filamentMaterialFilter,
+        'brand': filamentBrandFilter,
+      }),
+    );
+  }
+
+  void _restoreInventoryTypeFilter() {
+    final raw = widget.database?.loadStringPreference(
+      'inventory_type_filter',
+      fallback: '',
+    );
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final saved = jsonDecode(raw);
+      if (saved is! Map) return;
+      String? value(Object? candidate) =>
+          candidate is String && candidate.isNotEmpty ? candidate : null;
+
+      final savedArchived = saved['archived'] == true;
+      final savedCatalog = value(saved['catalog']);
+      final savedType = value(saved['type']);
+      final savedCustomTypeId = value(saved['customTypeId']);
+      final savedColor = value(saved['color']);
+      final savedMaterial = value(saved['material']);
+      final savedBrand = value(saved['brand']);
+      archivedOnly = savedArchived;
+      catalogFilter = savedCatalog == null
+          ? null
+          : CatalogViewFilter.values
+                .where((candidate) => candidate.name == savedCatalog)
+                .where(
+                  (candidate) => !deletedTypeKeys.contains(
+                    _catalogViewDefinitionKey(candidate),
+                  ),
+                )
+                .firstOrNull;
+      type = savedType == null
+          ? null
+          : InventoryType.values
+                .where((candidate) => candidate.name == savedType)
+                .where(
+                  (candidate) => !deletedTypeKeys.contains(
+                    _inventoryTypeDefinitionKey(candidate),
+                  ),
+                )
+                .firstOrNull;
+      customTypeFilterId =
+          savedCustomTypeId != null &&
+              customItemTypes.any(
+                (candidate) => candidate.id == savedCustomTypeId,
+              )
+          ? savedCustomTypeId
+          : null;
+      itemColorFilter = savedColor;
+      filamentMaterialFilter = savedMaterial;
+      filamentBrandFilter = savedBrand;
+
+      if (catalogFilter != null || archivedOnly) {
+        type = null;
+        customTypeFilterId = null;
+        itemColorFilter = null;
+        filamentMaterialFilter = null;
+        filamentBrandFilter = null;
+      } else if (customTypeFilterId != null) {
+        type = InventoryType.custom;
+        itemColorFilter = null;
+        filamentMaterialFilter = null;
+        filamentBrandFilter = null;
+      } else if (type == null &&
+          (itemColorFilter != null ||
+              filamentMaterialFilter != null ||
+              filamentBrandFilter != null)) {
+        type = InventoryType.filament;
+      }
+    } catch (_) {
+      // Ignore malformed device preferences and keep the default filter.
+    }
+  }
+
+  void _setMaterialFilter(String? material) {
+    _collapseTypePanel();
+    _collapseColorPanel();
+    setState(() {
+      filamentMaterialFilter = material;
+      catalogFilter = null;
+      itemColorFilter = null;
+      filamentBrandFilter = null;
+      if (material != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _saveInventoryTypeFilter();
+    _scrollToFilteredResults();
+  }
+
+  void _setItemColorFilter(String? color) {
+    _collapseColorPanel();
+    setState(() {
+      itemColorFilter = color;
+      catalogFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
+      if (color != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _saveInventoryTypeFilter();
+    _scrollToFilteredResults();
+  }
+
+  void _setBrandFilter(String? brand) {
+    _collapseTypePanel();
+    _collapseColorPanel();
+    setState(() {
+      filamentBrandFilter = brand;
+      catalogFilter = null;
+      itemColorFilter = null;
+      filamentMaterialFilter = null;
+      if (brand != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _saveInventoryTypeFilter();
+    _scrollToFilteredResults();
+  }
+
   Widget _typeChip(InventoryType? value, String label) => Padding(
     padding: const EdgeInsets.only(right: 8),
     child: _GlassFilterChip(
@@ -14035,9 +17262,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             customTypeFilterId = null;
             catalogFilter = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -14074,9 +17304,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             customTypeFilterId = customType.id;
             catalogFilter = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -14111,9 +17344,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             type = null;
             customTypeFilterId = null;
             itemColorFilter = null;
+            filamentMaterialFilter = null;
+            filamentBrandFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
+          _saveInventoryTypeFilter();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -14202,12 +17438,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                           label: const Text('All colors'),
                           selected: itemColorFilter == null,
                           onSelected: (_) {
-                            _collapseColorPanel();
-                            setState(() {
-                              itemColorFilter = null;
-                              currentPage = 0;
-                            });
-                            _scrollToFilteredResults();
+                            _setItemColorFilter(null);
                           },
                           backgroundColor: Colors.transparent,
                           selectedColor: Colors.transparent,
@@ -14245,12 +17476,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                             ),
                             selected: itemColorFilter == color.value,
                             onSelected: (_) {
-                              _collapseColorPanel();
-                              setState(() {
-                                itemColorFilter = color.value;
-                                currentPage = 0;
-                              });
-                              _scrollToFilteredResults();
+                              _setItemColorFilter(color.value);
                             },
                             backgroundColor: Colors.transparent,
                             selectedColor: Colors.transparent,
@@ -14284,17 +17510,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       final totalLabel = totalUnits == totalUnits.roundToDouble()
           ? totalUnits.toInt().toString()
           : totalUnits.toStringAsFixed(2);
-      final machineCount = machines
-          .where((machine) => machine.kitIds.contains(record.id))
-          .length;
+      final buildableCount = _kitBuildability(record).buildCount;
+      final recentBuildCutoff = DateTime.now().subtract(
+        const Duration(days: 30),
+      );
+      final recentlyBuiltCount = builds.where((build) {
+        final completedAt = build.completedAt;
+        return build.kitId == record.id &&
+            completedAt != null &&
+            completedAt.isAfter(recentBuildCutoff);
+      }).length;
       icon = Icons.inventory_2_outlined;
       accent = const Color(0xffa987ff);
       category = _catalogViewDisplayLabel(CatalogViewFilter.kits).toUpperCase();
       title = record.name;
-      subtitle = '${record.bom.length} BOM lines · $totalLabel units';
-      detail = machineCount == 0
-          ? 'Not assigned to a machine'
-          : '$machineCount compatible ${machineCount == 1 ? 'machine' : 'machines'}';
+      subtitle = '$totalLabel total parts · $buildableCount builds available';
+      detail = '$recentlyBuiltCount built recently.';
       recordImage = record.imageBytes;
     } else if (record is BuildRecord) {
       final used = record.lines.fold<double>(
@@ -14351,14 +17582,21 @@ class _InventoryHomeState extends State<InventoryHome> {
           )
         : LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 450;
+              final compact =
+                  constraints.maxWidth < 450 || constraints.maxHeight < 260;
+              final tiny = constraints.maxHeight < 210;
               return Padding(
-                padding: const EdgeInsets.all(18),
+                padding: EdgeInsets.all(compact ? 12 : 18),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _catalogRecordVisual(recordImage, icon, accent, 42),
-                    if (compact) const SizedBox(height: 16) else const Spacer(),
+                    _catalogRecordVisual(
+                      recordImage,
+                      icon,
+                      accent,
+                      compact ? 36 : 42,
+                    ),
+                    if (compact) const SizedBox(height: 10) else const Spacer(),
                     Text(
                       category,
                       style: TextStyle(
@@ -14368,33 +17606,35 @@ class _InventoryHomeState extends State<InventoryHome> {
                         letterSpacing: 1.1,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: compact ? 4 : 8),
                     Text(
                       title,
-                      maxLines: 2,
+                      maxLines: tiny ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 17,
+                      style: TextStyle(
+                        fontSize: compact ? 16 : 17,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: compact ? 4 : 6),
                     Text(
                       subtitle,
-                      maxLines: 2,
+                      maxLines: compact ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Color(0xffa4abba)),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xff7f8798),
-                        fontSize: 12,
+                    if (!compact) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xff7f8798),
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               );
@@ -19463,10 +22703,41 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.colorTheme,
     required this.brightnessMode,
     required this.customThemeColor,
+    required this.alertSoundsEnabled,
+    required this.lowStockAlertsEnabled,
+    required this.hideZeroQuantityItems,
+    required this.syncChimeEnabled,
+    required this.dryingCompleteChimeEnabled,
+    required this.moistureAlertChimeEnabled,
+    required this.alertSoundVolumePercent,
+    required this.alertSoundRecurrenceSeconds,
+    required this.alertSoundProfile,
+    required this.cardEffectsEnabled,
+    required this.lowStockEffectsEnabled,
+    required this.moistureEffectsEnabled,
+    required this.remoteSyncEffectsEnabled,
     required this.onSettingsChanged,
     required this.onColorThemeChanged,
     required this.onBrightnessModeChanged,
     required this.onCustomThemeColorChanged,
+    required this.onAlertSoundsChanged,
+    required this.onLowStockAlertsChanged,
+    required this.onHideZeroQuantityItemsChanged,
+    required this.onSyncChimeChanged,
+    required this.onDryingCompleteChimeChanged,
+    required this.onMoistureAlertChimeChanged,
+    required this.onPreviewAlertSound,
+    required this.onAlertSoundVolumeChanged,
+    required this.onAlertSoundRecurrenceChanged,
+    required this.onAlertSoundProfileChanged,
+    required this.onCardEffectsChanged,
+    required this.onLowStockEffectsChanged,
+    required this.onMoistureEffectsChanged,
+    required this.onRemoteSyncEffectsChanged,
+    required this.searchGlowEnabled,
+    required this.newItemGlowEnabled,
+    required this.onSearchGlowChanged,
+    required this.onNewItemGlowChanged,
     required this.onPhotoCardsChanged,
     required this.onCustomIconAnimationModeChanged,
   });
@@ -19477,11 +22748,42 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
   final Color customThemeColor;
+  final bool alertSoundsEnabled;
+  final bool lowStockAlertsEnabled;
+  final bool hideZeroQuantityItems;
+  final bool syncChimeEnabled;
+  final bool dryingCompleteChimeEnabled;
+  final bool moistureAlertChimeEnabled;
+  final int alertSoundVolumePercent;
+  final int alertSoundRecurrenceSeconds;
+  final AlertSoundProfile alertSoundProfile;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final void Function(int durationPercent, int recurrenceSeconds)
   onSettingsChanged;
   final ValueChanged<AppColorTheme> onColorThemeChanged;
   final ValueChanged<AppBrightnessMode> onBrightnessModeChanged;
   final ValueChanged<Color> onCustomThemeColorChanged;
+  final ValueChanged<bool> onAlertSoundsChanged;
+  final ValueChanged<bool> onLowStockAlertsChanged;
+  final ValueChanged<bool> onHideZeroQuantityItemsChanged;
+  final ValueChanged<bool> onSyncChimeChanged;
+  final ValueChanged<bool> onDryingCompleteChimeChanged;
+  final ValueChanged<bool> onMoistureAlertChimeChanged;
+  final VoidCallback onPreviewAlertSound;
+  final ValueChanged<int> onAlertSoundVolumeChanged;
+  final ValueChanged<int> onAlertSoundRecurrenceChanged;
+  final ValueChanged<AlertSoundProfile> onAlertSoundProfileChanged;
+  final ValueChanged<bool> onCardEffectsChanged;
+  final ValueChanged<bool> onLowStockEffectsChanged;
+  final ValueChanged<bool> onMoistureEffectsChanged;
+  final ValueChanged<bool> onRemoteSyncEffectsChanged;
+  final bool searchGlowEnabled;
+  final bool newItemGlowEnabled;
+  final ValueChanged<bool> onSearchGlowChanged;
+  final ValueChanged<bool> onNewItemGlowChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
@@ -19500,6 +22802,21 @@ class _PersonalizationSettingsDialogState
   late AppColorTheme colorTheme = widget.colorTheme;
   late AppBrightnessMode brightnessMode = widget.brightnessMode;
   late Color customThemeColor = widget.customThemeColor;
+  late bool alertSoundsEnabled = widget.alertSoundsEnabled;
+  late bool lowStockAlertsEnabled = widget.lowStockAlertsEnabled;
+  late bool hideZeroQuantityItems = widget.hideZeroQuantityItems;
+  late bool syncChimeEnabled = widget.syncChimeEnabled;
+  late bool dryingCompleteChimeEnabled = widget.dryingCompleteChimeEnabled;
+  late bool moistureAlertChimeEnabled = widget.moistureAlertChimeEnabled;
+  late int alertSoundVolumePercent = widget.alertSoundVolumePercent;
+  late int alertSoundRecurrenceSeconds = widget.alertSoundRecurrenceSeconds;
+  late AlertSoundProfile alertSoundProfile = widget.alertSoundProfile;
+  late bool cardEffectsEnabled = widget.cardEffectsEnabled;
+  late bool lowStockEffectsEnabled = widget.lowStockEffectsEnabled;
+  late bool moistureEffectsEnabled = widget.moistureEffectsEnabled;
+  late bool remoteSyncEffectsEnabled = widget.remoteSyncEffectsEnabled;
+  late bool searchGlowEnabled = widget.searchGlowEnabled;
+  late bool newItemGlowEnabled = widget.newItemGlowEnabled;
 
   Future<void> _pickCustomThemeColor() async {
     final selected = await showDialog<String>(
@@ -19666,6 +22983,278 @@ class _PersonalizationSettingsDialogState
                 setState(() => photoCardsEnabled = value);
                 widget.onPhotoCardsChanged(value);
               },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Inventory display',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            SwitchListTile(
+              key: const Key('hide-zero-personalization'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Hide quantity 0 items'),
+              subtitle: const Text(
+                'Saved only on this device; Remote Sync cannot change it.',
+              ),
+              value: hideZeroQuantityItems,
+              onChanged: (value) {
+                setState(() => hideZeroQuantityItems = value);
+                widget.onHideZeroQuantityItemsChanged(value);
+              },
+            ),
+            const Divider(height: 28),
+            ExpansionTile(
+              key: const Key('personalization-notifications-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Notifications',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text('Choose which visual alerts appear here.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('low-stock-alerts-personalization'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low-stock alerts'),
+                  subtitle: const Text(
+                    'Show quantity-threshold alerts on this device.',
+                  ),
+                  value: lowStockAlertsEnabled,
+                  onChanged: (value) {
+                    setState(() => lowStockAlertsEnabled = value);
+                    widget.onLowStockAlertsChanged(value);
+                  },
+                ),
+              ],
+            ),
+            ExpansionTile(
+              key: const Key('personalization-sounds-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Sounds',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text('Control this device’s alert chimes.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('alert-sounds-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Alert sounds'),
+                  subtitle: const Text(
+                    'Silence remote-item, drying-complete, and moisture alerts on this device.',
+                  ),
+                  value: alertSoundsEnabled,
+                  onChanged: (value) {
+                    setState(() => alertSoundsEnabled = value);
+                    widget.onAlertSoundsChanged(value);
+                  },
+                ),
+                if (!alertSoundsEnabled)
+                  Container(
+                    key: const Key('all-alert-sounds-muted'),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'All alert sounds are muted. Your individual choices are preserved.',
+                    ),
+                  ),
+                SwitchListTile(
+                  key: const Key('sync-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Remote item additions'),
+                  subtitle: const Text(
+                    'Chime when another device adds an item.',
+                  ),
+                  value: syncChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => syncChimeEnabled = value);
+                    widget.onSyncChimeChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('drying-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Drying complete'),
+                  subtitle: const Text('Chime when a drying timer finishes.'),
+                  value: dryingCompleteChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => dryingCompleteChimeEnabled = value);
+                    widget.onDryingCompleteChimeChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('moisture-chime-personalization'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Moisture threshold'),
+                  subtitle: const Text(
+                    'Chime once when filament crosses its alert threshold.',
+                  ),
+                  value: moistureAlertChimeEnabled,
+                  onChanged: (value) {
+                    setState(() => moistureAlertChimeEnabled = value);
+                    widget.onMoistureAlertChimeChanged(value);
+                  },
+                ),
+                DropdownButtonFormField<AlertSoundProfile>(
+                  key: const Key('alert-sound-profile'),
+                  initialValue: alertSoundProfile,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Sound style'),
+                  items: [
+                    for (final profile in AlertSoundProfile.values)
+                      DropdownMenuItem(
+                        value: profile,
+                        child: Text(_alertSoundProfileLabel(profile)),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => alertSoundProfile = value);
+                    widget.onAlertSoundProfileChanged(value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text('Alert volume · $alertSoundVolumePercent%'),
+                Slider(
+                  key: const Key('alert-sound-volume'),
+                  value: alertSoundVolumePercent.toDouble(),
+                  min: 0,
+                  max: 100,
+                  divisions: 20,
+                  label: '$alertSoundVolumePercent%',
+                  onChanged: (value) =>
+                      setState(() => alertSoundVolumePercent = value.round()),
+                  onChangeEnd: (value) =>
+                      widget.onAlertSoundVolumeChanged(value.round()),
+                ),
+                DropdownButtonFormField<int>(
+                  key: const Key('alert-sound-recurrence'),
+                  initialValue: alertSoundRecurrenceSeconds,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Repeat moisture chime',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('Never')),
+                    DropdownMenuItem(value: 3, child: Text('Every 3 seconds')),
+                    DropdownMenuItem(value: 5, child: Text('Every 5 seconds')),
+                    DropdownMenuItem(
+                      value: 10,
+                      child: Text('Every 10 seconds'),
+                    ),
+                    DropdownMenuItem(
+                      value: 30,
+                      child: Text('Every 30 seconds'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => alertSoundRecurrenceSeconds = value);
+                    widget.onAlertSoundRecurrenceChanged(value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('preview-alert-sound'),
+                  onPressed: widget.onPreviewAlertSound,
+                  icon: const Icon(Icons.volume_up_outlined),
+                  label: const Text('Preview chime'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            ExpansionTile(
+              key: const Key('personalization-effects-section'),
+              initiallyExpanded: true,
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: const Text(
+                'Visual effects',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text('Tune animated card and alert layers.'),
+              children: [
+                SwitchListTile(
+                  key: const Key('card-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Card effects'),
+                  subtitle: const Text('Allow animated effects on item cards.'),
+                  value: cardEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => cardEffectsEnabled = value);
+                    widget.onCardEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('low-stock-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low-stock pulse'),
+                  value: lowStockEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => lowStockEffectsEnabled = value);
+                    widget.onLowStockEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('moisture-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Moisture droplets'),
+                  value: moistureEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => moistureEffectsEnabled = value);
+                    widget.onMoistureEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('remote-sync-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Remote Sync quantity effect'),
+                  value: remoteSyncEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => remoteSyncEffectsEnabled = value);
+                    widget.onRemoteSyncEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('search-glow-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Search box glow'),
+                  subtitle: const Text('Animate the search field edge light.'),
+                  value: searchGlowEnabled,
+                  onChanged: (value) {
+                    setState(() => searchGlowEnabled = value);
+                    widget.onSearchGlowChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('new-item-glow-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('New item laser glow'),
+                  subtitle: const Text(
+                    'Highlight additions and debug previews.',
+                  ),
+                  value: newItemGlowEnabled,
+                  onChanged: (value) {
+                    setState(() => newItemGlowEnabled = value);
+                    widget.onNewItemGlowChanged(value);
+                  },
+                ),
+              ],
             ),
             const Divider(height: 28),
             const Text(
@@ -19876,6 +23465,13 @@ class _DebugPanelDialogState extends State<DebugPanelDialog> {
                       : null,
                   icon: const Icon(Icons.water_drop_rounded),
                   label: const Text('Moisture droplet wave'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('debug-new-item-glow'),
+                  onPressed: () => _play(DebugCardEffect.newItemGlow),
+                  icon: const Icon(Icons.auto_awesome_rounded),
+                  label: const Text('New item laser glow'),
                 ),
               ],
             ),
@@ -20184,6 +23780,16 @@ Uri? shopifyProductEndpoint(Uri uri) {
   );
 }
 
+List<String> limitedProductImageUrls(
+  Iterable<String> candidates, {
+  int limit = 2,
+}) => candidates
+    .map((value) => value.trim())
+    .where((value) => value.isNotEmpty)
+    .toSet()
+    .take(limit)
+    .toList();
+
 Map<String, dynamic>? extractShopifyProductMetadata(
   Map<String, dynamic> source,
   Uri originalUri,
@@ -20215,6 +23821,24 @@ Map<String, dynamic>? extractShopifyProductMetadata(
   final description = source['description']?.toString() ?? '';
   final vendor = source['vendor']?.toString().trim() ?? '';
   final barcode = selected['barcode']?.toString().trim() ?? '';
+  String colorName = '';
+  final options = source['options'];
+  if (options is List) {
+    for (var index = 0; index < options.length; index++) {
+      final option = options[index];
+      final optionName = option is Map ? option['name'] : option;
+      if (RegExp(r'^colou?r$', caseSensitive: false).hasMatch('$optionName')) {
+        colorName = selected['option${index + 1}']?.toString().trim() ?? '';
+        if (colorName.isEmpty && variantTitle.isNotEmpty) {
+          final titleOptions = variantTitle.split('/');
+          if (index < titleOptions.length) {
+            colorName = titleOptions[index].trim();
+          }
+        }
+        break;
+      }
+    }
+  }
   return <String, dynamic>{
     '@type': 'Product',
     'name': displayName,
@@ -20223,7 +23847,90 @@ Map<String, dynamic>? extractShopifyProductMetadata(
     if (image?.isNotEmpty == true) 'image': image,
     if (description.isNotEmpty) 'description': description,
     if (barcode.isNotEmpty) 'gtin13': barcode,
+    if (colorName.isNotEmpty) 'color': colorName,
   };
+}
+
+typedef ImportedProductColor = ({String label, String hex});
+
+ImportedProductColor? extractProductColorMetadata(
+  Map<String, dynamic> product,
+  String sourceHtml,
+) {
+  String label = '';
+  String hex = '';
+
+  String normalizedHex(String value) {
+    final match = RegExp(
+      r'(?<![0-9a-f])#([0-9a-f]{3}|[0-9a-f]{6})(?![0-9a-f])',
+      caseSensitive: false,
+    ).firstMatch(value);
+    if (match == null) return '';
+    var digits = match.group(1)!;
+    if (digits.length == 3) {
+      digits = digits
+          .split('')
+          .map((character) => '$character$character')
+          .join();
+    }
+    return '#${digits.toUpperCase()}';
+  }
+
+  void inspect(Object? value) {
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final key = entry.key.toString().toLowerCase().replaceAll(
+          RegExp(r'[^a-z]'),
+          '',
+        );
+        final text = entry.value is String ? entry.value.toString().trim() : '';
+        if (text.isNotEmpty &&
+            {'color', 'colour', 'colorname', 'colourname'}.contains(key)) {
+          final candidateHex = normalizedHex(text);
+          if (candidateHex.isNotEmpty) {
+            hex = hex.isEmpty ? candidateHex : hex;
+          } else if (label.isEmpty) {
+            label = text;
+          }
+        }
+        if (text.isNotEmpty && {'hex', 'colorhex', 'colourhex'}.contains(key)) {
+          final candidateHex = normalizedHex(
+            text.startsWith('#') ? text : '#$text',
+          );
+          if (candidateHex.isNotEmpty && hex.isEmpty) hex = candidateHex;
+        }
+        inspect(entry.value);
+      }
+    } else if (value is List) {
+      for (final entry in value) {
+        inspect(entry);
+      }
+    }
+  }
+
+  inspect(product);
+  final document = html_parser.parse(sourceHtml);
+  for (final element in document.querySelectorAll(
+    'meta[property="product:color"], [data-color], [data-colour], [data-color-hex], [data-hex]',
+  )) {
+    final value =
+        element.attributes['content'] ??
+        element.attributes['data-color'] ??
+        element.attributes['data-colour'] ??
+        element.attributes['data-color-hex'] ??
+        element.attributes['data-hex'] ??
+        '';
+    final candidateHex = normalizedHex(
+      value.startsWith('#') ? value : '#$value',
+    );
+    if (candidateHex.isNotEmpty && hex.isEmpty) {
+      hex = candidateHex;
+    } else if (value.trim().isNotEmpty && label.isEmpty) {
+      label = value.trim();
+    }
+  }
+  if (label.isEmpty && hex.isEmpty) return null;
+  return (label: label, hex: hex);
 }
 
 void _collectImageUrls(Object? value, List<String> output) {
@@ -20510,9 +24217,11 @@ class AddItemDialog extends StatefulWidget {
 class _AddItemDialogState extends State<AddItemDialog> {
   static const _maximumProductPageBytes = 8 * 1024 * 1024;
   static const _maximumProductImageBytes = 12 * 1024 * 1024;
+  static const _maximumProductImageRequests = 2;
   final formKey = GlobalKey<FormState>();
   late final TextEditingController nameController;
   late final TextEditingController compatibilityController;
+  late final TextEditingController purposeTagsController;
   late final TextEditingController costController;
   late final TextEditingController quantityController;
   late final TextEditingController quantityAlertThresholdController;
@@ -20559,6 +24268,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
   String? saveError;
   ProductSearchProvider searchProvider = ProductSearchProvider.google;
   late final Set<String> compatibleMachineIds;
+  late List<FilamentStyleEntry> styleEntryDrafts;
+  bool get _styleHasOwnColors => styleEntryDrafts.any(
+    (entry) => entry.style == 'gradient' || entry.style == 'coextruded',
+  );
   String? customTypeId;
   String? materialId;
   String? spoolMaterialId;
@@ -20587,6 +24300,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
       text: item?.compatibility.isNotEmpty == true
           ? item!.compatibility.join(', ')
           : label?.compatibility,
+    );
+    purposeTagsController = TextEditingController(
+      text: item?.purposeTags.join(', '),
     );
     costController = TextEditingController(text: item?.cost.toStringAsFixed(2));
     quantityController = TextEditingController(
@@ -20740,6 +24456,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     itemThumbnail = item?.thumbnailBytes;
     labelImage = item?.labelImageBytes ?? label?.imageBytes;
     compatibleMachineIds = {...?item?.compatibleMachineIds};
+    styleEntryDrafts = [...?item?.styleEntries];
     if (item == null && inferredFilament != null) {
       final settings = parseDryingSettings(inferredFilament.drying);
       dryingTemperatureController.text =
@@ -20759,6 +24476,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   void dispose() {
     nameController.dispose();
     compatibilityController.dispose();
+    purposeTagsController.dispose();
     costController.dispose();
     quantityController.dispose();
     quantityAlertThresholdController.dispose();
@@ -20810,6 +24528,321 @@ class _AddItemDialogState extends State<AddItemDialog> {
     if (text.isEmpty) return null;
     final parsed = double.tryParse(text);
     return parsed == null || parsed <= 0 ? 'Enter a positive number' : null;
+  }
+
+  static const _defaultStyleColor = '#9E9E9E';
+
+  void _addStyleEntry() {
+    if (styleEntryDrafts.length >= _maxFilamentStyleEntries) return;
+    setState(() => styleEntryDrafts.add(const FilamentStyleEntry(style: '')));
+  }
+
+  void _removeStyleEntry(int index) {
+    setState(() => styleEntryDrafts.removeAt(index));
+  }
+
+  void _setStyleEntryStyle(int index, String styleKey) {
+    final input =
+        filamentStyleOptions
+            .where((option) => option.key == styleKey)
+            .firstOrNull
+            ?.input ??
+        FilamentStyleInput.none;
+    setState(() {
+      styleEntryDrafts[index] = FilamentStyleEntry(
+        style: styleKey,
+        carbonFiberForm: input == FilamentStyleInput.carbonFiberForm
+            ? 'chopped'
+            : null,
+        colors: input == FilamentStyleInput.colors
+            ? List.filled(2, _defaultStyleColor)
+            : const [],
+      );
+    });
+  }
+
+  void _setStyleCarbonFiberForm(int index, String form) {
+    setState(
+      () => styleEntryDrafts[index] = styleEntryDrafts[index].copyWith(
+        carbonFiberForm: form,
+      ),
+    );
+  }
+
+  void _setStyleGradientName(int index, String name) {
+    styleEntryDrafts[index] = styleEntryDrafts[index].copyWith(
+      gradientName: name,
+    );
+  }
+
+  void _setStyleColorCount(int index, int count) {
+    final entry = styleEntryDrafts[index];
+    final colors = [...entry.colors];
+    final colorNames = [...entry.colorNames];
+    if (count > colors.length) {
+      colors.addAll(List.filled(count - colors.length, _defaultStyleColor));
+    } else {
+      colors.removeRange(count, colors.length);
+    }
+    if (colorNames.length > count) {
+      colorNames.removeRange(count, colorNames.length);
+    }
+    setState(
+      () => styleEntryDrafts[index] = entry.copyWith(
+        colors: colors,
+        colorNames: colorNames,
+      ),
+    );
+  }
+
+  void _setStyleColorName(int index, int colorIndex, String name) {
+    final entry = styleEntryDrafts[index];
+    final colorNames = [...entry.colorNames];
+    if (colorNames.length <= colorIndex) {
+      colorNames.addAll(List.filled(colorIndex + 1 - colorNames.length, ''));
+    }
+    colorNames[colorIndex] = name;
+    styleEntryDrafts[index] = entry.copyWith(colorNames: colorNames);
+  }
+
+  Future<void> _pickStyleColor(int index, int colorIndex) async {
+    final entry = styleEntryDrafts[index];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          ItemColorPickerDialog(initialValue: entry.colors[colorIndex]),
+    );
+    if (!mounted || selected == null || selected.isEmpty) return;
+    final colors = [...entry.colors];
+    colors[colorIndex] = selected;
+    setState(() => styleEntryDrafts[index] = entry.copyWith(colors: colors));
+  }
+
+  Widget _filamentStyleSection() => InputDecorator(
+    decoration: const InputDecoration(
+      labelText: 'Style',
+      border: OutlineInputBorder(),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < styleEntryDrafts.length; i++) ...[
+          if (i > 0) const Divider(height: 20),
+          _filamentStyleEntryRow(i),
+        ],
+        if (styleEntryDrafts.length < _maxFilamentStyleEntries)
+          Padding(
+            padding: EdgeInsets.only(top: styleEntryDrafts.isEmpty ? 0 : 10),
+            child: TextButton.icon(
+              key: const Key('add-filament-style'),
+              onPressed: _addStyleEntry,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(
+                styleEntryDrafts.isEmpty ? 'Add style' : 'Add second style',
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  Widget _filamentStyleEntryRow(int index) {
+    final entry = styleEntryDrafts[index];
+    final option = filamentStyleOptions
+        .where((candidate) => candidate.key == entry.style)
+        .firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (entry.style == 'gradient') ...[
+          TextFormField(
+            key: Key('filament-style-gradient-name-$index'),
+            initialValue: entry.gradientName,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Gradient name',
+              hintText: 'Sunset Fade',
+              isDense: true,
+            ),
+            onChanged: (value) => _setStyleGradientName(index, value),
+          ),
+          const SizedBox(height: 10),
+        ],
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                key: Key('filament-style-$index'),
+                initialValue: entry.style.isEmpty ? null : entry.style,
+                decoration: const InputDecoration(
+                  labelText: 'Style',
+                  isDense: true,
+                ),
+                hint: const Text('Select style'),
+                items: [
+                  for (final choice in filamentStyleOptions)
+                    DropdownMenuItem(
+                      value: choice.key,
+                      child: Text(choice.label),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) _setStyleEntryStyle(index, value);
+                },
+              ),
+            ),
+            IconButton(
+              key: Key('remove-filament-style-$index'),
+              onPressed: () => _removeStyleEntry(index),
+              icon: const Icon(Icons.close_rounded, size: 18),
+              tooltip: 'Remove style',
+            ),
+          ],
+        ),
+        if (option?.input == FilamentStyleInput.carbonFiberForm) ...[
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: Key('filament-style-carbon-form-$index'),
+            initialValue: entry.carbonFiberForm ?? 'chopped',
+            decoration: const InputDecoration(labelText: 'Form', isDense: true),
+            items: const [
+              DropdownMenuItem(value: 'chopped', child: Text('Chopped')),
+              DropdownMenuItem(value: 'ground', child: Text('Ground')),
+            ],
+            onChanged: (value) {
+              if (value != null) _setStyleCarbonFiberForm(index, value);
+            },
+          ),
+        ],
+        if (option?.input == FilamentStyleInput.colors) ...[
+          const SizedBox(height: 10),
+          Text(
+            entry.style == 'gradient' ? 'Colors in gradient' : 'Strand count',
+            style: const TextStyle(color: Color(0xff9da5b7), fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            children: [
+              for (var count = 2; count <= _maxFilamentStyleColors; count++)
+                ChoiceChip(
+                  key: Key('filament-style-count-$index-$count'),
+                  label: Text('$count'),
+                  selected: entry.colors.length == count,
+                  onSelected: (_) => _setStyleColorCount(index, count),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (entry.style == 'gradient')
+            _filamentGradientEditor(index, entry)
+          else
+            _filamentCoextrudedEditor(index, entry),
+        ],
+      ],
+    );
+  }
+
+  Widget _filamentCoextrudedEditor(int index, FilamentStyleEntry entry) =>
+      Column(
+        children: [
+          for (
+            var colorIndex = 0;
+            colorIndex < entry.colors.length;
+            colorIndex++
+          ) ...[
+            if (colorIndex > 0) const SizedBox(height: 8),
+            Row(
+              children: [
+                InkWell(
+                  key: Key('filament-style-color-$index-$colorIndex'),
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _pickStyleColor(index, colorIndex),
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _hexColor(entry.colors[colorIndex]),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xff5d5970)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextFormField(
+                    key: Key('filament-style-color-name-$index-$colorIndex'),
+                    initialValue: entry.colorNameAt(colorIndex),
+                    textInputAction: TextInputAction.next,
+                    decoration: InputDecoration(
+                      labelText: 'Strand ${colorIndex + 1} name',
+                      hintText: 'Black',
+                      isDense: true,
+                    ),
+                    onChanged: (value) =>
+                        _setStyleColorName(index, colorIndex, value),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      );
+
+  Widget _filamentGradientEditor(int index, FilamentStyleEntry entry) {
+    final colors = [
+      for (final hex in entry.colors) _hexColor(hex) ?? const Color(0xff5d5970),
+    ];
+    return SizedBox(
+      height: 44,
+      width: double.infinity,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: colors),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xff5d5970)),
+              ),
+            ),
+          ),
+          for (var colorIndex = 0; colorIndex < colors.length; colorIndex++)
+            Align(
+              alignment: Alignment(
+                colors.length == 1
+                    ? 0
+                    : -1 + 2 * colorIndex / (colors.length - 1),
+                0,
+              ),
+              child: InkWell(
+                key: Key('filament-style-color-$index-$colorIndex'),
+                customBorder: const CircleBorder(),
+                onTap: () => _pickStyleColor(index, colorIndex),
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: colors[colorIndex],
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black45,
+                        blurRadius: 3,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickItemColor() async {
@@ -21021,6 +25054,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                 const Divider(height: 1),
                 Expanded(
                   child: SingleChildScrollView(
+                    key: const Key('add-item-form-scroll'),
                     padding: EdgeInsets.all(compact ? 16 : 24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -21088,6 +25122,19 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             },
                           ),
                         ),
+                        if (type == InventoryType.filament) ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            key: const Key('filament-purpose-tags'),
+                            controller: purposeTagsController,
+                            decoration: const InputDecoration(
+                              labelText: 'Purpose tags',
+                              hintText:
+                                  'Use first, Engineering, Beauty prints only…',
+                              helperText: 'Separate tags with commas',
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         if (widget.locations.isEmpty ||
                             ((storageLocationId == null ||
@@ -21231,70 +25278,78 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             ),
                           ],
                         ],
-                        const SizedBox(height: 16),
-                        _responsiveFieldPair(
-                          compact,
-                          TextFormField(
-                            key: const Key('item-color-name'),
-                            controller: itemColorLabelController,
-                            textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
-                              labelText: 'Color name',
-                              hintText: 'Galaxy Red',
-                              helperText: 'Optional display name',
-                            ),
-                          ),
-                          TextFormField(
-                            key: const Key('item-color'),
-                            controller: itemColorController,
-                            textInputAction: TextInputAction.next,
-                            autocorrect: false,
-                            textCapitalization: TextCapitalization.characters,
-                            decoration: InputDecoration(
-                              labelText: 'Color value',
-                              hintText: '#8E75FF',
-                              helperText: 'Hex value or color picker',
-                              suffixIcon: IconButton(
-                                key: const Key('open-item-color-picker'),
-                                tooltip: 'Choose color',
-                                onPressed: _pickItemColor,
-                                icon: Container(
-                                  width: 24,
-                                  height: 24,
-                                  decoration: BoxDecoration(
-                                    color:
-                                        selectedItemColor ??
-                                        const Color(0xff252a36),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: const Color(0xff687185),
-                                    ),
-                                  ),
-                                  child: selectedItemColor == null
-                                      ? const Icon(
-                                          Icons.palette_outlined,
-                                          size: 16,
-                                        )
-                                      : null,
-                                ),
+                        if (type == InventoryType.filament) ...[
+                          const SizedBox(height: 16),
+                          _filamentStyleSection(),
+                        ],
+                        if (!(type == InventoryType.filament &&
+                            _styleHasOwnColors)) ...[
+                          const SizedBox(height: 16),
+                          _responsiveFieldPair(
+                            compact,
+                            TextFormField(
+                              key: const Key('item-color-name'),
+                              controller: itemColorLabelController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Color name',
+                                hintText: 'Galaxy Red',
+                                helperText: 'Optional display name',
                               ),
                             ),
-                            validator: (value) {
-                              final text = value?.trim() ?? '';
-                              if (text.isEmpty &&
-                                  itemColorLabelController.text
-                                      .trim()
-                                      .isNotEmpty) {
-                                return 'Choose the color for this name';
-                              }
-                              if (text.isNotEmpty && _hexColor(text) == null) {
-                                return 'Use #RGB, #RRGGBB, or #AARRGGBB';
-                              }
-                              return null;
-                            },
-                            onChanged: (_) => setState(() {}),
+                            TextFormField(
+                              key: const Key('item-color'),
+                              controller: itemColorController,
+                              textInputAction: TextInputAction.next,
+                              autocorrect: false,
+                              textCapitalization: TextCapitalization.characters,
+                              decoration: InputDecoration(
+                                labelText: 'Color value',
+                                hintText: '#8E75FF',
+                                helperText: 'Hex value or color picker',
+                                suffixIcon: IconButton(
+                                  key: const Key('open-item-color-picker'),
+                                  tooltip: 'Choose color',
+                                  onPressed: _pickItemColor,
+                                  icon: Container(
+                                    width: 24,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      color:
+                                          selectedItemColor ??
+                                          const Color(0xff252a36),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xff687185),
+                                      ),
+                                    ),
+                                    child: selectedItemColor == null
+                                        ? const Icon(
+                                            Icons.palette_outlined,
+                                            size: 16,
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                              validator: (value) {
+                                final text = value?.trim() ?? '';
+                                if (text.isEmpty &&
+                                    itemColorLabelController.text
+                                        .trim()
+                                        .isNotEmpty) {
+                                  return 'Choose the color for this name';
+                                }
+                                if (text.isNotEmpty &&
+                                    _hexColor(text) == null) {
+                                  return 'Use #RGB, #RRGGBB, or #AARRGGBB';
+                                }
+                                return null;
+                              },
+                              onChanged: (_) => setState(() {}),
+                            ),
                           ),
-                        ),
+                        ],
                         const SizedBox(height: 16),
                         if (widget.brands.isNotEmpty) ...[
                           const Text(
@@ -22181,6 +26236,12 @@ class _AddItemDialogState extends State<AddItemDialog> {
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
         .toList();
+    final purposeTags = purposeTagsController.text
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
     Navigator.pop(
       context,
       InventoryItem(
@@ -22188,6 +26249,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
         name: nameController.text.trim(),
         type: type,
         compatibility: compatibility,
+        purposeTags: type == InventoryType.filament ? purposeTags : const [],
+        styleEntries: type == InventoryType.filament
+            ? styleEntryDrafts.where((entry) => entry.style.isNotEmpty).toList()
+            : const [],
         added: widget.initialItem?.added ?? DateTime.now(),
         cost: double.parse(costController.text),
         quantity: double.parse(quantityController.text),
@@ -22579,7 +26644,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
       }
       Uint8List? downloadedImage;
       ProductImportRateLimitException? imageRateLimit;
-      for (final imageUrl in imageUrls.toSet()) {
+      for (final imageUrl in limitedProductImageUrls(
+        imageUrls,
+        limit: _maximumProductImageRequests,
+      )) {
         try {
           final imageUri = uri.resolve(imageUrl);
           if (!{'http', 'https'}.contains(imageUri.scheme)) continue;
@@ -22618,6 +26686,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
       final template = detectFilamentTemplate(
         '$productName\n${description ?? ''}\n${document.body?.text ?? ''}',
       );
+      final importedColor = template == null
+          ? null
+          : extractProductColorMetadata(product, sourceHtml);
       final instructions = applyFilamentFallbacks(
         extractedInstructions,
         template,
@@ -22664,6 +26735,16 @@ class _AddItemDialogState extends State<AddItemDialog> {
           storageController.text = instructions.storage;
         }
         if (template != null) type = InventoryType.filament;
+        if (importedColor != null) {
+          if (itemColorLabelController.text.trim().isEmpty &&
+              importedColor.label.isNotEmpty) {
+            itemColorLabelController.text = importedColor.label;
+          }
+          if (itemColorController.text.trim().isEmpty &&
+              importedColor.hex.isNotEmpty) {
+            itemColorController.text = importedColor.hex;
+          }
+        }
         if (downloadedImage != null) {
           itemImage = downloadedImage;
           itemThumbnail = downloadedThumbnail;
@@ -23546,49 +27627,77 @@ class _ItemVisual extends StatelessWidget {
   Widget build(BuildContext context) {
     final typeColor = _typeColor(item.type);
     final colorSwatch = _itemColorSwatch(item.itemColorName);
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
     final previewBytes = item.thumbnailBytes ?? item.imageBytes;
+
+    Widget swatch;
+    if (previewBytes != null) {
+      swatch = Image.memory(
+        previewBytes,
+        key: Key('item-product-image-${item.id}'),
+        fit: BoxFit.cover,
+        cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
+            .round()
+            .clamp(96, 512),
+      );
+    } else if (coextrudedColors != null) {
+      swatch = Center(
+        child: _PieColorChicklet(
+          key: Key('item-color-swatch-${item.id}'),
+          colors: coextrudedColors,
+          size: size * .62,
+        ),
+      );
+    } else if (gradientColors != null || item.itemColorName.isNotEmpty) {
+      swatch = Center(
+        child: Container(
+          key: Key('item-color-swatch-${item.id}'),
+          width: size * .62,
+          height: size * .62,
+          decoration: BoxDecoration(
+            color: gradientColors == null
+                ? (colorSwatch ?? const Color(0xff8c929f))
+                : null,
+            gradient: gradientColors == null
+                ? null
+                : LinearGradient(colors: gradientColors),
+            borderRadius: BorderRadius.circular(size * .18),
+          ),
+        ),
+      );
+    } else {
+      swatch = ColoredBox(
+        key: Key('item-type-fallback-${item.id}'),
+        color: typeColor.withValues(alpha: .16),
+        child: typeIconImageBytes == null
+            ? Icon(typeIcon ?? item.icon, color: typeColor)
+            : Padding(
+                padding: EdgeInsets.all(size * .16),
+                child: _CustomTypeImage(
+                  bytes: typeIconImageBytes!,
+                  imageKey: Key('item-type-image-${item.id}'),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) =>
+                      Icon(typeIcon ?? item.icon, color: typeColor),
+                ),
+              ),
+      );
+    }
+
+    // Coextruded strands each get their own name, so those only surface on
+    // hover to avoid crowding the card. A gradient has one name, same as a
+    // regular color -- that stays inline, rendered by the caller.
+    if (previewBytes == null && coextrudedColors != null) {
+      final tooltipMessage = _itemCoextrudedName(item);
+      if (tooltipMessage.isNotEmpty) {
+        swatch = Tooltip(message: tooltipMessage, child: swatch);
+      }
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(size * .3),
-      child: SizedBox.square(
-        dimension: size,
-        child: previewBytes != null
-            ? Image.memory(
-                previewBytes,
-                key: Key('item-product-image-${item.id}'),
-                fit: BoxFit.cover,
-                cacheWidth: (size * MediaQuery.devicePixelRatioOf(context) * 2)
-                    .round()
-                    .clamp(96, 512),
-              )
-            : item.itemColorName.isNotEmpty
-            ? Center(
-                child: Container(
-                  key: Key('item-color-swatch-${item.id}'),
-                  width: size * .62,
-                  height: size * .62,
-                  decoration: BoxDecoration(
-                    color: colorSwatch ?? const Color(0xff8c929f),
-                    borderRadius: BorderRadius.circular(size * .18),
-                  ),
-                ),
-              )
-            : ColoredBox(
-                key: Key('item-type-fallback-${item.id}'),
-                color: typeColor.withValues(alpha: .16),
-                child: typeIconImageBytes == null
-                    ? Icon(typeIcon ?? item.icon, color: typeColor)
-                    : Padding(
-                        padding: EdgeInsets.all(size * .16),
-                        child: _CustomTypeImage(
-                          bytes: typeIconImageBytes!,
-                          imageKey: Key('item-type-image-${item.id}'),
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, _, _) =>
-                              Icon(typeIcon ?? item.icon, color: typeColor),
-                        ),
-                      ),
-              ),
-      ),
+      child: SizedBox.square(dimension: size, child: swatch),
     );
   }
 }
@@ -23656,6 +27765,8 @@ class ItemDetailsPanel extends StatefulWidget {
     required this.machines,
     required this.machineTypes,
     required this.spoolTypes,
+    this.spoolUsage = const [],
+    this.onSpoolUsageAdded,
     this.onEdit,
     this.onSplitOne,
     this.typeLabel,
@@ -23674,6 +27785,8 @@ class ItemDetailsPanel extends StatefulWidget {
   final List<MachineRecord> machines;
   final List<MachineTypeRecord> machineTypes;
   final List<SpoolTypeRecord> spoolTypes;
+  final List<SpoolUsageRecord> spoolUsage;
+  final ValueChanged<SpoolUsageRecord>? onSpoolUsageAdded;
   final Future<void> Function(InventoryItem item)? onEdit;
   final Future<void> Function(InventoryItem item)? onSplitOne;
   final String? typeLabel;
@@ -23689,6 +27802,125 @@ class ItemDetailsPanel extends StatefulWidget {
 
   @override
   State<ItemDetailsPanel> createState() => _ItemDetailsPanelState();
+}
+
+class _SpoolUsageDialog extends StatefulWidget {
+  const _SpoolUsageDialog();
+
+  @override
+  State<_SpoolUsageDialog> createState() => _SpoolUsageDialogState();
+}
+
+class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
+  final usedController = TextEditingController();
+  final wasteController = TextEditingController(text: '0');
+  final projectController = TextEditingController();
+  final reasonController = TextEditingController();
+  final notesController = TextEditingController();
+  SpoolPrintOutcome outcome = SpoolPrintOutcome.successful;
+
+  @override
+  void dispose() {
+    usedController.dispose();
+    wasteController.dispose();
+    projectController.dispose();
+    reasonController.dispose();
+    notesController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final used = double.tryParse(usedController.text.trim());
+    final waste = double.tryParse(wasteController.text.trim());
+    if (used == null || used < 0 || waste == null || waste < 0 || used + waste <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a positive gram amount.')),
+      );
+      return;
+    }
+    Navigator.pop(
+      context,
+      SpoolUsageRecord(
+        id: '',
+        spoolId: '',
+        recordedAt: DateTime.now(),
+        gramsUsed: used,
+        gramsWaste: waste,
+        outcome: outcome,
+        project: projectController.text.trim(),
+        wasteReason: reasonController.text.trim(),
+        notes: notesController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Log filament usage'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButtonFormField<SpoolPrintOutcome>(
+            initialValue: outcome,
+            decoration: const InputDecoration(labelText: 'Print outcome'),
+            items: const [
+              DropdownMenuItem(
+                value: SpoolPrintOutcome.successful,
+                child: Text('Successful print'),
+              ),
+              DropdownMenuItem(
+                value: SpoolPrintOutcome.failed,
+                child: Text('Failed print'),
+              ),
+            ],
+            onChanged: (value) => setState(() => outcome = value!),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: usedController,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Filament used (g)',
+              suffixText: 'g',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: wasteController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Waste (g)',
+              suffixText: 'g',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: projectController,
+            decoration: const InputDecoration(labelText: 'Project / build (optional)'),
+          ),
+          if (outcome == SpoolPrintOutcome.failed) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(labelText: 'Waste reason (optional)'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: notesController,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Notes (optional)'),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      FilledButton(onPressed: _save, child: const Text('Save usage')),
+    ],
+  );
 }
 
 enum _FilamentSidebarTab { instructions, spool, brand }
@@ -24120,6 +28352,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
           title: 'AMS compatibility',
           text: item.amsCompatible ? 'Compatible' : 'Not marked compatible',
         ),
+        if (item.styleEntries.isNotEmpty)
+          _FilamentStyleDetailSection(entries: item.styleEntries),
+        ..._spoolUsageContent(),
       ],
       _FilamentSidebarTab.brand => <Widget>[
         _DetailSection(
@@ -24177,6 +28412,104 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         ),
       ],
     );
+  }
+
+  List<Widget> _spoolUsageContent() {
+    final entries = widget.spoolUsage
+        .where((entry) => entry.spoolId == item.id)
+        .toList()
+      ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    final used = entries.fold<double>(0, (sum, entry) => sum + entry.gramsUsed);
+    final waste = entries.fold<double>(0, (sum, entry) => sum + entry.gramsWaste);
+    final nominal = widget.spoolTypes
+        .where((spool) => spool.id == item.spoolTypeId)
+        .firstOrNull
+        ?.weightGrams;
+    final remaining = nominal == null ? null : nominal - used - waste;
+    return [
+      const Divider(height: 34),
+      Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Usage tracking',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+          ),
+          if (widget.onSpoolUsageAdded != null)
+            OutlinedButton.icon(
+              key: const Key('log-spool-usage'),
+              onPressed: widget.canEdit ? _logSpoolUsage : null,
+              icon: const Icon(Icons.add_chart_rounded, size: 18),
+              label: const Text('Log print'),
+            ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      Text(
+        remaining == null
+            ? '${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste'
+            : '${remaining.clamp(0, double.infinity).toStringAsFixed(1)} g remaining · ${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste',
+        style: const TextStyle(color: Color(0xffb4bac9)),
+      ),
+      if (entries.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(top: 12),
+          child: Text(
+            'No print usage recorded yet. Amounts are tracked in grams.',
+            style: TextStyle(color: Color(0xff929aac)),
+          ),
+        )
+      else
+        ...entries.take(8).map(
+          (entry) => ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: Icon(
+              entry.outcome == SpoolPrintOutcome.successful
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.error_outline_rounded,
+              color: entry.outcome == SpoolPrintOutcome.successful
+                  ? const Color(0xff45d2bd)
+                  : const Color(0xffff8f8f),
+            ),
+            title: Text(
+              '${entry.outcome == SpoolPrintOutcome.successful ? 'Successful' : 'Failed'} · ${entry.gramsUsed.toStringAsFixed(1)} g used · ${entry.gramsWaste.toStringAsFixed(1)} g waste',
+            ),
+            subtitle: Text(
+              [
+                if (entry.project.trim().isNotEmpty) entry.project.trim(),
+                if (entry.wasteReason.trim().isNotEmpty)
+                  'Waste: ${entry.wasteReason.trim()}',
+                entry.recordedAt.toLocal().toString().split('.').first,
+              ].join(' · '),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  Future<void> _logSpoolUsage() async {
+    final entry = await showDialog<SpoolUsageRecord>(
+      context: context,
+      builder: (_) => const _SpoolUsageDialog(),
+    );
+    if (!mounted || entry == null) return;
+    widget.onSpoolUsageAdded?.call(
+      SpoolUsageRecord(
+        id: 'USAGE-${DateTime.now().microsecondsSinceEpoch}',
+        spoolId: item.id,
+        recordedAt: DateTime.now(),
+        gramsUsed: entry.gramsUsed,
+        gramsWaste: entry.gramsWaste,
+        outcome: entry.outcome,
+        buildId: entry.buildId,
+        project: entry.project,
+        wasteReason: entry.wasteReason,
+        notes: entry.notes,
+      ),
+    );
+    setState(() {});
   }
 
   @override
@@ -24360,10 +28693,17 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        item.compatibility.join('  •  '),
-                        style: const TextStyle(color: Color(0xff929aac)),
-                      ),
+                      if (_itemDisplayTags(item).isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Wrap(
+                          key: const Key('item-tags'),
+                          spacing: 7,
+                          runSpacing: 7,
+                          children: _itemDisplayTags(item)
+                              .map((tag) => _PurposeTagPill(label: tag))
+                              .toList(),
+                        ),
+                      ],
                       if (item.compatibleMachineIds.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         const Text(
@@ -24891,6 +29231,31 @@ int compareMoistureRemaining(
   return remainingOrder != 0 ? remainingOrder : left.name.compareTo(right.name);
 }
 
+int compareInventoryItems(
+  InventoryItem left,
+  InventoryItem right, {
+  required InventorySort sort,
+  required bool ascending,
+  DateTime? now,
+}) {
+  final primary = switch (sort) {
+    InventorySort.type => left.typeLabel.compareTo(right.typeLabel),
+    InventorySort.quantity => left.quantity.compareTo(right.quantity),
+    InventorySort.addedDate => left.added.compareTo(right.added),
+    InventorySort.cost => left.cost.compareTo(right.cost),
+    InventorySort.dryingTime => (left.dryingMinutes ?? -1).compareTo(
+      right.dryingMinutes ?? -1,
+    ),
+    InventorySort.moistureRemaining => compareMoistureRemaining(
+      left,
+      right,
+      now: now,
+    ),
+  };
+  if (primary != 0) return ascending ? primary : -primary;
+  return left.id.compareTo(right.id);
+}
+
 String _moistureRemainingLabel(InventoryItem item, {DateTime? now}) {
   final remaining = _moistureRemaining(item, now: now);
   if (remaining == null) return 'Dry date not recorded';
@@ -25061,6 +29426,110 @@ class _DetailSection extends StatelessWidget {
                 text.isEmpty ? 'No instructions recorded.' : text,
                 style: const TextStyle(color: Color(0xffa2a9b9), height: 1.45),
               ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+String _filamentStyleEntryLabel(FilamentStyleEntry entry) {
+  final base = entry.style == 'gradient' && entry.gradientName.trim().isNotEmpty
+      ? entry.gradientName.trim()
+      : filamentStyleLabel(entry.style);
+  if (entry.carbonFiberForm != null) {
+    return '$base (${entry.carbonFiberForm == 'ground' ? 'Ground' : 'Chopped'})';
+  }
+  if (entry.colors.isNotEmpty) {
+    if (entry.style == 'coextruded') {
+      final names = [
+        for (var i = 0; i < entry.colors.length; i++)
+          entry.colorNameAt(i).trim(),
+      ].where((name) => name.isNotEmpty).toList();
+      if (names.isNotEmpty) return '$base · ${names.join(' + ')}';
+    }
+    return '$base · ${entry.colors.length} colors';
+  }
+  return base;
+}
+
+class _FilamentStyleDetailSection extends StatelessWidget {
+  const _FilamentStyleDetailSection({required this.entries});
+  final List<FilamentStyleEntry> entries;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 24),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.auto_awesome_outlined,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Style',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 5),
+              for (final entry in entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        _filamentStyleEntryLabel(entry),
+                        style: const TextStyle(
+                          color: Color(0xffa2a9b9),
+                          height: 1.45,
+                        ),
+                      ),
+                      if (entry.colors.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        if (entry.style == 'gradient')
+                          Container(
+                            width: 28,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  for (final hex in entry.colors)
+                                    _hexColor(hex) ?? const Color(0xff5d5970),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: const Color(0xff5d5970),
+                              ),
+                            ),
+                          )
+                        else
+                          for (final hex in entry.colors)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Container(
+                                width: 14,
+                                height: 14,
+                                decoration: BoxDecoration(
+                                  color: _hexColor(hex),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xff5d5970),
+                                  ),
+                                ),
+                              ),
+                            ),
+                      ],
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -25867,9 +30336,10 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
       animation: controller,
       child: widget.child,
       builder: (context, child) {
-        final pulse = controller.value < .35
-            ? controller.value / .35
-            : (1 - controller.value) / .65;
+        final travel = Curves.easeInOutCubic.transform(controller.value);
+        final pulse = controller.value < .28
+            ? controller.value / .28
+            : (1 - controller.value) / .72;
         return Stack(
           fit: StackFit.passthrough,
           children: [
@@ -25892,16 +30362,21 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
               child: IgnorePointer(
                 child: Opacity(
                   opacity: (.52 * pulse).clamp(0, 1),
-                  child: Transform.scale(
-                    scale: .72 + (.42 * pulse),
-                    child: Icon(
-                      Icons.warning_amber_rounded,
-                      key: Key('low-stock-pulse-${widget.itemId}'),
-                      size: 112,
-                      color: Colors.white,
-                      shadows: const [
-                        Shadow(color: Color(0xffffc857), blurRadius: 30),
-                      ],
+                  child: Align(
+                    // Low-stock warnings drop down through the card instead
+                    // of sliding laterally across it.
+                    alignment: Alignment(0, -1.25 + (2.5 * travel)),
+                    child: Transform.scale(
+                      scale: .72 + (.42 * pulse),
+                      child: Icon(
+                        Icons.warning_amber_rounded,
+                        key: Key('low-stock-pulse-${widget.itemId}'),
+                        size: 112,
+                        color: Colors.white,
+                        shadows: const [
+                          Shadow(color: Color(0xffffc857), blurRadius: 30),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -26107,6 +30582,10 @@ class ItemCardEffects extends StatelessWidget {
     required this.moistureVersion,
     required this.lowStockActive,
     required this.moistureActive,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     required this.durationPercent,
     required this.recurrenceSeconds,
     this.scrollingListenable,
@@ -26118,6 +30597,10 @@ class ItemCardEffects extends StatelessWidget {
   final int moistureVersion;
   final bool lowStockActive;
   final bool moistureActive;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final int durationPercent;
   final int recurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
@@ -26126,29 +30609,43 @@ class ItemCardEffects extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final staticChild = RepaintBoundary(child: child);
+    if (!cardEffectsEnabled) return staticChild;
     final playWhenFirstVisible = scrollingListenable == null;
-    Widget effects(Widget effectChild) => MoistureDropletWaveEffect(
-      itemId: itemId,
-      trigger: moistureVersion,
-      active: moistureActive,
-      durationPercent: durationPercent,
-      recurrenceSeconds: recurrenceSeconds,
-      playWhenFirstVisible: playWhenFirstVisible,
-      child: LowStockPulseEffect(
-        itemId: itemId,
-        trigger: lowStockVersion,
-        active: lowStockActive,
-        durationPercent: durationPercent,
-        recurrenceSeconds: recurrenceSeconds,
-        playWhenFirstVisible: playWhenFirstVisible,
-        child: RemoteQuantityChangeEffect(
+    Widget effects(Widget effectChild) {
+      Widget result = effectChild;
+      if (remoteSyncEffectsEnabled) {
+        result = RemoteQuantityChangeEffect(
           itemId: itemId,
           trigger: quantitySyncVersion,
           durationPercent: durationPercent,
-          child: effectChild,
-        ),
-      ),
-    );
+          child: result,
+        );
+      }
+      if (lowStockEffectsEnabled) {
+        result = LowStockPulseEffect(
+          itemId: itemId,
+          trigger: lowStockVersion,
+          active: lowStockActive,
+          durationPercent: durationPercent,
+          recurrenceSeconds: recurrenceSeconds,
+          playWhenFirstVisible: playWhenFirstVisible,
+          child: result,
+        );
+      }
+      if (moistureEffectsEnabled) {
+        result = MoistureDropletWaveEffect(
+          itemId: itemId,
+          trigger: moistureVersion,
+          active: moistureActive,
+          durationPercent: durationPercent,
+          recurrenceSeconds: recurrenceSeconds,
+          playWhenFirstVisible: playWhenFirstVisible,
+          child: result,
+        );
+      }
+      return result;
+    }
+
     final scrolling = scrollingListenable;
     if (scrolling == null) return effects(staticChild);
     return ValueListenableBuilder<bool>(
@@ -26158,6 +30655,99 @@ class ItemCardEffects extends StatelessWidget {
           isScrolling ? cachedChild! : effects(cachedChild!),
     );
   }
+}
+
+class _PurposeTagPill extends StatelessWidget {
+  const _PurposeTagPill({required this.label, this.overlay = false});
+
+  final String label;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 18,
+    alignment: Alignment.center,
+    padding: const EdgeInsets.symmetric(horizontal: 7),
+    decoration: BoxDecoration(
+      color: overlay
+          ? Colors.black.withValues(alpha: .5)
+          : Theme.of(context).colorScheme.primary.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: overlay
+            ? Colors.white.withValues(alpha: .85)
+            : Theme.of(context).colorScheme.primary.withValues(alpha: .8),
+        width: 1.2,
+      ),
+    ),
+    child: Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: overlay ? Colors.white : Theme.of(context).colorScheme.onSurface,
+        fontSize: 10,
+        height: 1,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+}
+
+List<String> _itemDisplayTags(InventoryItem item) =>
+    {...item.purposeTags, ...item.compatibility}.toList();
+
+class _ItemTagRow extends StatelessWidget {
+  const _ItemTagRow({required this.item, this.overlay = false});
+
+  final InventoryItem item;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    key: Key('card-purpose-tags-${item.id}'),
+    children: [
+      for (final (index, tag) in _itemDisplayTags(item).take(2).indexed) ...[
+        if (index > 0) const SizedBox(width: 5),
+        Flexible(
+          child: _PurposeTagPill(label: tag, overlay: overlay),
+        ),
+      ],
+    ],
+  );
+}
+
+class _CardTagMetadataRow extends StatelessWidget {
+  const _CardTagMetadataRow({
+    required this.item,
+    required this.metadata,
+    this.overlay = false,
+  });
+
+  final InventoryItem item;
+  final String metadata;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      if (metadata.isNotEmpty)
+        Text(
+          metadata,
+          maxLines: 1,
+          style: TextStyle(
+            color: overlay ? const Color(0xffc3c8d3) : const Color(0xff929aac),
+            fontSize: 12,
+          ),
+        ),
+      if (metadata.isNotEmpty && _itemDisplayTags(item).isNotEmpty)
+        const SizedBox(width: 7),
+      if (_itemDisplayTags(item).isNotEmpty)
+        Expanded(
+          child: _ItemTagRow(item: item, overlay: overlay),
+        ),
+    ],
+  );
 }
 
 class _PhotoInventoryCardContent extends StatelessWidget {
@@ -26182,149 +30772,204 @@ class _PhotoInventoryCardContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final swatch = _itemColorSwatch(item.itemColorName);
-    final metadata = [
-      if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-      ...item.compatibility,
-    ].join('  •  ');
-    return Stack(
-      key: Key('photo-card-${item.id}'),
-      fit: StackFit.expand,
-      children: [
-        _CardPhotoBackground(
-          bytes: item.thumbnailBytes ?? item.imageBytes!,
-          imageKey: Key('photo-card-background-${item.id}'),
-        ),
-        if (swatch != null) ColoredBox(color: swatch.withValues(alpha: .12)),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0x66080a10), Color(0x22080a10), Color(0xe60a0d14)],
-              stops: [0, .42, 1],
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
+    final hasSpecialColors = gradientColors != null || coextrudedColors != null;
+    // Coextruded has one name per strand, so it only surfaces on hover. A
+    // gradient has a single name and is shown inline, same as a plain color.
+    final coextrudedTooltip = _itemCoextrudedName(item);
+    final inlineColorLabel = item.itemColorLabel.isNotEmpty
+        ? item.itemColorLabel
+        : _itemGradientName(item);
+    final metadata = [if (spoolSizeLabel.isNotEmpty) spoolSizeLabel]
+        .join('  •  ');
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.maxWidth < 220 || constraints.maxHeight < 250;
+        return Stack(
+          key: Key('photo-card-${item.id}'),
+          fit: StackFit.expand,
+          children: [
+            _CardPhotoBackground(
+              bytes: item.thumbnailBytes ?? item.imageBytes!,
+              imageKey: Key('photo-card-background-${item.id}'),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            if (swatch != null || hasSpecialColors)
+              ColoredBox(
+                color:
+                    (swatch ?? coextrudedColors?.first ?? gradientColors!.first)
+                        .withValues(alpha: .12),
+              ),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x66080a10),
+                    Color(0x22080a10),
+                    Color(0xe60a0d14),
+                  ],
+                  stops: [0, .42, 1],
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(compact ? 10 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _QuantityStepper(
-                    item: item,
-                    compact: true,
-                    onQuantityChanged: onQuantityChanged,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _QuantityStepper(
+                        item: item,
+                        compact: true,
+                        onQuantityChanged: onQuantityChanged,
+                      ),
+                      const Spacer(),
+                      if (item.archived)
+                        _ArchiveBadge(item: item)
+                      else if (showStatus && item.quantity > 0)
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: _themeCanvas(context).withValues(alpha: .82),
+                            shape: BoxShape.circle,
+                          ),
+                          child: CountdownRing(
+                            key: Key('inventory-card-timer-${item.id}'),
+                            item: item,
+                            compact: compact,
+                          ),
+                        ),
+                    ],
                   ),
                   const Spacer(),
-                  if (item.archived)
-                    _ArchiveBadge(item: item)
-                  else if (showStatus && item.quantity > 0)
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: _themeCanvas(context).withValues(alpha: .82),
-                        shape: BoxShape.circle,
-                      ),
-                      child: CountdownRing(
-                        key: Key('inventory-card-timer-${item.id}'),
-                        item: item,
+                  Container(
+                    padding: EdgeInsets.all(compact ? 9 : 12),
+                    decoration: BoxDecoration(
+                      color: _themeCanvas(context).withValues(alpha: .84),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: .18),
                       ),
                     ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _CardTypeAndPrice(
+                          item: item,
+                          typeLabel: typeLabel,
+                          typeIcon: typeIcon,
+                          typeIconImageBytes: typeIconImageBytes,
+                          overlay: true,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          item.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: compact ? 15 : 17,
+                            height: 1.15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (!compact &&
+                            (metadata.isNotEmpty ||
+                                _itemDisplayTags(item).isNotEmpty)) ...[
+                          const SizedBox(height: 6),
+                          _CardTagMetadataRow(
+                            item: item,
+                            metadata: metadata,
+                            overlay: true,
+                          ),
+                        ],
+                        if (!compact &&
+                            (swatch != null ||
+                                hasSpecialColors ||
+                                item.materialName.isNotEmpty)) ...[
+                          const SizedBox(height: 9),
+                          Row(
+                            children: [
+                              if (swatch != null || hasSpecialColors) ...[
+                                Builder(
+                                  builder: (context) {
+                                    final chip = coextrudedColors != null
+                                        ? _PieColorChicklet(
+                                            colors: coextrudedColors,
+                                            size: 24,
+                                          )
+                                        : Container(
+                                            width: 24,
+                                            height: 24,
+                                            decoration: BoxDecoration(
+                                              color: gradientColors == null
+                                                  ? swatch
+                                                  : null,
+                                              gradient: gradientColors == null
+                                                  ? null
+                                                  : LinearGradient(
+                                                      colors: gradientColors,
+                                                    ),
+                                              borderRadius:
+                                                  BorderRadius.circular(7),
+                                            ),
+                                          );
+                                    // Coextruded has one name per strand, so
+                                    // it only appears on hover -- inline text
+                                    // here would crowd the card. A gradient's
+                                    // single name is shown inline below.
+                                    return coextrudedColors != null &&
+                                            coextrudedTooltip.isNotEmpty
+                                        ? Tooltip(
+                                            message: coextrudedTooltip,
+                                            child: chip,
+                                          )
+                                        : chip;
+                                  },
+                                ),
+                                if (coextrudedColors == null &&
+                                    inlineColorLabel.isNotEmpty) ...[
+                                  const SizedBox(width: 7),
+                                  Expanded(
+                                    child: Text(
+                                      inlineColorLabel,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ] else
+                                  const Spacer(),
+                              ] else
+                                const Spacer(),
+                              if (item.materialName.isNotEmpty)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 130,
+                                  ),
+                                  child: _MaterialBadge(item: item),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ],
               ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _themeCanvas(context).withValues(alpha: .84),
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: .18),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _CardTypeAndPrice(
-                      item: item,
-                      typeLabel: typeLabel,
-                      typeIcon: typeIcon,
-                      typeIconImageBytes: typeIconImageBytes,
-                      overlay: true,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        height: 1.15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    if (metadata.isNotEmpty) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        metadata,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xffc3c8d3),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                    if (swatch != null || item.materialName.isNotEmpty) ...[
-                      const SizedBox(height: 9),
-                      Row(
-                        children: [
-                          if (swatch != null) ...[
-                            Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: swatch,
-                                borderRadius: BorderRadius.circular(7),
-                              ),
-                            ),
-                            if (item.itemColorLabel.isNotEmpty) ...[
-                              const SizedBox(width: 7),
-                              Expanded(
-                                child: Text(
-                                  item.itemColorLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ] else
-                              const Spacer(),
-                          ] else
-                            const Spacer(),
-                          if (item.materialName.isNotEmpty)
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 130),
-                              child: _MaterialBadge(item: item),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -26386,6 +31031,10 @@ class InventoryCard extends StatelessWidget {
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
     this.scrollingListenable,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     this.photoCard = false,
     this.showStatus = true,
     this.canEdit = true,
@@ -26409,6 +31058,10 @@ class InventoryCard extends StatelessWidget {
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final bool photoCard;
   final bool showStatus;
   final bool canEdit;
@@ -26457,10 +31110,16 @@ class InventoryCard extends StatelessWidget {
           moistureVersion: moistureAnimationVersion,
           lowStockActive: !item.archived && _isLowStock(item),
           moistureActive: _hasMoistureVisualAlert(item),
+          cardEffectsEnabled: cardEffectsEnabled,
+          lowStockEffectsEnabled: lowStockEffectsEnabled,
+          moistureEffectsEnabled: moistureEffectsEnabled,
+          remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,
-          child: photoCard && item.imageBytes != null
+          child:
+              photoCard &&
+                  (item.thumbnailBytes != null || item.imageBytes != null)
               ? _PhotoInventoryCardContent(
                   item: item,
                   typeLabel: typeLabel ?? item.typeLabel,
@@ -26526,17 +31185,9 @@ class InventoryCard extends StatelessWidget {
                           ),
                           if (!compact) ...[
                             const SizedBox(height: 8),
-                            Text(
-                              [
-                                if (spoolSizeLabel.isNotEmpty) spoolSizeLabel,
-                                ...item.compatibility,
-                              ].join('  •  '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xff929aac),
-                                fontSize: 12,
-                              ),
+                            _CardTagMetadataRow(
+                              item: item,
+                              metadata: spoolSizeLabel,
                             ),
                           ],
                           SizedBox(height: compact ? 5 : 14),
@@ -26550,6 +31201,32 @@ class InventoryCard extends StatelessWidget {
                                   typeIcon: typeIcon,
                                   typeIconImageBytes: typeIconImageBytes,
                                 ),
+                                // A gradient has one name, shown inline just
+                                // like a regular color name. Coextruded has
+                                // one name per strand, so those only surface
+                                // on hover (see _ItemVisual's tooltip).
+                                if (!compact &&
+                                    _itemCoextrudedColors(item) == null &&
+                                    (item.itemColorLabel.isNotEmpty ||
+                                        _itemGradientName(item)
+                                            .isNotEmpty)) ...[
+                                  const SizedBox(width: 8),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 110,
+                                    ),
+                                    child: Text(
+                                      item.itemColorLabel.isNotEmpty
+                                          ? item.itemColorLabel
+                                          : _itemGradientName(item),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                                 const Spacer(),
                                 if (item.materialName.isNotEmpty) ...[
                                   ConstrainedBox(
@@ -26655,6 +31332,10 @@ class InventoryRow extends StatelessWidget {
     this.animationDurationPercent = 100,
     this.animationRecurrenceSeconds = 5,
     this.scrollingListenable,
+    this.cardEffectsEnabled = true,
+    this.lowStockEffectsEnabled = true,
+    this.moistureEffectsEnabled = true,
+    this.remoteSyncEffectsEnabled = true,
     this.showStatus = true,
     this.canEdit = true,
     this.canCreate = true,
@@ -26677,6 +31358,10 @@ class InventoryRow extends StatelessWidget {
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final ValueListenable<bool>? scrollingListenable;
+  final bool cardEffectsEnabled;
+  final bool lowStockEffectsEnabled;
+  final bool moistureEffectsEnabled;
+  final bool remoteSyncEffectsEnabled;
   final bool showStatus;
   final bool canEdit;
   final bool canCreate;
@@ -26897,6 +31582,10 @@ class InventoryRow extends StatelessWidget {
           moistureVersion: moistureAnimationVersion,
           lowStockActive: !item.archived && _isLowStock(item),
           moistureActive: _hasMoistureVisualAlert(item),
+          cardEffectsEnabled: cardEffectsEnabled,
+          lowStockEffectsEnabled: lowStockEffectsEnabled,
+          moistureEffectsEnabled: moistureEffectsEnabled,
+          remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
           durationPercent: animationDurationPercent,
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,

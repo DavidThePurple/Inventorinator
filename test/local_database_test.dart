@@ -80,6 +80,8 @@ void main() {
     final database = await LocalDatabase.open(overridePath: path);
     database.saveBoolPreference('sync_chime_enabled', false);
     database.saveStringPreference('device_name', 'Workshop desktop');
+    database.saveStringPreference('inventory_sort', 'addedDate');
+    database.saveBoolPreference('inventory_sort_ascending', false);
     database.close();
 
     final reopened = await LocalDatabase.open(overridePath: path);
@@ -90,6 +92,14 @@ void main() {
     expect(
       reopened.loadStringPreference('device_name', fallback: 'Unknown'),
       'Workshop desktop',
+    );
+    expect(
+      reopened.loadStringPreference('inventory_sort', fallback: 'type'),
+      'addedDate',
+    );
+    expect(
+      reopened.loadBoolPreference('inventory_sort_ascending', fallback: true),
+      isFalse,
     );
     reopened.close();
   });
@@ -266,6 +276,7 @@ void main() {
       'quantity': 3,
     });
     final uploading = database.loadPendingWorkshopChanges();
+    final uploadingRevision = uploading.single.localRevision;
 
     await Future<void>.delayed(const Duration(milliseconds: 2));
     database.saveEntityPayloadAndQueue('inventory', 'A', {
@@ -273,6 +284,10 @@ void main() {
       'name': 'Bolt',
       'quantity': 4,
     });
+    expect(
+      database.loadPendingWorkshopChanges().single.localRevision,
+      greaterThan(uploadingRevision),
+    );
     database.acknowledgePendingWorkshopChanges(uploading);
 
     final remaining = database.loadPendingWorkshopChanges();
@@ -307,6 +322,45 @@ void main() {
       destination.close();
     },
   );
+
+  test('deferred writes coalesce rapid edits before committing', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-queued-writes-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    database.saveState(
+      '{"schemaVersion":8,"inventory":[{"id":"A","name":"Bolt","quantity":1}],"vendors":[],"brands":[],"products":[]}',
+    );
+
+    final first = database.queueWorkshopChanges([
+      const WorkshopEntityChange(
+        entityType: 'inventory',
+        entityId: 'A',
+        fields: {'quantity': 2},
+      ),
+    ]);
+    final second = database.queueWorkshopChanges([
+      const WorkshopEntityChange(
+        entityType: 'inventory',
+        entityId: 'A',
+        fields: {'name': 'Nut'},
+      ),
+    ]);
+    await Future.wait([first, second]);
+
+    final pending = database.loadPendingWorkshopChanges();
+    expect(pending, hasLength(1));
+    expect(pending.single.change.fields, {'quantity': 2, 'name': 'Nut'});
+    final state = jsonDecode(database.loadState()!) as Map<String, dynamic>;
+    final item = (state['inventory'] as List).single as Map<String, dynamic>;
+    expect(item, containsPair('id', 'A'));
+    expect(item, containsPair('name', 'Nut'));
+    expect(item, containsPair('quantity', 2));
+    database.close();
+  });
 
   test(
     'invalid SQLite import leaves the existing inventory untouched',

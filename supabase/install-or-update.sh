@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-release_tag=${INVENTORINATOR_RELEASE_TAG:-v0.1.0-alpha}
-required_version=12
+release_tag=${INVENTORINATOR_RELEASE_TAG:-v0.1.1-alpha}
+required_version=15
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 migrations_dir=$script_dir/migrations
 temporary_dir=
@@ -58,7 +58,7 @@ download_migrations() {
   migrations_dir=$temporary_dir/migrations
   mkdir -p "$migrations_dir"
   base_url="https://raw.githubusercontent.com/DavidThePurple/Inventorinator/$release_tag/supabase/migrations"
-  migration_names='001_workshop_state.sql 002_anonymous_workspaces.sql 003_device_roles.sql 004_owner_devices.sql 005_team_roles_audit.sql 006_shared_build_permissions.sql 007_builder_quantity_integrity.sql 008_owner_recovery.sql 009_owner_durability.sql 010_owner_resilience.sql 011_device_role_management.sql 012_incremental_entity_sync.sql'
+  migration_names='001_workshop_state.sql 002_anonymous_workspaces.sql 003_device_roles.sql 004_owner_devices.sql 005_team_roles_audit.sql 006_shared_build_permissions.sql 007_builder_quantity_integrity.sql 008_owner_recovery.sql 009_owner_durability.sql 010_owner_resilience.sql 011_device_role_management.sql 012_incremental_entity_sync.sql 013_preserve_legacy_locations.sql 014_authenticated_entity_read_policy.sql 015_disable_legacy_snapshot_writes.sql'
 
   echo "Downloading Inventorinator migrations from $release_tag..."
   for migration_name in $migration_names; do

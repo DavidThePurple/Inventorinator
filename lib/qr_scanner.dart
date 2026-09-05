@@ -410,11 +410,16 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   }
 
   Future<void> _pollXrealFrame() async {
-    if (!xrealStreaming) return;
+    if (!xrealStreaming && !xrealAvailable && xrealFrame == null) return;
     try {
       final bytes = await _xrealChannel.invokeMethod<Uint8List>('frame');
       if (mounted && bytes != null && bytes.isNotEmpty) {
-        setState(() => xrealFrame = bytes);
+        setState(() {
+          xrealFrame = bytes;
+          if (error == 'XREAL R1 connected but returned no video frames.') {
+            error = null;
+          }
+        });
         if (widget.captureMode == ScanCaptureMode.barcode &&
             !delivered &&
             !decoding) {

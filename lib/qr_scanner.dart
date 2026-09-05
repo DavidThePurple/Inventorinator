@@ -920,12 +920,18 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
             child: Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.tonalIcon(
-                key: const Key('cycle-windows-camera'),
-                onPressed: initializing ? null : _cycleCamera,
-                icon: const Icon(Icons.cameraswitch_rounded),
-                label: const Text('Switch camera'),
+              alignment: Alignment.center,
+              child: FractionallySizedBox(
+                widthFactor: .6,
+                child: FilledButton.tonalIcon(
+                  key: const Key('cycle-windows-camera'),
+                  onPressed: initializing ? null : _cycleCamera,
+                  icon: const Icon(Icons.cameraswitch_rounded),
+                  label: const Text('Switch camera'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                ),
               ),
             ),
           ),

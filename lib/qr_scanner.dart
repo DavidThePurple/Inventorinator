@@ -391,120 +391,21 @@ class _WindowsCameraScanner extends StatefulWidget {
 }
 
 class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
-  static const _xrealChannel = MethodChannel('inventorinator/xreal_r1');
   final manual = TextEditingController();
   List<CameraDescription> cameras = const [];
   int selectedCamera = 0;
   CameraController? camera;
   Timer? scanTimer;
-  Timer? xrealTimer;
   bool initializing = true;
   bool capturing = false;
   bool decoding = false;
   bool delivered = false;
   String? error;
-  bool xrealAvailable = false;
-  bool xrealMode = false;
-  bool xrealStreaming = false;
-  int xrealPackets = 0;
-  Uint8List? xrealFrame;
 
   @override
   void initState() {
     super.initState();
     unawaited(_findCameras());
-    unawaited(_refreshXrealStatus());
-    xrealTimer = Timer.periodic(
-      const Duration(milliseconds: 150),
-      (_) => unawaited(_pollXrealFrame()),
-    );
-  }
-
-  Future<void> _pollXrealFrame() async {
-    if (!xrealMode) return;
-    try {
-      final bytes = await _xrealChannel.invokeMethod<Uint8List>('frame');
-      if (mounted && bytes != null && bytes.isNotEmpty) {
-        setState(() {
-          xrealFrame = bytes;
-          if (error == 'XREAL R1 connected but returned no video frames.') {
-            error = null;
-          }
-        });
-        if (widget.captureMode == ScanCaptureMode.barcode &&
-            !delivered &&
-            !decoding) {
-          decoding = true;
-          try {
-            final code = widget.mode == ScanMode.ingest
-                ? await compute(decodeProductBarcodeFrame, bytes)
-                : await compute(decodeAnyBarcodeFrame, bytes);
-            if (code != null && !delivered) {
-              delivered = true;
-              widget.onCode(code, bytes);
-            }
-          } finally {
-            decoding = false;
-          }
-        }
-      }
-      final status = await _xrealChannel.invokeMapMethod<String, dynamic>(
-        'status',
-      );
-      if (mounted && status != null && status['streaming'] != true) {
-        setState(() {
-          xrealStreaming = false;
-          error = xrealFrame == null
-              ? 'XREAL R1 connected but returned no video frames.'
-              : error;
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _refreshXrealStatus() async {
-    try {
-      final status = await _xrealChannel.invokeMapMethod<String, dynamic>(
-        'status',
-      );
-      if (!mounted || status == null) return;
-      setState(() {
-        xrealAvailable = status['available'] == true;
-        xrealStreaming = status['streaming'] == true;
-        xrealPackets = (status['packets'] as num?)?.toInt() ?? 0;
-      });
-    } on PlatformException {
-      // The channel exists only on the Windows runner; keep the normal camera
-      // workflow available if an older build is still running.
-    }
-  }
-
-  Future<void> _toggleXreal() async {
-    try {
-      if (xrealMode) {
-        await _xrealChannel.invokeMethod<void>('stop');
-        xrealMode = false;
-        xrealFrame = null;
-        await _refreshXrealStatus();
-        if (cameras.isNotEmpty) await _startCamera(selectedCamera);
-      } else {
-        scanTimer?.cancel();
-        final previous = camera;
-        camera = null;
-        await previous?.dispose();
-        await _xrealChannel.invokeMethod<void>('start');
-        xrealMode = true;
-        delivered = false;
-        if (mounted) setState(() => error = null);
-        await _refreshXrealStatus();
-      }
-    } on PlatformException catch (exception) {
-      if (mounted) {
-        setState(
-          () => error = exception.message ?? 'XREAL R1 camera unavailable.',
-        );
-      }
-    }
   }
 
   @override
@@ -671,8 +572,6 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   @override
   void dispose() {
     scanTimer?.cancel();
-    xrealTimer?.cancel();
-    unawaited(_xrealChannel.invokeMethod<void>('stop'));
     manual.dispose();
     unawaited(camera?.dispose());
     super.dispose();

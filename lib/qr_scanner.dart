@@ -418,6 +418,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   bool xrealEyeStreaming = false;
   int xrealEyePackets = 0;
   Uint8List? xrealEyeFrame;
+  MemoryImage? xrealEyeImage;
   int? xrealEyeFrameFingerprint;
 
   @override
@@ -448,6 +449,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             frame.isNotEmpty &&
             fingerprint != xrealEyeFrameFingerprint) {
           xrealEyeFrame = frame;
+          xrealEyeImage = MemoryImage(frame);
           xrealEyeFrameFingerprint = fingerprint;
         }
       });
@@ -484,6 +486,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             xrealEyeStreaming = false;
             xrealEyePackets = 0;
             xrealEyeFrame = null;
+            xrealEyeImage = null;
             xrealEyeFrameFingerprint = null;
           });
         }
@@ -756,7 +759,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             ),
           ),
         Expanded(
-          child: xrealEyeMode && xrealEyeFrame != null
+          child: xrealEyeMode && xrealEyeImage != null
               ? GestureDetector(
                   key: const Key('xreal-eye-camera-surface'),
                   behavior: HitTestBehavior.opaque,
@@ -769,8 +772,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Image.memory(
-                        xrealEyeFrame!,
+                      Image(
+                        image: xrealEyeImage!,
                         fit: BoxFit.contain,
                         gaplessPlayback: true,
                       ),

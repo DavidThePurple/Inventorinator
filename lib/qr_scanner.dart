@@ -687,13 +687,14 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   ),
                 ),
               ),
-              OutlinedButton.icon(
-                key: const Key('xreal-r1-camera'),
-                onPressed: _toggleXreal,
-                icon: Icon(
-                  xrealStreaming ? Icons.stop : Icons.visibility_outlined,
+              Tooltip(
+                message: 'Rotate Camera',
+                child: OutlinedButton.icon(
+                  key: const Key('xreal-r1-camera'),
+                  onPressed: _toggleXreal,
+                  icon: const Icon(Icons.cameraswitch_rounded),
+                  label: Text(xrealStreaming ? 'Stop R1' : 'Start R1'),
                 ),
-                label: Text(xrealStreaming ? 'Stop R1' : 'Start R1'),
               ),
             ],
           ),

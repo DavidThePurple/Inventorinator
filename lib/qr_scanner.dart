@@ -14,6 +14,13 @@ enum ScanMode { find, ingest }
 
 enum ScanCaptureMode { barcode, ocr }
 
+String _cameraDisplayName(String name) {
+  // Windows camera names may include a device path in angle brackets. Keep
+  // the full value for device selection, but show only the friendly name.
+  final separator = name.indexOf(' <');
+  return separator > 0 ? name.substring(0, separator) : name;
+}
+
 typedef ScanResultCallback = void Function(
   String code,
   ScanMode mode,
@@ -341,16 +348,9 @@ int _windowsCameraPriority(CameraDescription camera) {
 }
 
 int _compareWindowsCameras(CameraDescription a, CameraDescription b) {
-  final priority = _windowsCameraPriority(a).compareTo(_windowsCameraPriority(b));
+  final priority = _windowsCameraPriority(a)
+      .compareTo(_windowsCameraPriority(b));
   return priority != 0 ? priority : a.name.compareTo(b.name);
-}
-
-String _windowsCameraDisplayName(CameraDescription camera) {
-  // camera_windows appends the device path in angle brackets. Keep that
-  // identifier available through CameraDescription, but do not expose it in
-  // the user-facing selector.
-  final separator = camera.name.indexOf(' <');
-  return separator > 0 ? camera.name.substring(0, separator) : camera.name;
 }
 
 class _WindowsCameraScanner extends StatefulWidget {
@@ -367,8 +367,7 @@ class _WindowsCameraScanner extends StatefulWidget {
   final LabelCaptureCallback? onLabelCapture;
 
   @override
-  State<_WindowsCameraScanner> createState() =>
-      _WindowsCameraScannerState();
+  State<_WindowsCameraScanner> createState() => _WindowsCameraScannerState();
 }
 
 class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
@@ -570,7 +569,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   DropdownMenuItem(
                     value: index,
                     child: Text(
-                      _windowsCameraDisplayName(cameras[index]),
+                      _cameraDisplayName(cameras[index].name),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -725,7 +724,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
           r'^\s*Card type\s*:\s*(.+)$',
           multiLine: true,
         ).firstMatch(info.stdout.toString())?.group(1)?.trim();
-        deviceLabels[path] = card == null ? path : '$card ($path)';
+        deviceLabels[path] = card == null ? path : _cameraDisplayName(card);
         entries.add(path);
       }
       entries.sort((a, b) {

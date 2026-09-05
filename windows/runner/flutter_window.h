@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "xreal_r1_camera.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -32,6 +33,9 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       audio_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      xreal_r1_channel_;
+  std::unique_ptr<XrealR1Camera> xreal_r1_camera_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

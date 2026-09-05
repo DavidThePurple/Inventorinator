@@ -27,6 +27,34 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  xreal_r1_camera_ = std::make_unique<XrealR1Camera>();
+  xreal_r1_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "inventorinator/xreal_r1",
+          &flutter::StandardMethodCodec::GetInstance());
+  xreal_r1_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        if (call.method_name() == "start") {
+          if (xreal_r1_camera_->Start()) {
+            result->Success();
+          } else {
+            result->Error("xreal_r1_unavailable", xreal_r1_camera_->LastError());
+          }
+        } else if (call.method_name() == "stop") {
+          xreal_r1_camera_->Stop();
+          result->Success();
+        } else if (call.method_name() == "status") {
+          flutter::EncodableMap status;
+          status[flutter::EncodableValue("available")] = xreal_r1_camera_->IsAvailable();
+          status[flutter::EncodableValue("streaming")] = xreal_r1_camera_->IsStreaming();
+          status[flutter::EncodableValue("packets")] =
+              static_cast<int64_t>(xreal_r1_camera_->PacketCount());
+          status[flutter::EncodableValue("error")] = xreal_r1_camera_->LastError();
+          result->Success(status);
+        } else {
+          result->NotImplemented();
+        }
+      });
   audio_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), "inventorinator/audio",
@@ -77,6 +105,8 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   if (flutter_controller_) {
     audio_channel_.reset();
+    xreal_r1_channel_.reset();
+    xreal_r1_camera_.reset();
     flutter_controller_ = nullptr;
   }
 

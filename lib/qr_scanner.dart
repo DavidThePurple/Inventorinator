@@ -204,6 +204,16 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
               widget.onCode(value, capture.image);
             },
           ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: IconButton.filledTonal(
+              key: const Key('cycle-camera'),
+              tooltip: 'Switch camera',
+              onPressed: () => unawaited(controller.switchCamera()),
+              icon: const Icon(Icons.cameraswitch_rounded),
+            ),
+          ),
           _ScanGuide(wide: widget.mode == ScanMode.ingest),
         ],
       ),
@@ -371,6 +381,7 @@ class _WindowsCameraScanner extends StatefulWidget {
 }
 
 class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
+  static const _xrealChannel = MethodChannel('inventorinator/xreal_r1');
   final manual = TextEditingController();
   List<CameraDescription> cameras = const [];
   int selectedCamera = 0;
@@ -381,11 +392,49 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   bool decoding = false;
   bool delivered = false;
   String? error;
+  bool xrealAvailable = false;
+  bool xrealStreaming = false;
+  int xrealPackets = 0;
 
   @override
   void initState() {
     super.initState();
     unawaited(_findCameras());
+    unawaited(_refreshXrealStatus());
+  }
+
+  Future<void> _refreshXrealStatus() async {
+    try {
+      final status = await _xrealChannel.invokeMapMethod<String, dynamic>(
+        'status',
+      );
+      if (!mounted || status == null) return;
+      setState(() {
+        xrealAvailable = status['available'] == true;
+        xrealStreaming = status['streaming'] == true;
+        xrealPackets = (status['packets'] as num?)?.toInt() ?? 0;
+      });
+    } on PlatformException {
+      // The channel exists only on the Windows runner; keep the normal camera
+      // workflow available if an older build is still running.
+    }
+  }
+
+  Future<void> _toggleXreal() async {
+    try {
+      if (xrealStreaming) {
+        await _xrealChannel.invokeMethod<void>('stop');
+      } else {
+        await _xrealChannel.invokeMethod<void>('start');
+      }
+      await _refreshXrealStatus();
+    } on PlatformException catch (exception) {
+      if (mounted) {
+        setState(
+          () => error = exception.message ?? 'XREAL R1 camera unavailable.',
+        );
+      }
+    }
   }
 
   @override
@@ -541,6 +590,12 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     if (bytes != null) await widget.onLabelCapture!(bytes);
   }
 
+  void _cycleCamera() {
+    if (cameras.length < 2 || initializing) return;
+    final next = (selectedCamera + 1) % cameras.length;
+    unawaited(_startCamera(next));
+  }
+
   @override
   void dispose() {
     scanTimer?.cancel();
@@ -554,33 +609,76 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     final active = camera;
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  xrealStreaming
+                      ? 'XREAL R1 transport active · $xrealPackets packets'
+                      : xrealAvailable
+                      ? 'XREAL R1 detected'
+                      : 'XREAL R1 not detected',
+                  style: const TextStyle(
+                    color: Color(0xff929aac),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              OutlinedButton.icon(
+                key: const Key('xreal-r1-camera'),
+                onPressed: _toggleXreal,
+                icon: Icon(
+                  xrealStreaming ? Icons.stop : Icons.visibility_outlined,
+                ),
+                label: Text(xrealStreaming ? 'Stop R1' : 'Start R1'),
+              ),
+            ],
+          ),
+        ),
         if (cameras.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: DropdownButtonFormField<int>(
-              key: const Key('windows-camera-selector'),
-              initialValue: selectedCamera,
-              decoration: const InputDecoration(
-                labelText: 'Camera',
-                prefixIcon: Icon(Icons.videocam_outlined),
-              ),
-              items: [
-                for (var index = 0; index < cameras.length; index++)
-                  DropdownMenuItem(
-                    value: index,
-                    child: Text(
-                      _cameraDisplayName(cameras[index].name),
-                      overflow: TextOverflow.ellipsis,
+            child: Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    key: const Key('windows-camera-selector'),
+                    initialValue: selectedCamera,
+                    decoration: const InputDecoration(
+                      labelText: 'Camera',
+                      prefixIcon: Icon(Icons.videocam_outlined),
                     ),
+                    items: [
+                      for (var index = 0; index < cameras.length; index++)
+                        DropdownMenuItem(
+                          value: index,
+                          child: Text(
+                            _cameraDisplayName(cameras[index].name),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: initializing
+                        ? null
+                        : (value) {
+                            if (value != null && value != selectedCamera) {
+                              unawaited(_startCamera(value));
+                            }
+                          },
                   ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  key: const Key('cycle-windows-camera'),
+                  tooltip: 'Switch camera',
+                  onPressed: cameras.length < 2 || initializing
+                      ? null
+                      : _cycleCamera,
+                  icon: const Icon(Icons.cameraswitch_rounded),
+                ),
               ],
-              onChanged: initializing
-                  ? null
-                  : (value) {
-                      if (value != null && value != selectedCamera) {
-                        unawaited(_startCamera(value));
-                      }
-                    },
             ),
           ),
         Expanded(
@@ -871,6 +969,17 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
     cameraOutput = null;
   }
 
+  void _cycleCamera() {
+    if (devices.length < 2 || device == null) return;
+    final next = (devices.indexOf(device!) + 1) % devices.length;
+    setState(() {
+      device = devices[next];
+      frame = null;
+      focusLocked = false;
+    });
+    unawaited(_startCamera());
+  }
+
   @override
   void dispose() {
     cameraOutput?.cancel();
@@ -889,25 +998,38 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
           if (devices.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: DropdownButtonFormField<String>(
-                initialValue: device,
-                decoration: const InputDecoration(labelText: 'Webcam'),
-                items: devices
-                    .map(
-                      (path) => DropdownMenuItem(
-                        value: path,
-                        child: Text(deviceLabels[path] ?? path),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  setState(() {
-                    device = value;
-                    frame = null;
-                    focusLocked = false;
-                  });
-                  _startCamera();
-                },
+              child: Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: device,
+                      decoration: const InputDecoration(labelText: 'Webcam'),
+                      items: devices
+                          .map(
+                            (path) => DropdownMenuItem(
+                              value: path,
+                              child: Text(deviceLabels[path] ?? path),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          device = value;
+                          frame = null;
+                          focusLocked = false;
+                        });
+                        _startCamera();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    key: const Key('cycle-linux-camera'),
+                    tooltip: 'Switch camera',
+                    onPressed: devices.length < 2 ? null : _cycleCamera,
+                    icon: const Icon(Icons.cameraswitch_rounded),
+                  ),
+                ],
               ),
             ),
           if (devices.isNotEmpty)

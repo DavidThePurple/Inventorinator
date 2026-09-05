@@ -21,6 +21,17 @@ String _cameraDisplayName(String name) {
   return separator > 0 ? name.substring(0, separator) : name;
 }
 
+int _frameFingerprint(Uint8List bytes) {
+  // Native polling returns a fresh byte list even when the decoded frame has
+  // not changed. Sample across the JPEG so Flutter only repaints new frames.
+  var value = bytes.length;
+  final step = (bytes.length / 16).ceil();
+  for (var index = 0; index < bytes.length; index += step) {
+    value = 0x1fffffff & ((value * 31) ^ bytes[index]);
+  }
+  return value;
+}
+
 typedef ScanResultCallback = void Function(
   String code,
   ScanMode mode,
@@ -407,6 +418,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   bool xrealEyeStreaming = false;
   int xrealEyePackets = 0;
   Uint8List? xrealEyeFrame;
+  int? xrealEyeFrameFingerprint;
 
   @override
   void initState() {
@@ -426,10 +438,18 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         'status',
       );
       if (!mounted) return;
+      final fingerprint = frame == null || frame.isEmpty
+          ? null
+          : _frameFingerprint(frame);
       setState(() {
         xrealEyeStreaming = status?['streaming'] == true;
         xrealEyePackets = (status?['packets'] as num?)?.toInt() ?? 0;
-        if (frame != null && frame.isNotEmpty) xrealEyeFrame = frame;
+        if (frame != null &&
+            frame.isNotEmpty &&
+            fingerprint != xrealEyeFrameFingerprint) {
+          xrealEyeFrame = frame;
+          xrealEyeFrameFingerprint = fingerprint;
+        }
       });
       if (frame != null &&
           frame.isNotEmpty &&
@@ -464,6 +484,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             xrealEyeStreaming = false;
             xrealEyePackets = 0;
             xrealEyeFrame = null;
+            xrealEyeFrameFingerprint = null;
           });
         }
       } else {
@@ -673,9 +694,11 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                 key: const Key('xreal-eye-camera'),
                 onPressed: _toggleXrealEye,
                 icon: Icon(
-                  xrealEyeMode ? Icons.stop : Icons.cameraswitch_rounded,
+                  xrealEyeMode ? Icons.stop_rounded : Icons.videocam_rounded,
                 ),
-                label: Text(xrealEyeMode ? 'Stop Eye' : 'Start Eye'),
+                label: Text(
+                  xrealEyeMode ? 'Stop XREAL Eye' : 'Start XREAL Eye',
+                ),
               ),
             ],
           ),
@@ -746,7 +769,11 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Image.memory(xrealEyeFrame!, fit: BoxFit.contain),
+                      Image.memory(
+                        xrealEyeFrame!,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                      ),
                       _ScanGuide(wide: widget.mode == ScanMode.ingest),
                     ],
                   ),

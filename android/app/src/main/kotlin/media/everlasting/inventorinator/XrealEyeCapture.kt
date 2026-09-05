@@ -63,9 +63,9 @@ class XrealEyeCapture(private val context: Context) {
     private fun eyeNetwork(): Network? {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         return connectivity.allNetworks.firstOrNull { network ->
-            connectivity.getLinkProperties(network).linkAddresses.any {
+            connectivity.getLinkProperties(network)?.linkAddresses?.any {
                 it.address.hostAddress?.startsWith("169.254.2.") == true
-            }
+            } == true
         }
     }
 

@@ -900,10 +900,25 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                     fit: StackFit.expand,
                     children: [
                       Center(
-                        child: AspectRatio(
-                          aspectRatio: active.value.aspectRatio,
-                          child: CameraPreview(active),
-                        ),
+                        child: compact
+                            ? ClipRect(
+                                child: SizedBox.expand(
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width:
+                                          active.value.previewSize?.width ?? 16,
+                                      height:
+                                          active.value.previewSize?.height ?? 9,
+                                      child: CameraPreview(active),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : AspectRatio(
+                                aspectRatio: active.value.aspectRatio,
+                                child: CameraPreview(active),
+                              ),
                       ),
                       _ScanGuide(wide: widget.mode == ScanMode.ingest),
                       if (capturing &&
@@ -922,7 +937,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             child: Align(
               alignment: Alignment.center,
               child: FractionallySizedBox(
-                widthFactor: .6,
+                widthFactor: .22,
                 child: AspectRatio(
                   aspectRatio: 1,
                   child: FilledButton.tonal(

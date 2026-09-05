@@ -237,6 +237,12 @@ void XrealR1Camera::ReadLoop() {
       }
     }
   }
+  // The R1 delivers a bounded HEVC burst for each capture. Closing the
+  // decoder input on EOF is required to make FFmpeg flush the final picture.
+  if (decoder_input_ != 0) {
+    CloseHandle(AsHandle(decoder_input_));
+    decoder_input_ = 0;
+  }
   streaming_ = false;
   if (running_) {
     std::lock_guard<std::mutex> lock(state_mutex_);

@@ -348,11 +348,16 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
   }
 }
 
+bool _isXrealEyeCamera(CameraDescription camera) {
+  final name = camera.name.toLowerCase();
+  return name.contains('xreal') ||
+      name.contains('x-real') ||
+      (name.contains('eye') && name.contains('camera'));
+}
+
 int _windowsCameraPriority(CameraDescription camera) {
   final name = camera.name.toLowerCase();
-  if (name.contains('xreal') ||
-      name.contains('x-real') ||
-      name.contains('eye')) {
+  if (_isXrealEyeCamera(camera)) {
     return -10;
   }
   if (name.contains('ir') || name.contains('depth')) return 100;
@@ -676,39 +681,17 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   @override
   Widget build(BuildContext context) {
     final active = camera;
+    final hasXrealEye = cameras.any(_isXrealEyeCamera);
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  xrealMode
-                      ? 'XREAL R1 transport active · $xrealPackets packets'
-                      : xrealAvailable
-                      ? 'XREAL R1 detected'
-                      : 'XREAL R1 not detected',
-                  style: const TextStyle(
-                    color: Color(0xff929aac),
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              Tooltip(
-                message: 'Rotate Camera',
-                child: OutlinedButton.icon(
-                  key: const Key('xreal-r1-camera'),
-                  onPressed: _toggleXreal,
-                  icon: Icon(
-                    xrealMode ? Icons.stop : Icons.cameraswitch_rounded,
-                  ),
-                  label: Text(xrealMode ? 'Stop R1' : 'Start R1'),
-                ),
-              ),
-            ],
+        if (hasXrealEye)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'XREAL Eye camera detected and prioritized.',
+              style: TextStyle(color: Color(0xff929aac), fontSize: 12),
+            ),
           ),
-        ),
         if (cameras.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),

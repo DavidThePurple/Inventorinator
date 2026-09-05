@@ -345,6 +345,14 @@ int _compareWindowsCameras(CameraDescription a, CameraDescription b) {
   return priority != 0 ? priority : a.name.compareTo(b.name);
 }
 
+String _windowsCameraDisplayName(CameraDescription camera) {
+  // camera_windows appends the device path in angle brackets. Keep that
+  // identifier available through CameraDescription, but do not expose it in
+  // the user-facing selector.
+  final separator = camera.name.indexOf(' <');
+  return separator > 0 ? camera.name.substring(0, separator) : camera.name;
+}
+
 class _WindowsCameraScanner extends StatefulWidget {
   const _WindowsCameraScanner({
     required this.onCode,
@@ -562,7 +570,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   DropdownMenuItem(
                     value: index,
                     child: Text(
-                      cameras[index].name,
+                      _windowsCameraDisplayName(cameras[index]),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),

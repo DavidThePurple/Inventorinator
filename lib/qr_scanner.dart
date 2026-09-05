@@ -731,6 +731,75 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     unawaited(_startCamera(next));
   }
 
+  Widget _cameraPreview(CameraController? active) =>
+      xrealEyeMode && xrealEyeImage != null
+      ? GestureDetector(
+          key: const Key('xreal-eye-camera-surface'),
+          behavior: HitTestBehavior.opaque,
+          onTap:
+              widget.mode == ScanMode.ingest &&
+                  widget.captureMode == ScanCaptureMode.ocr &&
+                  widget.onLabelCapture != null
+              ? () => unawaited(widget.onLabelCapture!(xrealEyeFrame!))
+              : null,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image(
+                image: xrealEyeImage!,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+              _ScanGuide(wide: widget.mode == ScanMode.ingest),
+            ],
+          ),
+        )
+      : active == null || !active.value.isInitialized
+      ? Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (initializing) const CircularProgressIndicator(),
+              if (error != null) ...[
+                Text(error!, textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _findCameras,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Check cameras again'),
+                ),
+              ],
+            ],
+          ),
+        )
+      : GestureDetector(
+          key: const Key('scanner-camera-surface'),
+          behavior: HitTestBehavior.opaque,
+          onTap:
+              widget.mode == ScanMode.ingest &&
+                  widget.captureMode == ScanCaptureMode.ocr &&
+                  widget.onLabelCapture != null
+              ? _captureLabel
+              : null,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: active.value.aspectRatio,
+                  child: CameraPreview(active),
+                ),
+              ),
+              _ScanGuide(wide: widget.mode == ScanMode.ingest),
+              if (capturing && widget.captureMode == ScanCaptureMode.ocr)
+                const ColoredBox(
+                  color: Color(0x33000000),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
+        );
+
   @override
   void dispose() {
     scanTimer?.cancel();
@@ -746,7 +815,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     final active = camera;
     final hasXrealEye = cameras.any(_isXrealEyeCamera);
     final compact = MediaQuery.sizeOf(context).width < 520;
-    return Column(
+    final content = Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -846,98 +915,22 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
               ],
             ),
           ),
-        Expanded(
-          child: xrealEyeMode && xrealEyeImage != null
-              ? GestureDetector(
-                  key: const Key('xreal-eye-camera-surface'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap:
-                      widget.mode == ScanMode.ingest &&
-                          widget.captureMode == ScanCaptureMode.ocr &&
-                          widget.onLabelCapture != null
-                      ? () => unawaited(widget.onLabelCapture!(xrealEyeFrame!))
-                      : null,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image(
-                        image: xrealEyeImage!,
-                        fit: BoxFit.contain,
-                        gaplessPlayback: true,
-                      ),
-                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
-                    ],
-                  ),
-                )
-              : active == null || !active.value.isInitialized
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (initializing) const CircularProgressIndicator(),
-                      if (error != null) ...[
-                        Text(error!, textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          onPressed: _findCameras,
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: const Text('Check cameras again'),
-                        ),
-                      ],
-                    ],
-                  ),
-                )
-              : GestureDetector(
-                  key: const Key('scanner-camera-surface'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap:
-                      widget.mode == ScanMode.ingest &&
-                          widget.captureMode == ScanCaptureMode.ocr &&
-                          widget.onLabelCapture != null
-                      ? _captureLabel
-                      : null,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Center(
-                        child: compact
-                            ? ClipRect(
-                                child: SizedBox.expand(
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width:
-                                          active.value.previewSize?.width ?? 16,
-                                      height:
-                                          active.value.previewSize?.height ?? 9,
-                                      child: CameraPreview(active),
-                                    ),
-                                  ),
-                                ),
-                              )
-                            : AspectRatio(
-                                aspectRatio: active.value.aspectRatio,
-                                child: CameraPreview(active),
-                              ),
-                      ),
-                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
-                      if (capturing &&
-                          widget.captureMode == ScanCaptureMode.ocr)
-                        const ColoredBox(
-                          color: Color(0x33000000),
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                    ],
-                  ),
-                ),
-        ),
+        if (compact)
+          SizedBox(
+            width: double.infinity,
+            height: MediaQuery.sizeOf(context).width /
+                (active?.value.aspectRatio ?? (16 / 9)),
+            child: _cameraPreview(active),
+          )
+        else
+          Expanded(child: _cameraPreview(active)),
         if (compact && cameras.length > 1)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
             child: Align(
               alignment: Alignment.center,
               child: FractionallySizedBox(
-                widthFactor: .22,
+                widthFactor: .6,
                 child: AspectRatio(
                   aspectRatio: 1,
                   child: FilledButton.tonal(
@@ -970,6 +963,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         ),
       ],
     );
+    return compact ? SingleChildScrollView(child: content) : content;
   }
 }
 

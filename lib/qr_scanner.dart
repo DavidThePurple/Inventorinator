@@ -456,10 +456,19 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     try {
       if (xrealStreaming) {
         await _xrealChannel.invokeMethod<void>('stop');
+        xrealFrame = null;
+        await _refreshXrealStatus();
+        if (cameras.isNotEmpty) await _startCamera(selectedCamera);
       } else {
+        scanTimer?.cancel();
+        final previous = camera;
+        camera = null;
+        await previous?.dispose();
         await _xrealChannel.invokeMethod<void>('start');
+        delivered = false;
+        if (mounted) setState(() => error = null);
+        await _refreshXrealStatus();
       }
-      await _refreshXrealStatus();
     } on PlatformException catch (exception) {
       if (mounted) {
         setState(
@@ -581,7 +590,9 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       }
       return bytes;
     } catch (exception) {
-      if (mounted) setState(() => error = 'Camera capture failed: $exception');
+      if (mounted && !xrealStreaming) {
+        setState(() => error = 'Camera capture failed: $exception');
+      }
       return null;
     } finally {
       capturing = false;
@@ -694,7 +705,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                           ),
                         ),
                     ],
-                    onChanged: initializing
+                    onChanged: initializing || xrealStreaming
                         ? null
                         : (value) {
                             if (value != null && value != selectedCamera) {
@@ -707,7 +718,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                 IconButton.filledTonal(
                   key: const Key('cycle-windows-camera'),
                   tooltip: 'Switch camera',
-                  onPressed: cameras.length < 2 || initializing
+                  onPressed:
+                      cameras.length < 2 || initializing || xrealStreaming
                       ? null
                       : _cycleCamera,
                   icon: const Icon(Icons.cameraswitch_rounded),

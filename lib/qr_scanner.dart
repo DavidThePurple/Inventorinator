@@ -162,12 +162,59 @@ class _MobileCameraScanner extends StatefulWidget {
 }
 
 class _MobileCameraScannerState extends State<_MobileCameraScanner> {
+  static const _xrealEyeChannel = MethodChannel('inventorinator/xreal_eye');
   bool delivered = false;
+  bool xrealEyeMode = false;
+  Uint8List? xrealEyeFrame;
+  Timer? xrealEyeTimer;
   final controller = MobileScannerController(
     returnImage: true,
     autoZoom: true,
     cameraResolution: const Size(1920, 1080),
   );
+
+  @override
+  void initState() {
+    super.initState();
+    xrealEyeTimer = Timer.periodic(
+      const Duration(milliseconds: 80),
+      (_) => unawaited(_pollXrealEye()),
+    );
+  }
+
+  Future<void> _pollXrealEye() async {
+    if (!xrealEyeMode) return;
+    try {
+      final frame = await _xrealEyeChannel.invokeMethod<Uint8List>('frame');
+      if (mounted && frame != null && frame.isNotEmpty) {
+        setState(() => xrealEyeFrame = frame);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleXrealEye() async {
+    try {
+      if (xrealEyeMode) {
+        await _xrealEyeChannel.invokeMethod<void>('stop');
+        if (mounted) {
+          setState(() {
+            xrealEyeMode = false;
+            xrealEyeFrame = null;
+          });
+        }
+      } else {
+        await _xrealEyeChannel.invokeMethod<void>('start');
+        if (mounted) {
+          setState(() {
+            xrealEyeMode = true;
+            delivered = false;
+          });
+        }
+      }
+    } on PlatformException {
+      // The regular Android camera remains available when the Eye is absent.
+    }
+  }
 
   @override
   void didUpdateWidget(covariant _MobileCameraScanner oldWidget) {
@@ -180,6 +227,8 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
 
   @override
   void dispose() {
+    xrealEyeTimer?.cancel();
+    unawaited(_xrealEyeChannel.invokeMethod<void>('stop'));
     controller.dispose();
     super.dispose();
   }
@@ -197,32 +246,52 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(
-            controller: controller,
-            onDetect: (capture) {
-              if (delivered) return;
-              final value = capture.barcodes.firstOrNull?.rawValue;
-              if (value == null) return;
-              if (widget.mode == ScanMode.ingest &&
-                  widget.captureMode == ScanCaptureMode.ocr) {
-                final image = capture.image;
-                if (image == null || widget.onLabelCapture == null) return;
+          if (xrealEyeMode && xrealEyeFrame != null)
+            Image.memory(
+              xrealEyeFrame!,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            )
+          else
+            MobileScanner(
+              controller: controller,
+              onDetect: (capture) {
+                if (delivered) return;
+                final value = capture.barcodes.firstOrNull?.rawValue;
+                if (value == null) return;
+                if (widget.mode == ScanMode.ingest &&
+                    widget.captureMode == ScanCaptureMode.ocr) {
+                  final image = capture.image;
+                  if (image == null || widget.onLabelCapture == null) return;
+                  delivered = true;
+                  unawaited(widget.onLabelCapture!(image));
+                  return;
+                }
                 delivered = true;
-                unawaited(widget.onLabelCapture!(image));
-                return;
-              }
-              delivered = true;
-              widget.onCode(value, capture.image);
-            },
-          ),
+                widget.onCode(value, capture.image);
+              },
+            ),
           Positioned(
             top: 12,
             right: 12,
-            child: IconButton.filledTonal(
-              key: const Key('cycle-camera'),
-              tooltip: 'Switch camera',
-              onPressed: () => unawaited(controller.switchCamera()),
-              icon: const Icon(Icons.cameraswitch_rounded),
+            child: Row(
+              children: [
+                IconButton.filledTonal(
+                  key: const Key('xreal-eye-camera-mobile'),
+                  tooltip: 'XREAL Eye',
+                  onPressed: _toggleXrealEye,
+                  icon: Icon(
+                    xrealEyeMode ? Icons.stop_rounded : Icons.videocam_rounded,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  key: const Key('cycle-camera'),
+                  tooltip: 'Switch camera',
+                  onPressed: () => unawaited(controller.switchCamera()),
+                  icon: const Icon(Icons.cameraswitch_rounded),
+                ),
+              ],
             ),
           ),
           _ScanGuide(wide: widget.mode == ScanMode.ingest),

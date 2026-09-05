@@ -8,6 +8,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private lateinit var xrealEye: XrealEyeCapture
     private fun readableDeviceName(): String {
         val configuredName = try {
             Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
@@ -62,6 +63,17 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        xrealEye = XrealEyeCapture(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "inventorinator/xreal_eye")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> if (xrealEye.start()) result.success(null) else result.error("xreal_eye", xrealEye.status()["error"] as String?, null)
+                    "stop" -> { xrealEye.stop(); result.success(null) }
+                    "status" -> result.success(xrealEye.status())
+                    "frame" -> result.success(xrealEye.frame())
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "inventorinator/audio",

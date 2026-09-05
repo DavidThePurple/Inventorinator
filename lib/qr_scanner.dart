@@ -394,6 +394,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   bool delivered = false;
   String? error;
   bool xrealAvailable = false;
+  bool xrealMode = false;
   bool xrealStreaming = false;
   int xrealPackets = 0;
   Uint8List? xrealFrame;
@@ -410,7 +411,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   }
 
   Future<void> _pollXrealFrame() async {
-    if (!xrealStreaming && !xrealAvailable && xrealFrame == null) return;
+    if (!xrealMode) return;
     try {
       final bytes = await _xrealChannel.invokeMethod<Uint8List>('frame');
       if (mounted && bytes != null && bytes.isNotEmpty) {
@@ -470,8 +471,9 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
 
   Future<void> _toggleXreal() async {
     try {
-      if (xrealStreaming) {
+      if (xrealMode) {
         await _xrealChannel.invokeMethod<void>('stop');
+        xrealMode = false;
         xrealFrame = null;
         await _refreshXrealStatus();
         if (cameras.isNotEmpty) await _startCamera(selectedCamera);
@@ -481,6 +483,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         camera = null;
         await previous?.dispose();
         await _xrealChannel.invokeMethod<void>('start');
+        xrealMode = true;
         delivered = false;
         if (mounted) setState(() => error = null);
         await _refreshXrealStatus();
@@ -676,7 +679,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             children: [
               Expanded(
                 child: Text(
-                  xrealStreaming
+                  xrealMode
                       ? 'XREAL R1 transport active · $xrealPackets packets'
                       : xrealAvailable
                       ? 'XREAL R1 detected'
@@ -692,8 +695,10 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                 child: OutlinedButton.icon(
                   key: const Key('xreal-r1-camera'),
                   onPressed: _toggleXreal,
-                  icon: const Icon(Icons.cameraswitch_rounded),
-                  label: Text(xrealStreaming ? 'Stop R1' : 'Start R1'),
+                  icon: Icon(
+                    xrealMode ? Icons.stop : Icons.cameraswitch_rounded,
+                  ),
+                  label: Text(xrealMode ? 'Stop R1' : 'Start R1'),
                 ),
               ),
             ],
@@ -722,7 +727,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                           ),
                         ),
                     ],
-                    onChanged: initializing || xrealStreaming
+                    onChanged: initializing || xrealMode
                         ? null
                         : (value) {
                             if (value != null && value != selectedCamera) {
@@ -735,8 +740,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                 IconButton.filledTonal(
                   key: const Key('cycle-windows-camera'),
                   tooltip: 'Switch camera',
-                  onPressed:
-                      cameras.length < 2 || initializing || xrealStreaming
+                  onPressed: cameras.length < 2 || initializing || xrealMode
                       ? null
                       : _cycleCamera,
                   icon: const Icon(Icons.cameraswitch_rounded),
@@ -745,7 +749,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             ),
           ),
         Expanded(
-          child: xrealStreaming && xrealFrame != null
+          child: xrealMode && xrealFrame != null
               ? GestureDetector(
                   key: const Key('xreal-camera-surface'),
                   behavior: HitTestBehavior.opaque,

@@ -918,7 +918,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         if (compact)
           SizedBox(
             width: double.infinity,
-            height: MediaQuery.sizeOf(context).width /
+            height:
+                MediaQuery.sizeOf(context).width /
                 (active?.value.aspectRatio ?? (16 / 9)),
             child: _cameraPreview(active),
           )
@@ -930,7 +931,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             child: Align(
               alignment: Alignment.center,
               child: FractionallySizedBox(
-                widthFactor: .6,
+                widthFactor: .45,
                 child: AspectRatio(
                   aspectRatio: 1,
                   child: FilledButton.tonal(

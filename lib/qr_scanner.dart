@@ -745,35 +745,52 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   Widget build(BuildContext context) {
     final active = camera;
     final hasXrealEye = cameras.any(_isXrealEyeCamera);
+    final compact = MediaQuery.sizeOf(context).width < 520;
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  xrealEyeMode
-                      ? 'XREAL Eye · $xrealEyePackets video packets'
-                      : 'XREAL Eye native capture',
-                  style: const TextStyle(
-                    color: Color(0xff929aac),
-                    fontSize: 12,
+          child: compact
+              ? SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const Key('xreal-eye-camera'),
+                    onPressed: _toggleXrealEye,
+                    icon: Icon(
+                      xrealEyeMode
+                          ? Icons.stop_rounded
+                          : Icons.videocam_rounded,
+                    ),
+                    label: Text(
+                      xrealEyeMode ? 'Stop XREAL Eye' : 'Start XREAL Eye',
+                    ),
                   ),
+                )
+              : Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'XREAL Eye capture',
+                        style: TextStyle(
+                          color: Color(0xff929aac),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      key: const Key('xreal-eye-camera'),
+                      onPressed: _toggleXrealEye,
+                      icon: Icon(
+                        xrealEyeMode
+                            ? Icons.stop_rounded
+                            : Icons.videocam_rounded,
+                      ),
+                      label: Text(
+                        xrealEyeMode ? 'Stop XREAL Eye' : 'Start XREAL Eye',
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              OutlinedButton.icon(
-                key: const Key('xreal-eye-camera'),
-                onPressed: _toggleXrealEye,
-                icon: Icon(
-                  xrealEyeMode ? Icons.stop_rounded : Icons.videocam_rounded,
-                ),
-                label: Text(
-                  xrealEyeMode ? 'Stop XREAL Eye' : 'Start XREAL Eye',
-                ),
-              ),
-            ],
-          ),
         ),
         if (hasXrealEye)
           const Padding(
@@ -815,15 +832,17 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                           },
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton.filledTonal(
-                  key: const Key('cycle-windows-camera'),
-                  tooltip: 'Switch camera',
-                  onPressed: cameras.length < 2 || initializing
-                      ? null
-                      : _cycleCamera,
-                  icon: const Icon(Icons.cameraswitch_rounded),
-                ),
+                if (!compact) ...[
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    key: const Key('cycle-windows-camera'),
+                    tooltip: 'Switch camera',
+                    onPressed: cameras.length < 2 || initializing
+                        ? null
+                        : _cycleCamera,
+                    icon: const Icon(Icons.cameraswitch_rounded),
+                  ),
+                ],
               ],
             ),
           ),
@@ -897,6 +916,19 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                   ),
                 ),
         ),
+        if (compact && cameras.length > 1)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonalIcon(
+                key: const Key('cycle-windows-camera'),
+                onPressed: initializing ? null : _cycleCamera,
+                icon: const Icon(Icons.cameraswitch_rounded),
+                label: const Text('Switch camera'),
+              ),
+            ),
+          ),
         if (error != null && active != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),

@@ -331,6 +331,20 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
   }
 }
 
+int _windowsCameraPriority(CameraDescription camera) {
+  final name = camera.name.toLowerCase();
+  if (name.contains('ir') || name.contains('depth')) return 100;
+  if (name.contains('5m')) return 0;
+  if (name.contains('13m')) return 1;
+  if (name.contains('webcam')) return 5;
+  return 10;
+}
+
+int _compareWindowsCameras(CameraDescription a, CameraDescription b) {
+  final priority = _windowsCameraPriority(a).compareTo(_windowsCameraPriority(b));
+  return priority != 0 ? priority : a.name.compareTo(b.name);
+}
+
 class _WindowsCameraScanner extends StatefulWidget {
   const _WindowsCameraScanner({
     required this.onCode,
@@ -385,7 +399,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       });
     }
     try {
-      final found = await availableCameras();
+      final found = (await availableCameras()).toList()
+        ..sort(_compareWindowsCameras);
       if (!mounted) return;
       setState(() {
         cameras = found;
@@ -418,25 +433,43 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     }
     await previous?.dispose();
     try {
-      final next = CameraController(
-        cameras[index],
+      Object? lastException;
+      for (final preset in const [
+        // The ASUS 5M exposes its usable Media Foundation stream above the
+        // 720p cap used by ResolutionPreset.high. Try the unrestricted native
+        // Windows preset first, then retain the existing fallbacks.
+        ResolutionPreset.max,
         ResolutionPreset.high,
-        enableAudio: false,
-      );
-      await next.initialize();
-      if (!mounted) {
-        await next.dispose();
-        return;
+        ResolutionPreset.medium,
+        ResolutionPreset.low,
+      ]) {
+        final next = CameraController(
+          cameras[index],
+          preset,
+          enableAudio: false,
+        );
+        try {
+          await next.initialize();
+          if (!mounted) {
+            await next.dispose();
+            return;
+          }
+          setState(() {
+            camera = next;
+            initializing = false;
+            delivered = false;
+          });
+          scanTimer = Timer.periodic(
+            const Duration(milliseconds: 650),
+            (_) => unawaited(_scanCurrentFrame()),
+          );
+          return;
+        } catch (exception) {
+          lastException = exception;
+          await next.dispose();
+        }
       }
-      setState(() {
-        camera = next;
-        initializing = false;
-        delivered = false;
-      });
-      scanTimer = Timer.periodic(
-        const Duration(milliseconds: 650),
-        (_) => unawaited(_scanCurrentFrame()),
-      );
+      throw lastException ?? StateError('Camera initialization failed.');
     } catch (exception) {
       if (!mounted) return;
       setState(() {

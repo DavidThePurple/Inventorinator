@@ -81,6 +81,11 @@ bool XrealR1Camera::SendStartCommand() {
   return sent == static_cast<int>(kStartCommand.size());
 }
 
+bool XrealR1Camera::ActivateVideoBurst() {
+  return SendStartCommand() && ReadStartAcknowledgement() &&
+         SendStartCommand() && ReadStartAcknowledgement();
+}
+
 bool XrealR1Camera::ReadStartAcknowledgement() {
   uint8_t header[6];
   if (!ReadExact(control_socket_, header, sizeof(header))) return false;
@@ -95,9 +100,7 @@ bool XrealR1Camera::ReadStartAcknowledgement() {
 
 bool XrealR1Camera::Start() {
   Stop();
-  if (!ConnectVideo() || !ConnectControl() || !SendStartCommand() ||
-      !ReadStartAcknowledgement() || !SendStartCommand() ||
-      !ReadStartAcknowledgement()) {
+  if (!ConnectVideo() || !ConnectControl() || !ActivateVideoBurst()) {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       last_error_ = "ROG XREAL R1 rejected the camera-start request.";
@@ -213,7 +216,18 @@ bool XrealR1Camera::ReadExact(uintptr_t socket_value, uint8_t* buffer, size_t si
 void XrealR1Camera::ReadLoop() {
   while (running_) {
     uint8_t header[6];
-    if (!ReadExact(video_socket_, header, sizeof(header))) break;
+    if (!ReadExact(video_socket_, header, sizeof(header))) {
+      if (!running_) break;
+      if (video_socket_ != 0) {
+        shutdown(AsSocket(video_socket_), SD_BOTH);
+        closesocket(AsSocket(video_socket_));
+        video_socket_ = 0;
+      }
+      Sleep(100);
+      if (running_ && ConnectVideo() && ActivateVideoBurst()) continue;
+      Sleep(250);
+      continue;
+    }
     const uint32_t payload_size = (static_cast<uint32_t>(header[2]) << 24) |
                                   (static_cast<uint32_t>(header[3]) << 16) |
                                   (static_cast<uint32_t>(header[4]) << 8) | header[5];
@@ -237,9 +251,9 @@ void XrealR1Camera::ReadLoop() {
       }
     }
   }
-  // The R1 delivers a bounded HEVC burst for each capture. Closing the
-  // decoder input on EOF is required to make FFmpeg flush the final picture.
-  if (decoder_input_ != 0) {
+  // Closing the decoder input only happens when the user stops R1. Between
+  // bounded R1 bursts, the same decoder remains alive for smooth preview.
+  if (!running_ && decoder_input_ != 0) {
     CloseHandle(AsHandle(decoder_input_));
     decoder_input_ = 0;
   }

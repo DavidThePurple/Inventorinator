@@ -28,6 +28,7 @@ class XrealR1Camera {
   bool ConnectVideo();
   bool SendStartCommand();
   bool ReadStartAcknowledgement();
+  bool ActivateVideoBurst();
   bool StartDecoder();
   void StopDecoder();
   static bool ReadExact(uintptr_t socket, uint8_t* buffer, size_t size);

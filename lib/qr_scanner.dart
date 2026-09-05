@@ -350,6 +350,11 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
 
 int _windowsCameraPriority(CameraDescription camera) {
   final name = camera.name.toLowerCase();
+  if (name.contains('xreal') ||
+      name.contains('x-real') ||
+      name.contains('eye')) {
+    return -10;
+  }
   if (name.contains('ir') || name.contains('depth')) return 100;
   if (name.contains('5m')) return 0;
   if (name.contains('13m')) return 1;

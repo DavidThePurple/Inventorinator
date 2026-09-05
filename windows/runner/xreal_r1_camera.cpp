@@ -83,9 +83,24 @@ bool XrealR1Camera::SendStartCommand() {
 
 bool XrealR1Camera::Start() {
   Stop();
-  if (!ConnectControl() || !ConnectVideo() || !SendStartCommand()) {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    last_error_ = "ROG XREAL R1 camera transport was not reachable.";
+  // R1 expects the video connection to be established before the control
+  // connection. The start command also has a framed acknowledgement that must
+  // be consumed before reading the video stream.
+  if (!ConnectVideo() || !ConnectControl() || !SendStartCommand()) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      last_error_ = "ROG XREAL R1 camera transport was not reachable.";
+    }
+    Stop();
+    return false;
+  }
+  uint8_t acknowledgement[12];
+  if (!ReadExact(control_socket_, acknowledgement, sizeof(acknowledgement)) ||
+      acknowledgement[0] != 0x27 || acknowledgement[1] != 0x81) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      last_error_ = "ROG XREAL R1 rejected the camera-start request.";
+    }
     Stop();
     return false;
   }

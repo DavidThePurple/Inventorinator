@@ -387,6 +387,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   int selectedCamera = 0;
   CameraController? camera;
   Timer? scanTimer;
+  Timer? xrealTimer;
   bool initializing = true;
   bool capturing = false;
   bool decoding = false;
@@ -395,12 +396,43 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   bool xrealAvailable = false;
   bool xrealStreaming = false;
   int xrealPackets = 0;
+  Uint8List? xrealFrame;
 
   @override
   void initState() {
     super.initState();
     unawaited(_findCameras());
     unawaited(_refreshXrealStatus());
+    xrealTimer = Timer.periodic(
+      const Duration(milliseconds: 150),
+      (_) => unawaited(_pollXrealFrame()),
+    );
+  }
+
+  Future<void> _pollXrealFrame() async {
+    if (!xrealStreaming) return;
+    try {
+      final bytes = await _xrealChannel.invokeMethod<Uint8List>('frame');
+      if (mounted && bytes != null && bytes.isNotEmpty) {
+        setState(() => xrealFrame = bytes);
+        if (widget.captureMode == ScanCaptureMode.barcode &&
+            !delivered &&
+            !decoding) {
+          decoding = true;
+          try {
+            final code = widget.mode == ScanMode.ingest
+                ? await compute(decodeProductBarcodeFrame, bytes)
+                : await compute(decodeAnyBarcodeFrame, bytes);
+            if (code != null && !delivered) {
+              delivered = true;
+              widget.onCode(code, bytes);
+            }
+          } finally {
+            decoding = false;
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _refreshXrealStatus() async {
@@ -599,6 +631,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   @override
   void dispose() {
     scanTimer?.cancel();
+    xrealTimer?.cancel();
+    unawaited(_xrealChannel.invokeMethod<void>('stop'));
     manual.dispose();
     unawaited(camera?.dispose());
     super.dispose();
@@ -682,7 +716,25 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             ),
           ),
         Expanded(
-          child: active == null || !active.value.isInitialized
+          child: xrealStreaming && xrealFrame != null
+              ? GestureDetector(
+                  key: const Key('xreal-camera-surface'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap:
+                      widget.mode == ScanMode.ingest &&
+                          widget.captureMode == ScanCaptureMode.ocr &&
+                          widget.onLabelCapture != null
+                      ? () => unawaited(widget.onLabelCapture!(xrealFrame!))
+                      : null,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(xrealFrame!, fit: BoxFit.contain),
+                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
+                    ],
+                  ),
+                )
+              : active == null || !active.value.isInitialized
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,

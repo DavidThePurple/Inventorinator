@@ -51,6 +51,9 @@ bool FlutterWindow::OnCreate() {
               static_cast<int64_t>(xreal_r1_camera_->PacketCount());
           status[flutter::EncodableValue("error")] = xreal_r1_camera_->LastError();
           result->Success(status);
+        } else if (call.method_name() == "frame") {
+          const auto frame = xreal_r1_camera_->LatestFrame();
+          result->Success(flutter::EncodableValue(frame));
         } else {
           result->NotImplemented();
         }

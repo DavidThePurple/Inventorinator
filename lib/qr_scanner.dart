@@ -391,21 +391,90 @@ class _WindowsCameraScanner extends StatefulWidget {
 }
 
 class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
+  static const _xrealEyeChannel = MethodChannel('inventorinator/xreal_r1');
   final manual = TextEditingController();
   List<CameraDescription> cameras = const [];
   int selectedCamera = 0;
   CameraController? camera;
   Timer? scanTimer;
+  Timer? xrealEyeTimer;
   bool initializing = true;
   bool capturing = false;
   bool decoding = false;
   bool delivered = false;
   String? error;
+  bool xrealEyeMode = false;
+  bool xrealEyeStreaming = false;
+  int xrealEyePackets = 0;
+  Uint8List? xrealEyeFrame;
 
   @override
   void initState() {
     super.initState();
     unawaited(_findCameras());
+    xrealEyeTimer = Timer.periodic(
+      const Duration(milliseconds: 80),
+      (_) => unawaited(_pollXrealEye()),
+    );
+  }
+
+  Future<void> _pollXrealEye() async {
+    if (!xrealEyeMode) return;
+    try {
+      final frame = await _xrealEyeChannel.invokeMethod<Uint8List>('frame');
+      final status = await _xrealEyeChannel.invokeMapMethod<String, dynamic>(
+        'status',
+      );
+      if (!mounted) return;
+      setState(() {
+        xrealEyeStreaming = status?['streaming'] == true;
+        xrealEyePackets = (status?['packets'] as num?)?.toInt() ?? 0;
+        if (frame != null && frame.isNotEmpty) xrealEyeFrame = frame;
+      });
+      if (frame != null &&
+          frame.isNotEmpty &&
+          widget.captureMode == ScanCaptureMode.barcode &&
+          !delivered &&
+          !decoding) {
+        decoding = true;
+        try {
+          final code = widget.mode == ScanMode.ingest
+              ? await compute(decodeProductBarcodeFrame, frame)
+              : await compute(decodeAnyBarcodeFrame, frame);
+          if (code != null && !delivered) {
+            delivered = true;
+            widget.onCode(code, frame);
+          }
+        } finally {
+          decoding = false;
+        }
+      }
+    } catch (_) {
+      // The normal Windows camera remains usable if the Eye is unplugged.
+    }
+  }
+
+  Future<void> _toggleXrealEye() async {
+    try {
+      if (xrealEyeMode) {
+        await _xrealEyeChannel.invokeMethod<void>('stop');
+        if (mounted) {
+          setState(() {
+            xrealEyeMode = false;
+            xrealEyeStreaming = false;
+            xrealEyePackets = 0;
+            xrealEyeFrame = null;
+          });
+        }
+      } else {
+        await _xrealEyeChannel.invokeMethod<void>('start');
+        if (mounted) setState(() => xrealEyeMode = true);
+      }
+    } on PlatformException catch (exception) {
+      if (mounted) {
+        setState(() => error = exception.message ?? 'XREAL Eye unavailable.');
+      }
+    }
   }
 
   @override
@@ -572,6 +641,8 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
   @override
   void dispose() {
     scanTimer?.cancel();
+    xrealEyeTimer?.cancel();
+    unawaited(_xrealEyeChannel.invokeMethod<void>('stop'));
     manual.dispose();
     unawaited(camera?.dispose());
     super.dispose();
@@ -583,6 +654,32 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     final hasXrealEye = cameras.any(_isXrealEyeCamera);
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  xrealEyeMode
+                      ? 'XREAL Eye · $xrealEyePackets video packets'
+                      : 'XREAL Eye native capture',
+                  style: const TextStyle(
+                    color: Color(0xff929aac),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              OutlinedButton.icon(
+                key: const Key('xreal-eye-camera'),
+                onPressed: _toggleXrealEye,
+                icon: Icon(
+                  xrealEyeMode ? Icons.stop : Icons.cameraswitch_rounded,
+                ),
+                label: Text(xrealEyeMode ? 'Stop Eye' : 'Start Eye'),
+              ),
+            ],
+          ),
+        ),
         if (hasXrealEye)
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -636,7 +733,25 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
             ),
           ),
         Expanded(
-          child: active == null || !active.value.isInitialized
+          child: xrealEyeMode && xrealEyeFrame != null
+              ? GestureDetector(
+                  key: const Key('xreal-eye-camera-surface'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap:
+                      widget.mode == ScanMode.ingest &&
+                          widget.captureMode == ScanCaptureMode.ocr &&
+                          widget.onLabelCapture != null
+                      ? () => unawaited(widget.onLabelCapture!(xrealEyeFrame!))
+                      : null,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(xrealEyeFrame!, fit: BoxFit.contain),
+                      _ScanGuide(wide: widget.mode == ScanMode.ingest),
+                    ],
+                  ),
+                )
+              : active == null || !active.value.isInitialized
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,

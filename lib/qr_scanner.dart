@@ -432,6 +432,17 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
           }
         }
       }
+      final status = await _xrealChannel.invokeMapMethod<String, dynamic>(
+        'status',
+      );
+      if (mounted && status != null && status['streaming'] != true) {
+        setState(() {
+          xrealStreaming = false;
+          error = xrealFrame == null
+              ? 'XREAL R1 connected but returned no video frames.'
+              : error;
+        });
+      }
     } catch (_) {}
   }
 

@@ -81,22 +81,23 @@ bool XrealR1Camera::SendStartCommand() {
   return sent == static_cast<int>(kStartCommand.size());
 }
 
+bool XrealR1Camera::ReadStartAcknowledgement() {
+  uint8_t header[6];
+  if (!ReadExact(control_socket_, header, sizeof(header))) return false;
+  const uint32_t payload_size = (static_cast<uint32_t>(header[2]) << 24) |
+                                (static_cast<uint32_t>(header[3]) << 16) |
+                                (static_cast<uint32_t>(header[4]) << 8) | header[5];
+  if (payload_size == 0 || payload_size > 1024) return false;
+  std::vector<uint8_t> payload(payload_size);
+  if (!ReadExact(control_socket_, payload.data(), payload.size())) return false;
+  return header[0] == 0x27 && header[1] == 0x81;
+}
+
 bool XrealR1Camera::Start() {
   Stop();
-  // R1 expects the video connection to be established before the control
-  // connection. The start command also has a framed acknowledgement that must
-  // be consumed before reading the video stream.
-  if (!ConnectVideo() || !ConnectControl() || !SendStartCommand()) {
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      last_error_ = "ROG XREAL R1 camera transport was not reachable.";
-    }
-    Stop();
-    return false;
-  }
-  uint8_t acknowledgement[12];
-  if (!ReadExact(control_socket_, acknowledgement, sizeof(acknowledgement)) ||
-      acknowledgement[0] != 0x27 || acknowledgement[1] != 0x81) {
+  if (!ConnectVideo() || !ConnectControl() || !SendStartCommand() ||
+      !ReadStartAcknowledgement() || !SendStartCommand() ||
+      !ReadStartAcknowledgement()) {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       last_error_ = "ROG XREAL R1 rejected the camera-start request.";

@@ -18505,7 +18505,17 @@ class _InventoryHomeState extends State<InventoryHome> {
           : machine.address;
       recordImage = machine.imageBytes;
     }
-    final content = list
+    final content = !list && record is KitRecord && recordImage != null
+        ? _PhotoCatalogCardContent(
+            key: Key('photo-catalog-card-${record.id}'),
+            bytes: recordImage,
+            category: category,
+            title: title,
+            subtitle: subtitle,
+            detail: detail,
+            accent: accent,
+          )
+        : list
         ? ListTile(
             leading: _catalogRecordVisual(recordImage, icon, accent, 42),
             title: Text(title),
@@ -32167,6 +32177,120 @@ class _CardPhotoBackground extends StatelessWidget {
             onError: (_, _) {},
           ),
         ),
+      );
+    },
+  );
+}
+
+class _PhotoCatalogCardContent extends StatelessWidget {
+  const _PhotoCatalogCardContent({
+    super.key,
+    required this.bytes,
+    required this.category,
+    required this.title,
+    required this.subtitle,
+    required this.detail,
+    required this.accent,
+  });
+
+  final Uint8List bytes;
+  final String category;
+  final String title;
+  final String subtitle;
+  final String detail;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact = constraints.maxWidth < 220 || constraints.maxHeight < 250;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          _CardPhotoBackground(
+            bytes: bytes,
+            imageKey: ValueKey('photo-catalog-background-$title'),
+          ),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0x22080a10),
+                  Color(0x44080a10),
+                  Color(0xf00a0d14),
+                ],
+                stops: [0, .42, 1],
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(compact ? 10 : 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Spacer(),
+                Container(
+                  padding: EdgeInsets.all(compact ? 9 : 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xe60a0d14),
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: .18),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        category,
+                        style: TextStyle(
+                          color: accent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        title,
+                        maxLines: compact ? 2 : 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: compact ? 15 : 17,
+                          height: 1.15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        subtitle,
+                        maxLines: compact ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xffc3c8d3)),
+                      ),
+                      if (!compact && detail.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          detail,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xff929aac),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       );
     },
   );

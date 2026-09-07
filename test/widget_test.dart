@@ -5196,6 +5196,10 @@ Bed Temperature: 80°C
     expect(name.maxLines, 2);
     expect(name.overflow, TextOverflow.ellipsis);
     expect(
+      find.byKey(const Key('item-color-indicator-INV-MOBILE-LONG-NAME')),
+      findsOneWidget,
+    );
+    expect(
       tester
           .getSize(find.byKey(const Key('inventory-row-INV-MOBILE-LONG-NAME')))
           .height,

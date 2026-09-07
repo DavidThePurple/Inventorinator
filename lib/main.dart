@@ -32597,6 +32597,54 @@ class _CardTypeAndPrice extends StatelessWidget {
   );
 }
 
+bool _itemHasColorIndicator(InventoryItem item) =>
+    item.itemColorName.trim().isNotEmpty ||
+    _itemGradientColors(item) != null ||
+    _itemCoextrudedColors(item) != null;
+
+class _ItemColorIndicator extends StatelessWidget {
+  const _ItemColorIndicator({required this.item, required this.size});
+
+  final InventoryItem item;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
+    final swatch = _itemColorSwatch(item.itemColorName);
+    final indicator = coextrudedColors != null
+        ? _PieColorChicklet(
+            key: Key('item-color-indicator-${item.id}'),
+            colors: coextrudedColors,
+            size: size,
+          )
+        : Container(
+            key: Key('item-color-indicator-${item.id}'),
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: gradientColors == null
+                  ? swatch ?? const Color(0xff8c929f)
+                  : null,
+              gradient: gradientColors == null
+                  ? null
+                  : LinearGradient(colors: gradientColors),
+              borderRadius: BorderRadius.circular(size * .24),
+              border: Border.all(color: Colors.white.withValues(alpha: .3)),
+            ),
+          );
+    final tooltip = coextrudedColors == null
+        ? item.itemColorLabel.trim().isNotEmpty
+              ? item.itemColorLabel.trim()
+              : _itemGradientName(item)
+        : _itemCoextrudedName(item);
+    return tooltip.isEmpty
+        ? indicator
+        : Tooltip(message: tooltip, child: indicator);
+  }
+}
+
 class InventoryRow extends StatelessWidget {
   const InventoryRow({
     super.key,
@@ -32658,6 +32706,24 @@ class InventoryRow extends StatelessWidget {
     ...item.compatibility,
   ].join('  •  ');
 
+  Widget _metadataRow() => Row(
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      if (_itemHasColorIndicator(item)) ...[
+        _ItemColorIndicator(item: item, size: 20),
+        const SizedBox(width: 8),
+      ],
+      Expanded(
+        child: Text(
+          _metadata,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Color(0xff929aac), fontSize: 12),
+        ),
+      ),
+    ],
+  );
+
   Widget _price() => Column(
     crossAxisAlignment: CrossAxisAlignment.end,
     mainAxisSize: MainAxisSize.min,
@@ -32703,15 +32769,7 @@ class InventoryRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 5),
-                    Text(
-                      _metadata,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xff929aac),
-                        fontSize: 12,
-                      ),
-                    ),
+                    _metadataRow(),
                   ],
                 ),
               ),
@@ -32779,15 +32837,7 @@ class InventoryRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 5),
-                Text(
-                  _metadata,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xff929aac),
-                    fontSize: 12,
-                  ),
-                ),
+                _metadataRow(),
               ],
             ),
           ),

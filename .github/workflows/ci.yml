@@ -31,7 +31,7 @@ jobs:
     env:
       PGPASSWORD: audit
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify release and schema versions
         run: ./tool/check_release_consistency.sh
       - name: Install PostgreSQL client
@@ -64,7 +64,7 @@ jobs:
     # unnecessarily require glibc 2.38 from Ubuntu 24.04.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.1
@@ -112,7 +112,7 @@ jobs:
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
           app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
           echo "name=Inventorinator-v${app_version}-build${app_build}-Linux-x64" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: build/linux/x64/release/bundle
@@ -122,8 +122,8 @@ jobs:
   android:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -143,7 +143,7 @@ jobs:
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
           app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
           echo "name=Inventorinator-v${app_version}-build${app_build}-Android-debug" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: build/app/outputs/flutter-apk/app-debug.apk
@@ -153,7 +153,7 @@ jobs:
   windows:
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.1
@@ -171,7 +171,7 @@ jobs:
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
           app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
           echo "name=Inventorinator-v${app_version}-build${app_build}-Windows-x64" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: build\windows\x64\runner\Release

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -19,15 +20,19 @@ class CloudSyncDialog extends StatefulWidget {
   const CloudSyncDialog({
     super.key,
     required this.database,
+    this.deviceId,
     required this.localStateJson,
     required this.onCloudState,
     this.onCloudChanges,
+    this.onRemoteAccessRevoked,
     this.initialPairingCode,
   });
   final LocalDatabase database;
+  final String? deviceId;
   final String localStateJson;
   final ValueChanged<String> onCloudState;
   final ValueChanged<List<WorkshopEntityChange>>? onCloudChanges;
+  final Future<void> Function()? onRemoteAccessRevoked;
   final String? initialPairingCode;
   @override
   State<CloudSyncDialog> createState() => _CloudSyncDialogState();
@@ -50,8 +55,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   bool isWorkspaceOwner = false;
   bool sessionNeedsReconnect = false;
   String message = '';
+  int remotePurgeAfterDays = 3;
   bool get connected => config.hasSession && config.workspaceId != null;
   bool get canManageDevices => canManageWorkspaceDevices(config.workspaceRole);
+  bool get canManageRemotePurge =>
+      switch (normalizeWorkspaceRole(config.workspaceRole)) {
+        'owner' || 'admin' => true,
+        _ => false,
+      };
 
   String _visibleSyncError(Object error) =>
       visibleSyncErrorForRole(error, config.workspaceRole);
@@ -63,6 +74,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     config = saved == null
         ? const SupabaseConfig(url: _defaultUrl, publishableKey: _defaultKey)
         : SupabaseConfig.fromJson(jsonDecode(saved) as Map<String, dynamic>);
+    remotePurgeAfterDays = config.remotePurgeAfterDays?.clamp(1, 365) ?? 3;
     urlController = TextEditingController(text: config.url);
     keyController = TextEditingController(text: config.publishableKey);
     knownWorkspaces = _loadKnownWorkspaces();
@@ -155,6 +167,20 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     );
   }
 
+  void _clearKnownWorkspace(SupabaseConfig value) {
+    knownWorkspaces.removeWhere(
+      (candidate) =>
+          candidate.url == value.url &&
+          candidate.workspaceId == value.workspaceId,
+    );
+    widget.database.saveStringPreference(
+      _knownWorkspacesPreference,
+      jsonEncode(
+        knownWorkspaces.map((candidate) => candidate.toJson()).toList(),
+      ),
+    );
+  }
+
   void _forgetWorkspace(SupabaseConfig value) {
     setState(() {
       knownWorkspaces.removeWhere(
@@ -186,11 +212,57 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
             sessionNeedsReconnect = true;
           }
           message = _visibleSyncError(error);
+          if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+            sessionNeedsReconnect = true;
+          }
         });
+        if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+          unawaited(_markWorkspaceAccessRevoked());
+        }
       }
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  Future<void> _markWorkspaceAccessRevoked() async {
+    final previous = config;
+    if (widget.onRemoteAccessRevoked != null) {
+      await widget.onRemoteAccessRevoked!();
+    } else {
+      await widget.database.deleteAndRecreate();
+    }
+    // Remove the revoked session from known-workspace shortcuts. Keep only
+    // non-secret connection metadata so the user can pair this device again.
+    _clearKnownWorkspace(previous);
+    _save(
+      SupabaseConfig(
+        url: previous.url,
+        publishableKey: previous.publishableKey,
+        syncMode: 'local',
+        workspaceId: previous.workspaceId,
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      joining = true;
+      isWorkspaceOwner = false;
+      sessionNeedsReconnect = true;
+      message = 'This device no longer has access to that shared inventory.';
+    });
+  }
+
+  Future<String> _saveRemotePurgeAfterDays(int days) async {
+    final (service, session) = await _session();
+    if (!canManageRemotePurge) {
+      throw const SupabaseSyncException(
+        'Only the workspace owner or an administrator can change this policy.',
+      );
+    }
+    await service.setRemotePurgeAfterDays(session, days);
+    _save(config.copyWith(remotePurgeAfterDays: days));
+    if (mounted) setState(() => remotePurgeAfterDays = days);
+    return 'Remote offline purge is now $days days for non-owner devices.';
   }
 
   void _requireServer(SupabaseConfig value) {
@@ -370,11 +442,27 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final session = await service.signInAnonymously();
     await service.requireCurrentSchema(session);
     final registrationName = await _deviceNameForRegistration();
-    final workspaceId = await service.redeemPairingCode(session, code);
-    final joined = next.copyWith(
+    final stableDeviceId =
+        widget.deviceId ??
+        widget.database.loadStringPreference('device_id', fallback: '');
+    final workspaceId = await service.redeemPairingCode(
+      session,
+      code,
+      deviceId: stableDeviceId.isEmpty ? null : stableDeviceId,
+    );
+    final restoredRole = await SupabaseSyncService(
+      next.copyWith(
+        userId: session.userId,
+        workspaceId: workspaceId,
+        accessToken: session.accessToken,
+        accessTokenExpiresAt: session.expiresAt,
+        refreshToken: session.refreshToken,
+      ),
+    ).currentRole(session);
+    var joined = next.copyWith(
       userId: session.userId,
       workspaceId: workspaceId,
-      workspaceRole: 'builder',
+      workspaceRole: restoredRole,
       accessToken: session.accessToken,
       accessTokenExpiresAt: session.expiresAt,
       refreshToken: session.refreshToken,
@@ -382,6 +470,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _save(joined);
     final joinedService = SupabaseSyncService(joined);
     await joinedService.registerDevice(session, registrationName);
+    final purgeDays = await joinedService.remotePurgeAfterDays(session);
+    joined = joined.copyWith(remotePurgeAfterDays: purgeDays);
+    _save(joined);
     if (mounted) setState(() => isWorkspaceOwner = false);
     if (widget.onCloudChanges != null) {
       await _syncEntities(joinedService, session, replaceLocal: true);
@@ -430,7 +521,22 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         // lock is held so automatic sync cannot reuse the old token.
         _save(refreshed);
       }
-      return (SupabaseSyncService(refreshed), session);
+      final service = SupabaseSyncService(refreshed);
+      // A membership check is required before any remote read. RLS correctly
+      // hides removed members, but an empty response would otherwise look like
+      // a successful "already up to date" sync.
+      final role = await service.currentRole(session);
+      final purgeDays = await service.remotePurgeAfterDays(session);
+      final roleConfig = refreshed.copyWith(
+        workspaceRole: role,
+        remotePurgeAfterDays: purgeDays,
+      );
+      if (roleConfig.workspaceRole != refreshed.workspaceRole ||
+          roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays) {
+        _save(roleConfig);
+      }
+      config = roleConfig;
+      return (SupabaseSyncService(roleConfig), session);
     });
   }
 
@@ -553,6 +659,8 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       if (mounted) {
         setState(() {
           isWorkspaceOwner = role == 'owner';
+          remotePurgeAfterDays =
+              config.remotePurgeAfterDays?.clamp(1, 365) ?? 3;
           sessionNeedsReconnect = false;
         });
       }
@@ -564,6 +672,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           }
           message = _visibleSyncError(error);
         });
+        if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+          unawaited(_markWorkspaceAccessRevoked());
+        }
       }
     }
   }
@@ -1012,7 +1123,12 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     var service = SupabaseSyncService(restored);
     await service.requireCurrentSchema(session);
     final role = await service.currentRole(session);
-    restored = restored.copyWith(workspaceRole: role);
+    final purgeDays = await service.remotePurgeAfterDays(session);
+    restored = restored.copyWith(
+      workspaceRole: role,
+      remotePurgeAfterDays: purgeDays,
+    );
+    remotePurgeAfterDays = purgeDays;
     service = SupabaseSyncService(restored);
     await service.registerDevice(session, _deviceName);
     CloudWorkshopState? cloud;
@@ -1330,6 +1446,40 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
               title: const Text('Advanced'),
               children: [
                 if (connected) ...[
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Remote offline-data purge'),
+                    subtitle: Text(
+                      'Owner/admin policy for non-owner devices that stop reconnecting.',
+                    ),
+                    trailing: canManageRemotePurge
+                        ? DropdownButton<int>(
+                            value: remotePurgeAfterDays,
+                            items: const [1, 3, 7, 14, 30, 60, 90, 180, 365]
+                                .map(
+                                  (days) => DropdownMenuItem<int>(
+                                    value: days,
+                                    child: Text(
+                                      '$days ${days == 1 ? 'day' : 'days'}',
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: busy
+                                ? null
+                                : (days) {
+                                    if (days != null) {
+                                      unawaited(
+                                        _run(
+                                          () => _saveRemotePurgeAfterDays(days),
+                                        ),
+                                      );
+                                    }
+                                  },
+                          )
+                        : Text('$remotePurgeAfterDays days'),
+                  ),
+                  const Divider(height: 20),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Device name'),

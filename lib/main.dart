@@ -276,6 +276,21 @@ class _EdgeLightPainter extends CustomPainter {
       focused != oldDelegate.focused;
 }
 
+class _FilamentColorsLogo extends StatelessWidget {
+  const _FilamentColorsLogo({this.size = 24});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Image.asset(
+    'assets/images/filamentcolors-logo.png',
+    width: size,
+    height: size,
+    fit: BoxFit.contain,
+    filterQuality: FilterQuality.high,
+  );
+}
+
 /// The inventory search gets a moving, localized edge-lit rim without adding
 /// another animated layer to the scrolling inventory.
 class _EdgeLitSearchField extends StatefulWidget {
@@ -283,6 +298,7 @@ class _EdgeLitSearchField extends StatefulWidget {
     this.fieldKey,
     required this.controller,
     required this.focusNode,
+    this.compact = false,
     this.enabled = true,
     required this.onChanged,
     required this.hintText,
@@ -291,6 +307,7 @@ class _EdgeLitSearchField extends StatefulWidget {
   final Key? fieldKey;
   final TextEditingController controller;
   final FocusNode focusNode;
+  final bool compact;
   final bool enabled;
   final ValueChanged<String> onChanged;
   final String hintText;
@@ -358,6 +375,13 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
       decoration: InputDecoration(
         prefixIcon: const Icon(Icons.search_rounded),
         hintText: widget.hintText,
+        isDense: widget.compact,
+        contentPadding: widget.compact
+            ? const EdgeInsets.symmetric(horizontal: 10, vertical: 10)
+            : null,
+        prefixIconConstraints: widget.compact
+            ? const BoxConstraints(minWidth: 38, minHeight: 40)
+            : null,
         filled: true,
         fillColor: input,
         border: OutlineInputBorder(
@@ -3874,9 +3898,9 @@ class _FilamentColorsSearchDialogState
             ],
           );
     return AlertDialog(
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.palette_outlined),
+          const _FilamentColorsLogo(size: 26),
           SizedBox(width: 10),
           Expanded(child: Text('FilamentColors.xyz')),
         ],
@@ -5304,9 +5328,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
               : const Color(0x1febe6ff)
         : activeHover || selected
         ? palette.rim
-        : light
-        ? palette.outlineVariant
-        : palette.outline.withValues(alpha: .72);
+        : palette.outline;
     final inset = disabled
         ? light
               ? Colors.white.withValues(alpha: .28)
@@ -5315,9 +5337,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ? const Color(0x57000000)
         : activeHover || selected
         ? palette.rim.withValues(alpha: .42)
-        : light
-        ? Colors.white.withValues(alpha: .92)
-        : palette.accent.withValues(alpha: .18);
+        : Colors.white.withValues(alpha: .46);
     final radius = widget.joined
         ? BorderRadius.zero
         : BorderRadius.circular(10);
@@ -5331,6 +5351,7 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
       ),
       curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
+        color: palette.surface,
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -5338,17 +5359,15 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         ),
         borderRadius: radius,
         border: widget.joined ? null : Border.all(color: rim),
-        boxShadow: disabled || widget.joined || mobileTouchSurface
+        boxShadow: disabled || widget.joined || mobileTouchSurface || pressed
             ? const []
             : [
                 BoxShadow(
                   color: activeHover || selected
                       ? palette.container.withValues(alpha: .48)
-                      : light
-                      ? palette.outlineVariant.withValues(alpha: .42)
-                      : const Color(0x52000000),
-                  blurRadius: activeHover || selected ? 12 : 9,
-                  offset: Offset(0, activeHover || selected ? 4 : 3),
+                      : Colors.black.withValues(alpha: .20),
+                  blurRadius: activeHover || selected ? 12 : 7,
+                  offset: Offset(0, activeHover || selected ? 4 : 2),
                 ),
               ],
       ),
@@ -5358,12 +5377,15 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
           fit: StackFit.passthrough,
           children: [
             widget.child ?? const SizedBox.shrink(),
-            Positioned(
-              top: 0,
-              left: widget.joined ? 0 : 1,
-              right: widget.joined ? 0 : 1,
-              height: 1,
-              child: IgnorePointer(child: ColoredBox(color: inset)),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _GlassTopHighlightPainter(
+                    color: inset,
+                    radius: widget.joined ? 0 : 10,
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -5372,61 +5394,133 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
   }
 }
 
+class _GlassTopHighlightPainter extends CustomPainter {
+  const _GlassTopHighlightPainter({required this.color, required this.radius});
+
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 3 || size.height <= 3) return;
+    final insetRect = Rect.fromLTWH(1.5, 1.5, size.width - 3, size.height - 3);
+    final insetRadius = math.max(0.0, radius - 1.5);
+    final highlight = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, size.width, 3.5));
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(insetRect, Radius.circular(insetRadius)),
+      highlight,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlassTopHighlightPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
+}
+
 List<Color> themedGlassRestingColors(
   InventorinatorColors palette, {
   required bool light,
-}) => light
-    ? [
-        Color.lerp(Colors.white, palette.base, .18)!,
-        Color.lerp(Colors.white, palette.container, .28)!,
-      ]
-    : [
-        palette.base.withValues(alpha: .34),
-        palette.container.withValues(alpha: .24),
-      ];
+}) => [
+  palette.base.withValues(alpha: .34),
+  palette.container.withValues(alpha: .24),
+];
 
 class _GlassFilterChip extends StatefulWidget {
   const _GlassFilterChip({
     super.key,
     required this.selected,
     required this.child,
+    this.minHeight = _inventorySquareControlSize,
   });
 
   final bool selected;
   final Widget child;
+  final double minHeight;
 
   @override
   State<_GlassFilterChip> createState() => _GlassFilterChipState();
 }
 
 // Keep square inventory actions (sort direction and zero-quantity visibility)
-// on the same 48px control rhythm as the rest of the header.
-const double _inventorySquareControlSize = 48;
+// on the same 40px control rhythm as the sort chip and slider surfaces.
+const double _inventorySquareControlSize = 40;
 
 class _GlassFilterChipState extends State<_GlassFilterChip> {
   bool hovered = false;
 
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    onEnter: (_) => setState(() => hovered = true),
-    onExit: (_) => setState(() => hovered = false),
-    child: _GlassButtonSurface(
-      states: {
-        if (hovered) WidgetState.hovered,
-        if (widget.selected) WidgetState.selected,
-      },
-      child: widget.child,
-    ),
-  );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // FilterChip's Material 3 theme supplies its own stateful fill even when
+    // backgroundColor is transparent. Neutralize that nested surface so the
+    // shared glass button is the only visible border and gradient.
+    final transparentChipTheme = theme.chipTheme.copyWith(
+      color: const WidgetStatePropertyAll<Color?>(Colors.transparent),
+      backgroundColor: Colors.transparent,
+      disabledColor: Colors.transparent,
+      selectedColor: Colors.transparent,
+      secondarySelectedColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      selectedShadowColor: Colors.transparent,
+      elevation: 0,
+      pressElevation: 0,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(10)),
+        side: BorderSide.none,
+      ),
+    );
+    return MouseRegion(
+      onEnter: (_) => setState(() => hovered = true),
+      onExit: (_) => setState(() => hovered = false),
+      child: _GlassButtonSurface(
+        states: {
+          if (hovered) WidgetState.hovered,
+          if (widget.selected) WidgetState.selected,
+        },
+        // Keep every glass chip on the same 40px control rhythm as the
+        // min/max buttons. The wrapped stock FilterChip otherwise falls back
+        // to its compact 32px pill height and creates a second visual language.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: widget.minHeight),
+          child: Center(
+            widthFactor: 1,
+            child: Theme(
+              data: theme.copyWith(
+                canvasColor: Colors.transparent,
+                chipTheme: transparentChipTheme,
+              ),
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _GlassSliderThumbShape extends SliderComponentShape {
   _GlassSliderThumbShape();
 
-  static const bodySize = 30.0;
+  // Native min/max buttons are 40px controls with 3px horizontal and 5px
+  // vertical margins, leaving a 34x30 glass surface.
+  static const bodyWidth = 34.0;
+  static const bodyHeight = 30.0;
   static const preferredWidth = 92.0;
+  InventorinatorColors? _palette;
   double? _lastValue;
   double _motionBias = 0;
+
+  void updatePalette(InventorinatorColors palette) {
+    _palette = palette;
+  }
 
   @override
   Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
@@ -5452,7 +5546,10 @@ class _GlassSliderThumbShape extends SliderComponentShape {
     final enabled = enableAnimation.value;
     final accent = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
     final base = sliderTheme.thumbColor ?? const Color(0xff755da5);
-    final container = Color.lerp(base, Colors.black, .35)!;
+    final palette = _palette;
+    final surface = palette?.surface ?? const Color(0xff1b1726);
+    final container = palette?.container ?? Color.lerp(base, Colors.black, .4)!;
+    final outline = palette?.outline ?? const Color(0xff5d5970);
     if (pressed > .01 && _lastValue != null) {
       final delta = value - _lastValue!;
       if (delta.abs() > .00001) {
@@ -5466,19 +5563,23 @@ class _GlassSliderThumbShape extends SliderComponentShape {
 
     final stretching = math.max(0.0, _motionBias);
     final tapering = math.max(0.0, -_motionBias);
-    final currentBodySize = ui.lerpDouble(bodySize, 32, pressed)!;
     final rect = Rect.fromCenter(
       center: center,
-      width: currentBodySize,
-      height: currentBodySize,
+      width: bodyWidth,
+      height: bodyHeight,
     );
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(10));
     final bodyPath = Path()..addRRect(rrect);
+    final borderRect = rect.deflate(.5);
+    final borderPath = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(borderRect, const Radius.circular(9.5)),
+      );
     final direction = textDirection == TextDirection.ltr ? -1.0 : 1.0;
     final tailLength = 26 + stretching * 18 - tapering * 14;
     final tailHalfHeight = 8 + stretching * 4 - tapering * 4;
     final tip = Offset(center.dx + direction * tailLength, center.dy);
-    final joinX = center.dx + direction * (currentBodySize / 2 - 6);
+    final joinX = center.dx + direction * (bodyWidth / 2 - 6);
     final tailPath = Path()
       ..moveTo(tip.dx, tip.dy)
       ..cubicTo(
@@ -5499,9 +5600,15 @@ class _GlassSliderThumbShape extends SliderComponentShape {
         tip.dy,
       )
       ..close();
+    // Keep the melt tail from contaminating the anti-aliased button rim.
+    final visibleTailPath = Path.combine(
+      PathOperation.difference,
+      tailPath,
+      bodyPath,
+    );
 
     canvas.drawPath(
-      tailPath,
+      visibleTailPath,
       Paint()
         ..color = base.withValues(
           alpha: ui.lerpDouble(.1, .3 + stretching * .12, pressed)!,
@@ -5512,38 +5619,30 @@ class _GlassSliderThumbShape extends SliderComponentShape {
         ),
     );
     canvas.drawPath(
-      tailPath,
-      Paint()..shader = ui.Gradient.linear(tip, center, [accent, base]),
+      visibleTailPath,
+      Paint()
+        ..shader = ui.Gradient.linear(tip, center, [
+          accent.withValues(alpha: .72),
+          base.withValues(alpha: .78),
+        ]),
     );
 
+    // These layers intentionally mirror #inventorinator-window-button in the
+    // Linux runner: surface fill, base/container gradient, rim, inset line,
+    // and 2px/7px black shadow.
     canvas.drawShadow(
       bodyPath,
-      Colors.black.withValues(alpha: .32 * enabled),
-      3 + pressed,
+      Colors.black.withValues(alpha: .20 * enabled),
+      7,
       false,
     );
-    canvas.drawPath(
-      bodyPath,
-      Paint()
-        ..color = base.withValues(alpha: ui.lerpDouble(.08, .24, pressed)!)
-        ..maskFilter = MaskFilter.blur(
-          BlurStyle.normal,
-          ui.lerpDouble(3, 7, pressed)!,
-        ),
-    );
-    // A button has an opaque surface beneath its translucent glass. Without
-    // this layer, the slider track shows through and the thumb looks hollow.
-    canvas.drawPath(bodyPath, Paint()..color = container);
-    final top = Color.lerp(
-      const Color(0x29ffffff),
-      container.withValues(alpha: .78),
-      pressed,
-    )!;
-    final bottom = Color.lerp(
-      base.withValues(alpha: .12),
-      base.withValues(alpha: .48),
-      pressed,
-    )!;
+    canvas.drawPath(bodyPath, Paint()..color = surface);
+    final top = pressed > .01
+        ? container.withValues(alpha: .78)
+        : base.withValues(alpha: .34);
+    final bottom = pressed > .01
+        ? base.withValues(alpha: .48)
+        : container.withValues(alpha: .24);
     canvas.drawPath(
       bodyPath,
       Paint()
@@ -5554,15 +5653,11 @@ class _GlassSliderThumbShape extends SliderComponentShape {
         ),
     );
     canvas.drawPath(
-      bodyPath,
+      borderPath,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = Color.lerp(
-          const Color(0x38ebe6ff),
-          Color.lerp(base, Colors.white, .16)!,
-          pressed,
-        )!,
+        ..color = outline,
     );
     canvas.drawLine(
       Offset(rect.left + 7, rect.top + 1.5),
@@ -5570,11 +5665,9 @@ class _GlassSliderThumbShape extends SliderComponentShape {
       Paint()
         ..strokeWidth = 1
         ..strokeCap = StrokeCap.round
-        ..color = Color.lerp(
-          const Color(0x29ffffff),
-          const Color(0x57000000),
-          pressed,
-        )!,
+        ..color = pressed > .01
+            ? const Color(0x57000000)
+            : const Color(0x75ffffff),
     );
   }
 }
@@ -6227,6 +6320,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   late bool remoteSyncEffectsEnabled;
   late bool searchGlowEnabled;
   late bool newItemGlowEnabled;
+  late int localPurgeAfterDays;
   late int animationDurationPercent;
   late int animationRecurrenceSeconds;
   late bool photoCardsEnabled;
@@ -6247,10 +6341,17 @@ class _InventoryHomeState extends State<InventoryHome> {
   String? itemColorFilter;
   String? filamentMaterialFilter;
   String? filamentBrandFilter;
+  String? filamentPurposeTagFilter;
   final TextEditingController inventorySearchController =
       TextEditingController();
   final FocusNode inventorySearchFocusNode = FocusNode(
     debugLabel: 'Inventory search',
+  );
+  final FocusNode floatingSearchFocusNode = FocusNode(
+    debugLabel: 'Floating inventory search',
+  );
+  final FocusNode bottomSearchFocusNode = FocusNode(
+    debugLabel: 'Bottom inventory search',
   );
   final Set<String> selectedInventoryIds = {};
   final Set<String> selectedBuildIds = {};
@@ -6261,6 +6362,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _pageSizes = [12, 25, 100, 250, 1000];
   static const _minimumCardSizePercent = 75.0;
   static const _maximumCardSizePercent = 150.0;
+  static const _defaultRemotePurgeAfterDays = 3;
   // Thumbnail backfills can make a single changed-record patch tens of KiB.
   // Keep remote transactions short enough for conservative PostgREST limits.
   static const _syncUploadBatchSize = 1;
@@ -6278,6 +6380,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         enabled: Platform.isLinux || Platform.isWindows,
       );
   final ValueNotifier<bool> _inventoryIsScrolling = ValueNotifier(false);
+  final ValueNotifier<double> _inventoryScrollOffset = ValueNotifier(0);
+  static const _mainSearchCollapseStartOffset = 120.0;
+  static const _compactHeaderScrollThreshold = 220.0;
   Timer? _inventoryOverlayRestore;
   final ExpansibleController typeFilterExpansionController =
       ExpansibleController();
@@ -6298,6 +6403,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   Timer? _syncDebounce;
   Timer? _deferredAutoSync;
   Timer? _syncPoll;
+  Timer? _offlinePurgeTimer;
+  bool _offlinePurgeCheckRunning = false;
   final Map<String, Timer> _quantityCommitTimers = {};
   final Map<String, InventoryItem> _quantityCommitOriginals = {};
   int _localStateRevision = 0;
@@ -6423,7 +6530,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     auditLog = restored?.auditLog ?? [];
     additionHistory =
-      restored?.additionHistory ??
+        restored?.additionHistory ??
         (firstLaunch
             ? <AdditionHistoryEntry>[]
             : inventory.map(AdditionHistoryEntry.fromItem).toList());
@@ -6525,6 +6632,21 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: true,
         ) ??
         true;
+    localPurgeAfterDays =
+        int.tryParse(
+          widget.database?.loadStringPreference(
+                'local_purge_after_days',
+                // Migrate the earlier local-only preference name.
+                fallback:
+                    widget.database?.loadStringPreference(
+                      'remote_purge_after_days',
+                      fallback: _defaultRemotePurgeAfterDays.toString(),
+                    ) ??
+                    _defaultRemotePurgeAfterDays.toString(),
+              ) ??
+              _defaultRemotePurgeAfterDays.toString(),
+        )?.clamp(1, 365) ??
+        _defaultRemotePurgeAfterDays;
     final savedSortName = widget.database?.loadStringPreference(
       'inventory_sort',
       fallback: InventorySort.type.name,
@@ -6708,7 +6830,123 @@ class _InventoryHomeState extends State<InventoryHome> {
         (_) => _openSyncOnboarding(),
       );
     } else {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoSync());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_refreshWorkspaceRoleOnStartup());
+        _offlinePurgeTimer = Timer.periodic(
+          const Duration(minutes: 15),
+          (_) => unawaited(_checkOfflinePurgePolicy()),
+        );
+        _startAutoSync();
+      });
+    }
+  }
+
+  Future<void> _refreshWorkspaceRoleOnStartup() async {
+    final database = widget.database;
+    final source = database?.loadSyncConfig();
+    if (database == null || source == null) return;
+    try {
+      final config = SupabaseConfig.fromJson(
+        jsonDecode(source) as Map<String, dynamic>,
+      );
+      final hasOwnerRecovery =
+          config.workspaceId != null &&
+          database.loadWorkspaceRecoveryKey(config.workspaceId!) != null;
+      final shared = config.syncMode == 'supabase';
+      final cachedOwner =
+          normalizeWorkspaceRole(config.workspaceRole) == 'owner' ||
+          hasOwnerRecovery;
+      final lastContact = config.lastSyncedAt;
+      final offlinePurgeDays =
+          config.remotePurgeAfterDays ?? localPurgeAfterDays;
+      final offlineExpired =
+          shared &&
+          !cachedOwner &&
+          lastContact != null &&
+          DateTime.now().toUtc().difference(lastContact).inDays >=
+              offlinePurgeDays;
+      final session = config.cachedSession;
+      if (config.syncMode != 'supabase' ||
+          !config.isConfigured ||
+          session == null ||
+          config.workspaceId == null) {
+        if (offlineExpired) {
+          await _purgeLocalDataAfterInactivity(database, config);
+        }
+        return;
+      }
+      final service = SupabaseSyncService(
+        config,
+        client: widget.supabaseHttpClient,
+      );
+      final role = await service.currentRole(session);
+      final remotePurgeDays = await service.remotePurgeAfterDays(session);
+      final isOwner =
+          normalizeWorkspaceRole(role) == 'owner' || hasOwnerRecovery;
+      if (!isOwner &&
+          lastContact != null &&
+          DateTime.now().toUtc().difference(lastContact).inDays >=
+              remotePurgeDays) {
+        await _purgeLocalDataAfterInactivity(
+          database,
+          config.copyWith(
+            workspaceRole: role,
+            remotePurgeAfterDays: remotePurgeDays,
+          ),
+        );
+        return;
+      }
+      final nextConfig = config.copyWith(
+        workspaceRole: role,
+        remotePurgeAfterDays: remotePurgeDays,
+      );
+      database.saveSyncConfig(jsonEncode(nextConfig.toJson()));
+      if (!mounted) return;
+      final nextRole = WorkspaceRole.fromServer(role);
+      setState(() {
+        currentRole = hasOwnerRecovery ? WorkspaceRole.admin : nextRole;
+        workspaceOwner = role == 'owner' || hasOwnerRecovery;
+        currentUserId = session.userId;
+      });
+    } catch (error) {
+      if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+        await _purgeLocalDataAfterRevocation(database);
+        return;
+      }
+      final fallbackSource = database.loadSyncConfig();
+      if (fallbackSource != null) {
+        try {
+          final fallback = SupabaseConfig.fromJson(
+            jsonDecode(fallbackSource) as Map<String, dynamic>,
+          );
+          final hasOwnerRecovery =
+              fallback.workspaceId != null &&
+              database.loadWorkspaceRecoveryKey(fallback.workspaceId!) != null;
+          final lastContact = fallback.lastSyncedAt;
+          if (fallback.syncMode == 'supabase' &&
+              !hasOwnerRecovery &&
+              normalizeWorkspaceRole(fallback.workspaceRole) != 'owner' &&
+              lastContact != null &&
+              DateTime.now().toUtc().difference(lastContact).inDays >=
+                  (fallback.remotePurgeAfterDays ?? localPurgeAfterDays)) {
+            await _purgeLocalDataAfterInactivity(database, fallback);
+            return;
+          }
+        } catch (_) {
+          // Keep the original sync diagnostic when the fallback preference is malformed.
+        }
+      }
+      debugPrint('Could not refresh workspace role at startup: $error');
+    }
+  }
+
+  Future<void> _checkOfflinePurgePolicy() async {
+    if (_offlinePurgeCheckRunning || !mounted) return;
+    _offlinePurgeCheckRunning = true;
+    try {
+      await _refreshWorkspaceRoleOnStartup();
+    } finally {
+      _offlinePurgeCheckRunning = false;
     }
   }
 
@@ -6940,7 +7178,11 @@ class _InventoryHomeState extends State<InventoryHome> {
     } catch (_) {
       return;
     }
-    if (await _renameThisDevice()) unawaited(_syncAutomatically());
+    if (await _renameThisDevice()) {
+      // Device registration is an explicit metadata change rather than an
+      // inventory write, so it is allowed one immediate sync pass.
+      unawaited(_syncAutomatically(force: true));
+    }
   }
 
   @override
@@ -6949,6 +7191,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _syncDebounce?.cancel();
     _deferredAutoSync?.cancel();
     _syncPoll?.cancel();
+    _offlinePurgeTimer?.cancel();
     _clockTick?.cancel();
     _thumbnailBackfillStartTimer?.cancel();
     _pageSizeCommitTimer?.cancel();
@@ -6984,6 +7227,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     _inventoryOverlayRestore?.cancel();
     _inventoryIsScrolling.dispose();
+    floatingSearchFocusNode.dispose();
+    bottomSearchFocusNode.dispose();
+    _inventoryScrollOffset.dispose();
     for (final notifier in _inventoryItemNotifiers.values) {
       notifier.dispose();
     }
@@ -7298,12 +7544,15 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   void _startAutoSync() {
     _syncPoll?.cancel();
+    _syncPoll = null;
     _autoSyncPausedForAuthentication = false;
-    _syncAutomatically();
-    _syncPoll = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _syncAutomatically(),
-    );
+    // Sync is event-driven: local edits schedule a debounced pass, and the
+    // Remote Sync dialog performs explicit pulls. Do not poll an idle device
+    // or keep opening connections when its outbox is empty.
+    final database = widget.database;
+    if (database != null && database.loadPendingWorkshopChanges().isNotEmpty) {
+      unawaited(_syncAutomatically());
+    }
   }
 
   bool get _needsSyncOnboarding {
@@ -7587,6 +7836,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       customTypeFilterId,
       filamentMaterialFilter,
       filamentBrandFilter,
+      filamentPurposeTagFilter,
     );
     if (_availableItemColorFiltersCacheKey == cacheKey) {
       return _availableItemColorFiltersCache!;
@@ -7625,6 +7875,22 @@ class _InventoryHomeState extends State<InventoryHome> {
     return _availableItemColorFiltersCache = result;
   }
 
+  List<String> get availableFilamentPurposeTags {
+    final tags = <String>{};
+    for (final item in inventory) {
+      if (item.archived != archivedOnly ||
+          item.type != InventoryType.filament) {
+        continue;
+      }
+      for (final tag in item.purposeTags) {
+        final value = tag.trim();
+        if (value.isNotEmpty) tags.add(value);
+      }
+    }
+    return tags.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
   List<InventoryItem> get visibleItems {
     final cacheKey = (
       _searchDataRevision,
@@ -7636,6 +7902,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       itemColorFilter,
       filamentMaterialFilter,
       filamentBrandFilter,
+      filamentPurposeTagFilter,
       sort,
       sortAscending,
     );
@@ -7658,7 +7925,14 @@ class _InventoryHomeState extends State<InventoryHome> {
                   !_matchesMaterialFilter(item)) ||
           filamentBrandFilter != null &&
               (item.type != InventoryType.filament ||
-                  !_matchesBrandFilter(item))) {
+                  !_matchesBrandFilter(item)) ||
+          filamentPurposeTagFilter != null &&
+              (item.type != InventoryType.filament ||
+                  !item.purposeTags.any(
+                    (tag) =>
+                        tag.trim().toLowerCase() ==
+                        filamentPurposeTagFilter!.trim().toLowerCase(),
+                  ))) {
         return false;
       }
       if (needle.isEmpty) return true;
@@ -8108,8 +8382,6 @@ class _InventoryHomeState extends State<InventoryHome> {
                   bottom: 0,
                   child: _bottomActionBar(),
                 ),
-              if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
-                Positioned(right: 20, bottom: 82, child: _jumpToTopButton()),
             ],
           ),
           bottomNavigationBar: selectedInventoryIds.isNotEmpty
@@ -8128,6 +8400,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   bool _handleInventoryScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
+    _inventoryScrollOffset.value = notification.metrics.pixels;
     if (notification is ScrollEndNotification ||
         (notification is UserScrollNotification &&
             notification.direction == ScrollDirection.idle)) {
@@ -13269,7 +13542,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
-  Future<void> _syncAutomatically() async {
+  Future<void> _syncAutomatically({bool force = false}) async {
     final database = widget.database;
     if (database == null || _autoSyncPausedForAuthentication) {
       return;
@@ -13285,6 +13558,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     // a just-edited field in the outbox before any remote merge can run.
     await database.waitForPendingWrites();
     if (!mounted || database.isClosed) return;
+    if (!force && database.loadPendingWorkshopChanges().isEmpty) return;
     if (_quantityCommitTimers.isNotEmpty) return;
     if (_inventoryIsScrolling.value) {
       _deferredAutoSync?.cancel();
@@ -13358,9 +13632,14 @@ class _InventoryHomeState extends State<InventoryHome> {
       await service.requireCurrentSchema(session);
       try {
         final role = await service.currentRole(session);
+        final remotePurgeDays = await service.remotePurgeAfterDays(session);
         final roleChanged = config.workspaceRole != role;
-        config = config.copyWith(workspaceRole: role);
-        if (roleChanged) {
+        final policyChanged = config.remotePurgeAfterDays != remotePurgeDays;
+        config = config.copyWith(
+          workspaceRole: role,
+          remotePurgeAfterDays: remotePurgeDays,
+        );
+        if (roleChanged || policyChanged) {
           database.saveSyncConfig(jsonEncode(config.toJson()));
         }
         if (role == 'owner') {
@@ -13389,6 +13668,10 @@ class _InventoryHomeState extends State<InventoryHome> {
           client: widget.supabaseHttpClient,
         );
       } catch (error) {
+        if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+          await _purgeLocalDataAfterRevocation(database);
+          return;
+        }
         debugPrint('Could not refresh workspace role: $error');
       }
       // Device registration only updates the friendly name and last-seen
@@ -13546,6 +13829,105 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
+  Future<void> _purgeLocalDataAfterRevocation(LocalDatabase database) async {
+    final deviceId = database.loadStringPreference('device_id', fallback: '');
+    final deviceName = database.loadStringPreference(
+      'device_name',
+      fallback: 'Android device',
+    );
+    await database.deleteAndRecreate();
+    if (deviceId.isNotEmpty) {
+      database.saveStringPreference('device_id', deviceId);
+    }
+    database.saveStringPreference('device_name', deviceName);
+    database.saveStringPreference(
+      'local_purge_after_days',
+      localPurgeAfterDays.toString(),
+    );
+    if (!mounted) return;
+    _clearInMemoryInventory();
+    _persist();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Remote access was revoked. This device’s local inventory was erased.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _purgeLocalDataAfterInactivity(
+    LocalDatabase database,
+    SupabaseConfig connection,
+  ) async {
+    final deviceId = database.loadStringPreference('device_id', fallback: '');
+    final deviceName = database.loadStringPreference(
+      'device_name',
+      fallback: 'Android device',
+    );
+    final retentionDays =
+        connection.remotePurgeAfterDays ?? _defaultRemotePurgeAfterDays;
+    await database.deleteAndRecreate();
+    if (deviceId.isNotEmpty) {
+      database.saveStringPreference('device_id', deviceId);
+    }
+    database.saveStringPreference('device_name', deviceName);
+    database.saveStringPreference(
+      'local_purge_after_days',
+      localPurgeAfterDays.toString(),
+    );
+    database.saveSyncConfig(
+      jsonEncode(
+        SupabaseConfig(
+          url: connection.url,
+          publishableKey: connection.publishableKey,
+          syncMode: 'supabase',
+          workspaceId: connection.workspaceId,
+          remotePurgeAfterDays: connection.remotePurgeAfterDays,
+        ).toJson(),
+      ),
+    );
+    if (!mounted) return;
+    _clearInMemoryInventory();
+    _persist();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'This device was offline for $retentionDays days. Local inventory was erased; reconnect to download it again.',
+        ),
+      ),
+    );
+  }
+
+  void _clearInMemoryInventory() {
+    setState(() {
+      inventory.clear();
+      vendors.clear();
+      brands.clear();
+      products.clear();
+      machineTypes.clear();
+      machines.clear();
+      kits.clear();
+      builds.clear();
+      locations.clear();
+      shoppingList.clear();
+      spoolTypes.clear();
+      materials.clear();
+      customItemTypes.clear();
+      auditLog.clear();
+      additionHistory.clear();
+      spoolUsage.clear();
+      selectedInventoryIds.clear();
+      selectedBuildIds.clear();
+      selectedKitIds.clear();
+      selectedMachineIds.clear();
+      _inventoryItemNotifiers.clear();
+      currentRole = WorkspaceRole.admin;
+      workspaceOwner = true;
+      currentUserId = null;
+    });
+  }
+
   Future<void> _waitForInventoryScrollIdle() async {
     while (mounted && _inventoryIsScrolling.value) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -13571,13 +13953,48 @@ class _InventoryHomeState extends State<InventoryHome> {
       context: context,
       builder: (_) => CloudSyncDialog(
         database: database,
+        deviceId: deviceId,
         localStateJson: _currentStateJson(),
         onCloudState: _applyRemoteCloudState,
         onCloudChanges: _applyRemoteEntityChanges,
+        onRemoteAccessRevoked: () => _purgeLocalDataAfterRevocation(database),
         initialPairingCode: initialPairingCode,
       ),
     );
+    _reloadWorkspaceRoleFromSavedConfig();
     _startAutoSync();
+  }
+
+  void _reloadWorkspaceRoleFromSavedConfig() {
+    final database = widget.database;
+    final source = database?.loadSyncConfig();
+    if (database == null || source == null) return;
+    try {
+      final config = SupabaseConfig.fromJson(
+        jsonDecode(source) as Map<String, dynamic>,
+      );
+      if (config.syncMode != 'supabase') return;
+      final nextRole = WorkspaceRole.fromServer(config.workspaceRole);
+      final hasOwnerRecovery =
+          config.workspaceId != null &&
+          database.loadWorkspaceRecoveryKey(config.workspaceId!) != null;
+      final nextOwner =
+          normalizeWorkspaceRole(config.workspaceRole) == 'owner' ||
+          hasOwnerRecovery;
+      if (!mounted ||
+          (currentRole == nextRole &&
+              workspaceOwner == nextOwner &&
+              currentUserId == config.userId)) {
+        return;
+      }
+      setState(() {
+        currentRole = hasOwnerRecovery ? WorkspaceRole.admin : nextRole;
+        workspaceOwner = nextOwner;
+        currentUserId = config.userId;
+      });
+    } catch (_) {
+      // A malformed sync preference must not affect local inventory access.
+    }
   }
 
   Future<void> _openSyncOnboarding() async {
@@ -13658,6 +14075,50 @@ class _InventoryHomeState extends State<InventoryHome> {
                   SelectableText(
                     database.path,
                     style: Theme.of(dialogContext).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  StatefulBuilder(
+                    builder: (context, setDialogState) => Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Local offline-data retention',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Stolen-device fallback. Remote workspaces use the owner/admin policy instead.',
+                              ),
+                            ],
+                          ),
+                        ),
+                        DropdownButton<int>(
+                          value: localPurgeAfterDays,
+                          items: const [1, 3, 7, 14, 30, 60, 90, 180, 365]
+                              .map(
+                                (days) => DropdownMenuItem<int>(
+                                  value: days,
+                                  child: Text(
+                                    '$days ${days == 1 ? 'day' : 'days'}',
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (days) {
+                            if (days == null) return;
+                            database.saveStringPreference(
+                              'local_purge_after_days',
+                              days.toString(),
+                            );
+                            setState(() => localPurgeAfterDays = days);
+                            setDialogState(() {});
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                   const Divider(height: 28),
                   LayoutBuilder(
@@ -13993,11 +14454,58 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  Widget _collapsingMainSearchField({required bool compact}) {
+    final child = _EdgeLitSearchField(
+      fieldKey: const Key('inventory-search'),
+      controller: inventorySearchController,
+      focusNode: inventorySearchFocusNode,
+      enabled: searchGlowEnabled,
+      onChanged: (value) => setState(() {
+        query = value;
+        currentPage = 0;
+      }),
+      hintText: compact
+          ? 'Search inventory…'
+          : 'Search items, types, compatibility…  Try “E3DV6”',
+    );
+    return ValueListenableBuilder<double>(
+      valueListenable: _inventoryScrollOffset,
+      child: child,
+      builder: (context, offset, child) {
+        final progress =
+            ((offset - _mainSearchCollapseStartOffset) /
+                    (_compactHeaderScrollThreshold -
+                        _mainSearchCollapseStartOffset))
+                .clamp(0.0, 1.0);
+        return IgnorePointer(
+          ignoring: progress >= .98,
+          child: Opacity(
+            opacity: 1 - progress,
+            child: Transform.scale(
+              alignment: Alignment.topCenter,
+              scale: ui.lerpDouble(1, .82, progress)!,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _header() => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 920;
       final narrow = constraints.maxWidth < 600;
-      final phoneNarrow = constraints.maxWidth < 400;
+      // Keep the filter panel out of the narrow side-control column on small
+      // Android windows. A 400px logical-width phone otherwise leaves it only
+      // a few pixels wide beside Sort/View.
+      final phoneNarrow = constraints.maxWidth < 520;
+      final narrowViewGap =
+          ((constraints.maxWidth - 24) -
+                  (56 + 5 + _inventorySquareControlSize) -
+                  (_inventorySquareControlSize * 2 + 4 + 72))
+              .clamp(0.0, 60.0)
+              .toDouble();
       return Padding(
         padding: EdgeInsets.fromLTRB(
           compact ? 12 : 20,
@@ -14012,22 +14520,11 @@ class _InventoryHomeState extends State<InventoryHome> {
               _metricsPanel(),
               const SizedBox(height: 14),
             ],
-            _EdgeLitSearchField(
-              fieldKey: const Key('inventory-search'),
-              controller: inventorySearchController,
-              focusNode: inventorySearchFocusNode,
-              enabled: searchGlowEnabled,
-              onChanged: (value) => setState(() {
-                query = value;
-                currentPage = 0;
-              }),
-              hintText: compact
-                  ? 'Search inventory…'
-                  : 'Search items, types, compatibility…  Try “E3DV6”',
-            ),
+            _collapsingMainSearchField(compact: compact),
             const SizedBox(height: 14),
             if (catalogFilter == null &&
-                availableItemColorFilters.isNotEmpty) ...[
+                (availableItemColorFilters.isNotEmpty ||
+                    availableFilamentPurposeTags.isNotEmpty)) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -14039,23 +14536,25 @@ class _InventoryHomeState extends State<InventoryHome> {
               const SizedBox(height: 8),
               if (narrow) ...[
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _resultCount(),
-                    const Spacer(),
-                    _sortControl(compact: true),
-                    const SizedBox(width: 8),
-                    _viewOptions(),
+                    if (catalogFilter == null) ...[
+                      _sortControl(showLabel: true, compact: true),
+                      const Spacer(),
+                    ],
+                    _viewOptions(gap: narrowViewGap),
                   ],
                 ),
                 const SizedBox(height: 10),
                 _mobileSizeControls(),
               ] else if (compact) ...[
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _resultCount(),
                     const Spacer(),
-                    _sortControl(),
-                    const SizedBox(width: 8),
+                    _sortControl(showLabel: true),
+                    const SizedBox(width: 16),
                     _viewOptions(),
                   ],
                 ),
@@ -14063,10 +14562,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                 _sizeControls(expandSliders: true),
               ] else
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _resultCount(),
                     const SizedBox(width: 12),
-                    _sortControl(showLabel: !compact),
+                    _sortControl(showLabel: true),
                     const SizedBox(width: 12),
                     Expanded(child: _sizeControls(expandSliders: true)),
                     const SizedBox(width: 12),
@@ -14077,14 +14577,17 @@ class _InventoryHomeState extends State<InventoryHome> {
               _typeFilterPanel(compact: true),
               const SizedBox(height: 8),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _resultCount(),
-                  const Spacer(),
-                  if (catalogFilter == null) ...[_sortControl(compact: true)],
+                  if (catalogFilter == null) ...[
+                    Expanded(
+                      child: _sortControl(showLabel: true, compact: true),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  _viewOptions(gap: narrowViewGap),
                 ],
               ),
-              const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: _viewOptions()),
               const SizedBox(height: 10),
               _mobileSizeControls(),
             ] else if (compact) ...[
@@ -14099,8 +14602,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (catalogFilter == null)
-                          _sortControl(compact: narrow),
-                        const SizedBox(width: 8),
+                          _sortControl(showLabel: true, compact: narrow),
+                        const SizedBox(width: 16),
                         _viewOptions(),
                       ],
                     ),
@@ -14109,6 +14612,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               ),
               const SizedBox(height: 4),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _resultCount(),
                   const SizedBox(width: 12),
@@ -14125,6 +14629,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                     child: Padding(
                       padding: const EdgeInsets.only(top: 13),
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _resultCount(),
                           const SizedBox(width: 12),
@@ -14172,40 +14677,163 @@ class _InventoryHomeState extends State<InventoryHome> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 920;
-          if (compact) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: _compactHeaderActionStrip(
-                showOverflowHint: constraints.maxWidth < 600,
-              ),
-            );
-          }
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Row(
-              children: [
-                ..._centerHeaderActions(),
-                const Spacer(),
-                ..._databaseHeaderActions(),
-              ],
-            ),
+            padding: _floatingHeaderContentPadding(constraints.maxWidth),
+            child: compact
+                ? _compactHeaderActionStrip(
+                    showOverflowHint: constraints.maxWidth < 600,
+                  )
+                : Row(
+                    children: [
+                      ..._centerHeaderActions(),
+                      const Spacer(),
+                      ..._databaseHeaderActions(),
+                    ],
+                  ),
           );
         },
       ),
     ),
-    builder: (context, scrolling, child) => Padding(
-      key: const Key('floating-header-shell'),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: IgnorePointer(
-        ignoring: scrolling,
-        child: AnimatedOpacity(
-          key: const Key('floating-header-visibility'),
-          duration: Duration.zero,
-          opacity: scrolling ? 0 : 1,
-          child: child,
-        ),
-      ),
+    builder: (context, scrolling, child) => ValueListenableBuilder<double>(
+      valueListenable: _inventoryScrollOffset,
+      builder: (context, offset, _) {
+        final compactSearch =
+            !Platform.isAndroid &&
+            offset >= _compactHeaderScrollThreshold &&
+            !scrolling;
+        final Widget content = scrolling
+            ? IgnorePointer(
+                child: Opacity(
+                  key: const Key('floating-header-hidden'),
+                  opacity: 0,
+                  child: child,
+                ),
+              )
+            : compactSearch
+            ? AnimatedContainer(
+                key: const Key('floating-header-compact-search'),
+                duration: Duration.zero,
+                decoration: _floatingActionBarDecoration(reduceEffects: false),
+                clipBehavior: Clip.antiAlias,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => Padding(
+                    padding: _floatingHeaderContentPadding(
+                      constraints.maxWidth,
+                    ),
+                    child: _scrollingHeaderContent(),
+                  ),
+                ),
+              )
+            : AnimatedOpacity(
+                key: const Key('floating-header-visibility'),
+                duration: Duration.zero,
+                opacity: 1,
+                child: child,
+              );
+        return Padding(
+          key: const Key('floating-header-shell'),
+          // Keep a visible, symmetric breathing space around the top rail.
+          // Its pinned slot is 80px tall, so this mirrors the bottom rail's
+          // 8px vertical inset without letting the controls touch the edge.
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: content,
+          ),
+        );
+      },
     ),
+  );
+
+  EdgeInsets _floatingHeaderContentPadding(double width) => width < 920
+      ? const EdgeInsets.symmetric(horizontal: 12, vertical: 7)
+      : const EdgeInsets.symmetric(horizontal: 14, vertical: 8);
+
+  Widget _scrollingHeaderContent() => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact = constraints.maxWidth < 720;
+      if (compact) {
+        return SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              _glassQuickAction(
+                key: const Key('floating-alerts'),
+                onPressed: _openMoistureAlerts,
+                iconWidget: Badge.count(
+                  count: _inventoryAlertCount,
+                  isLabelVisible: _inventoryAlertCount > 0,
+                  child: const Icon(Icons.notifications_outlined),
+                ),
+                icon: Icons.notifications_outlined,
+                label: 'Alerts',
+                iconOnly: true,
+                iconOnlyWidth: 48,
+                iconOnlyHeight: 48,
+              ),
+              const SizedBox(width: 8),
+              _glassQuickAction(
+                key: const Key('floating-new-items'),
+                onPressed: _openAdditionHistory,
+                icon: Icons.new_releases_outlined,
+                label: 'New items',
+                iconOnly: true,
+                iconOnlyWidth: 48,
+                iconOnlyHeight: 48,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _EdgeLitSearchField(
+                  fieldKey: const Key('floating-inventory-search'),
+                  controller: inventorySearchController,
+                  focusNode: floatingSearchFocusNode,
+                  compact: true,
+                  enabled: searchGlowEnabled,
+                  onChanged: (value) => setState(() {
+                    query = value;
+                    currentPage = 0;
+                  }),
+                  hintText: 'Search…',
+                ),
+              ),
+              const SizedBox(width: 8),
+              _jumpToTopButton(),
+              const SizedBox(width: 8),
+              _databaseHeaderActions().single,
+            ],
+          ),
+        );
+      }
+      return SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            ..._centerHeaderActions(),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _EdgeLitSearchField(
+                fieldKey: const Key('floating-inventory-search'),
+                controller: inventorySearchController,
+                focusNode: floatingSearchFocusNode,
+                compact: true,
+                enabled: searchGlowEnabled,
+                onChanged: (value) => setState(() {
+                  query = value;
+                  currentPage = 0;
+                }),
+                hintText: 'Search inventory…',
+              ),
+            ),
+            const SizedBox(width: 12),
+            _jumpToTopButton(),
+            const SizedBox(width: 12),
+            ..._databaseHeaderActions(),
+          ],
+        ),
+      );
+    },
   );
 
   BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) =>
@@ -14232,39 +14860,32 @@ class _InventoryHomeState extends State<InventoryHome> {
               ],
       );
 
-  Widget _resultCount() => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(
-        catalogFilter == null
-            ? archivedOnly
-                  ? '${visibleItems.length} archived'
-                  : type == null &&
-                        customTypeFilterId == null &&
-                        itemColorFilter == null &&
-                        filamentMaterialFilter == null &&
-                        filamentBrandFilter == null
-                  ? '${visibleItems.length + visibleEverythingCatalogRecords.length} records'
-                  : '${visibleItems.length} items'
-            : '${visibleCatalogRecords.length} ${_catalogViewDisplayLabel(catalogFilter!).toLowerCase()}',
-        style: const TextStyle(
-          color: Color(0xff9da5b7),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      if (catalogFilter == CatalogViewFilter.kits) ...[
-        const SizedBox(width: 10),
-        Tooltip(
-          message: 'What can I build?',
-          child: IconButton.outlined(
-            key: const Key('open-buildability'),
-            onPressed: _openBuildability,
-            icon: const Icon(Icons.inventory_outlined, size: 18),
+  Widget _resultCount() {
+    if (catalogFilter == null) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${visibleCatalogRecords.length} ${_catalogViewDisplayLabel(catalogFilter!).toLowerCase()}',
+          style: const TextStyle(
+            color: Color(0xff9da5b7),
+            fontWeight: FontWeight.w600,
           ),
         ),
+        if (catalogFilter == CatalogViewFilter.kits) ...[
+          const SizedBox(width: 10),
+          Tooltip(
+            message: 'What can I build?',
+            child: IconButton.outlined(
+              key: const Key('open-buildability'),
+              onPressed: _openBuildability,
+              icon: const Icon(Icons.inventory_outlined, size: 18),
+            ),
+          ),
+        ],
       ],
-    ],
-  );
+    );
+  }
 
   Widget _sortControl({bool showLabel = false, bool compact = false}) {
     String label(InventorySort value) => switch (value) {
@@ -14273,7 +14894,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       InventorySort.addedDate => 'Added date',
       InventorySort.cost => 'Cost',
       InventorySort.dryingTime => 'Drying time',
-      InventorySort.moistureRemaining => 'Moisture remaining',
+      // This is the remaining usable moisture-life window before a spool is
+      // considered too wet to print; keep the persisted enum name stable.
+      InventorySort.moistureRemaining => 'Life remaining',
     };
     IconData icon(InventorySort value) => switch (value) {
       InventorySort.type => Icons.category_outlined,
@@ -14314,39 +14937,42 @@ class _InventoryHomeState extends State<InventoryHome> {
             ),
           ),
       ],
-      child: _GlassFilterChip(
-        key: const Key('sort-glass-surface'),
-        selected: false,
-        child: Padding(
-          padding: compact
-              ? const EdgeInsets.fromLTRB(10, 8, 7, 8)
-              : const EdgeInsets.fromLTRB(12, 8, 9, 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon(sort),
-                size: 17,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              if (!compact) ...[
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    label(sort),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
+      child: SizedBox(
+        height: _inventorySquareControlSize,
+        child: _GlassFilterChip(
+          key: const Key('sort-glass-surface'),
+          selected: false,
+          child: Padding(
+            padding: compact
+                ? const EdgeInsets.fromLTRB(10, 0, 7, 0)
+                : const EdgeInsets.fromLTRB(12, 0, 9, 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon(sort),
+                  size: 17,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
-                const SizedBox(width: 5),
+                if (!compact) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label(sort),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                ],
+                Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ],
-              Icon(
-                Icons.keyboard_arrow_down_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -14389,18 +15015,21 @@ class _InventoryHomeState extends State<InventoryHome> {
         direction,
       ],
     );
-    return Row(
+    if (!showLabel) return controls;
+    return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (showLabel) ...[
-          const Text(
-            'Sort',
-            style: TextStyle(color: Color(0xff7f8798), fontSize: 12),
+        const Text(
+          'Sort',
+          style: TextStyle(
+            color: Color(0xffa7adbd),
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
           ),
-          const SizedBox(width: 8),
-          controls,
-        ] else
-          controls,
+        ),
+        const SizedBox(height: 2),
+        controls,
       ],
     );
   }
@@ -14414,6 +15043,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final palette =
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      _pageSizeThumbShape.updatePalette(palette);
       final previewIndex = previewValue.round().clamp(0, _pageSizes.length - 1);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
@@ -14422,6 +15052,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           activeTrackColor: palette.accent,
           overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
           overlayColor: palette.base.withValues(alpha: .16),
+          showValueIndicator: ShowValueIndicator.onDrag,
         ),
         child: Slider(
           key: const Key('page-size-slider'),
@@ -14435,32 +15066,23 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
       return LayoutBuilder(
         builder: (context, constraints) {
-          // Below this width there isn't room for a label next to a usable
-          // slider; drop it rather than let the row overflow.
-          final showLabel = !expandSlider || constraints.maxWidth >= 100;
-          return Row(
-            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (showLabel)
-                Text(
-                  compactLabel ? 'Page' : 'Page size',
-                  style: const TextStyle(
-                    color: Color(0xff7f8798),
-                    fontSize: 12,
-                  ),
-                ),
-              if (expandSlider)
-                Expanded(child: slider)
-              else
-                SizedBox(width: 190, child: slider),
-              SizedBox(
-                width: compactLabel ? 28 : 38,
-                child: Text(
-                  '${_pageSizes[previewIndex]}',
-                  textAlign: TextAlign.end,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+              Text(
+                compactLabel ? 'Page' : 'Page size',
+                style: const TextStyle(
+                  color: Color(0xffa7adbd),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(height: 2),
+              if (expandSlider)
+                SizedBox(width: double.infinity, child: slider)
+              else
+                SizedBox(width: 190, child: slider),
             ],
           );
         },
@@ -14483,7 +15105,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _sizeControls({bool expandSliders = false}) {
-    if (!gridView) return _pageSizeControl(expandSlider: expandSliders);
+    if (!gridView) {
+      return _pageSizeControl(expandSlider: expandSliders);
+    }
     return Row(
       mainAxisSize: expandSliders ? MainAxisSize.max : MainAxisSize.min,
       children: [
@@ -14541,6 +15165,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final palette =
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      _cardSizeThumbShape.updatePalette(palette);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
           thumbShape: _cardSizeThumbShape,
@@ -14548,6 +15173,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           activeTrackColor: palette.accent,
           overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
           overlayColor: palette.base.withValues(alpha: .16),
+          showValueIndicator: ShowValueIndicator.onDrag,
         ),
         child: Slider(
           key: const Key('card-size-slider'),
@@ -14560,32 +15186,23 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
       return LayoutBuilder(
         builder: (context, constraints) {
-          // Below this width there isn't room for a label next to a usable
-          // slider; drop it rather than let the row overflow.
-          final showLabel = !expandSlider || constraints.maxWidth >= 100;
-          return Row(
-            mainAxisSize: expandSlider ? MainAxisSize.max : MainAxisSize.min,
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (showLabel)
-                Text(
-                  compactLabel ? 'Card' : 'Card size',
-                  style: const TextStyle(
-                    color: Color(0xff7f8798),
-                    fontSize: 12,
-                  ),
-                ),
-              if (expandSlider)
-                Expanded(child: slider)
-              else
-                SizedBox(width: 120, child: slider),
-              SizedBox(
-                width: compactLabel ? 38 : 42,
-                child: Text(
-                  '${previewValue.round()}%',
-                  textAlign: TextAlign.end,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+              Text(
+                compactLabel ? 'Card' : 'Card size',
+                style: const TextStyle(
+                  color: Color(0xffa7adbd),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(height: 2),
+              if (expandSlider)
+                SizedBox(width: double.infinity, child: slider)
+              else
+                SizedBox(width: 120, child: slider),
             ],
           );
         },
@@ -14730,10 +15347,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool iconOnly = false,
     Offset iconOffset = Offset.zero,
     double iconOnlyWidth = 48,
+    double iconOnlyHeight = 44,
+    Widget? iconWidget,
+    bool tight = false,
   }) {
-    final iconWidget = Transform.translate(
+    final iconChild = Transform.translate(
       offset: iconOffset,
-      child: Icon(icon, size: 24),
+      child: iconWidget ?? Icon(icon, size: 24),
     );
     if (iconOnly) {
       return Tooltip(
@@ -14742,65 +15362,89 @@ class _InventoryHomeState extends State<InventoryHome> {
           key: key,
           onPressed: onPressed,
           style: _quickActionStyle.copyWith(
-            minimumSize: WidgetStatePropertyAll(Size(iconOnlyWidth, 44)),
-            maximumSize: WidgetStatePropertyAll(Size(iconOnlyWidth, 44)),
+            minimumSize: WidgetStatePropertyAll(
+              Size(iconOnlyWidth, iconOnlyHeight),
+            ),
+            maximumSize: WidgetStatePropertyAll(
+              Size(iconOnlyWidth, iconOnlyHeight),
+            ),
             padding: const WidgetStatePropertyAll(EdgeInsets.zero),
             alignment: Alignment.center,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: Center(child: iconWidget),
+          child: Center(child: iconChild),
         ),
       );
     }
     return OutlinedButton(
       key: key,
       onPressed: onPressed,
-      style: _quickActionStyle,
+      style: tight
+          ? _quickActionStyle.copyWith(
+              padding: const WidgetStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              ),
+              minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            )
+          : _quickActionStyle,
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [iconWidget, const SizedBox(width: 10), Text(label)],
+        children: [iconChild, const SizedBox(width: 10), Text(label)],
       ),
     );
   }
 
-  Widget _scanButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
-      _glassQuickAction(
-        key: const Key('open-scanner'),
-        onPressed: _openScanner,
-        icon: Icons.qr_code_scanner_rounded,
-        label: 'Scan',
-        iconOnly: iconOnly,
-        iconOnlyWidth: iconOnlyWidth,
-      );
+  Widget _scanButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+    bool tight = false,
+  }) => _glassQuickAction(
+    key: const Key('open-scanner'),
+    onPressed: _openScanner,
+    icon: Icons.qr_code_scanner_rounded,
+    label: 'Scan',
+    iconOnly: iconOnly,
+    iconOnlyWidth: iconOnlyWidth,
+    tight: tight,
+  );
 
-  Widget _rapidizerButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
-      _glassQuickAction(
-        key: const Key('open-rapidizer'),
-        onPressed: _openRapidizer,
-        icon: Icons.bolt_rounded,
-        label: 'Rapidizer',
-        iconOnly: iconOnly,
-        iconOnlyWidth: iconOnlyWidth,
-      );
+  Widget _rapidizerButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+    bool tight = false,
+  }) => _glassQuickAction(
+    key: const Key('open-rapidizer'),
+    onPressed: _openRapidizer,
+    icon: Icons.bolt_rounded,
+    label: 'RAPIDIZER',
+    iconOnly: iconOnly,
+    iconOnlyWidth: iconOnlyWidth,
+    tight: tight,
+  );
 
   Widget _filamentColorsButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
+    bool tight = false,
   }) => Tooltip(
     message: 'Search FilamentColors.xyz',
     child: _glassQuickAction(
       key: const Key('open-filament-colors'),
       onPressed: _openFilamentColors,
       icon: Icons.palette_outlined,
+      iconWidget: const _FilamentColorsLogo(size: 24),
       label: 'FilamentColors.xyz',
       iconOnly: iconOnly,
       iconOnlyWidth: iconOnlyWidth,
+      tight: tight,
     ),
   );
 
   Widget _inventoryJsonButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
+    bool tight = false,
   }) => Tooltip(
     message: 'Import inventory items from JSON',
     child: _glassQuickAction(
@@ -14810,6 +15454,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       label: 'JSON',
       iconOnly: iconOnly,
       iconOnlyWidth: iconOnlyWidth,
+      tight: tight,
     ),
   );
 
@@ -15890,19 +16535,72 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _stockroomButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
-      Tooltip(
-        message: 'Locations, shopping, and receiving',
-        child: _glassQuickAction(
-          key: const Key('open-stockroom'),
-          onPressed: _openStockroom,
-          icon: Icons.warehouse_outlined,
-          label: 'Stockroom',
-          iconOnly: iconOnly,
-          iconOffset: const Offset(-2, 0),
-          iconOnlyWidth: iconOnlyWidth,
-        ),
-      );
+  Widget _stockroomButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+    bool tight = false,
+  }) => Tooltip(
+    message: 'Locations, shopping, and receiving',
+    child: _glassQuickAction(
+      key: const Key('open-stockroom'),
+      onPressed: _openStockroom,
+      icon: Icons.warehouse_outlined,
+      label: 'Stockroom',
+      iconOnly: iconOnly,
+      iconOffset: const Offset(-2, 0),
+      iconOnlyWidth: iconOnlyWidth,
+      tight: tight,
+    ),
+  );
+
+  Widget _androidBottomSearchDock() => ValueListenableBuilder<bool>(
+    valueListenable: _inventoryIsScrolling,
+    builder: (context, scrolling, _) => ValueListenableBuilder<double>(
+      valueListenable: _inventoryScrollOffset,
+      builder: (context, offset, _) {
+        final progress = Platform.isAndroid && !scrolling
+            ? ((offset - _mainSearchCollapseStartOffset) /
+                      (_compactHeaderScrollThreshold -
+                          _mainSearchCollapseStartOffset))
+                  .clamp(0.0, 1.0)
+            : 0.0;
+        final dockHeight = ui.lerpDouble(0, 62, progress)!;
+        return ClipRect(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            height: dockHeight,
+            child: Opacity(
+              opacity: progress,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _EdgeLitSearchField(
+                        fieldKey: const Key('bottom-inventory-search'),
+                        controller: inventorySearchController,
+                        focusNode: bottomSearchFocusNode,
+                        compact: true,
+                        enabled: searchGlowEnabled,
+                        onChanged: (value) => setState(() {
+                          query = value;
+                          currentPage = 0;
+                        }),
+                        hintText: 'Search inventory…',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _jumpToTopButton(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 
   Widget _bottomActionBar() {
     return ValueListenableBuilder<bool>(
@@ -15912,156 +16610,175 @@ class _InventoryHomeState extends State<InventoryHome> {
         duration: Duration.zero,
         decoration: _floatingActionBarDecoration(reduceEffects: false),
         clipBehavior: Clip.antiAlias,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Collapse before the longest labels can crowd or clip. The
-            // compact rail is intentionally used through medium desktop
-            // widths, not only at phone sizes.
-            final iconOnly = constraints.maxWidth < 1180;
-            final taper = ((constraints.maxWidth - 760) / (1180 - 760)).clamp(
-              0.0,
-              1.0,
-            );
-            final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
-            final addItem = _glassQuickAction(
-              key: const Key('add-item'),
-              onPressed: currentRole.canCreateInventory ? _addItem : null,
-              icon: Icons.add_rounded,
-              label: 'Add item',
-              iconOnly: iconOnly,
-              iconOnlyWidth: iconOnlyWidth,
-            );
-            final rightActions = <Widget>[
-              _scanButton(iconOnly: iconOnly, iconOnlyWidth: iconOnlyWidth),
-              const SizedBox(width: 12),
-              addItem,
-              const SizedBox(width: 12),
-              _rapidizerButton(
-                iconOnly: iconOnly,
-                iconOnlyWidth: iconOnlyWidth,
-              ),
-              const SizedBox(width: 12),
-              _filamentColorsButton(
-                iconOnly: iconOnly,
-                iconOnlyWidth: iconOnlyWidth,
-              ),
-              const SizedBox(width: 12),
-              _inventoryJsonButton(
-                iconOnly: iconOnly,
-                iconOnlyWidth: iconOnlyWidth,
-              ),
-            ];
-            if (iconOnly) {
-              final fittedIconWidth = math.min(
-                iconOnlyWidth,
-                // Reserve the same 14 px outer inset used by the expanded
-                // bar, plus the compact gaps between its seven actions.
-                math.max(36.0, (constraints.maxWidth - 48) / 7),
-              );
-              final compactAddItem = _glassQuickAction(
-                key: const Key('add-item'),
-                onPressed: currentRole.canCreateInventory ? _addItem : null,
-                icon: Icons.add_rounded,
-                label: 'Add item',
-                iconOnly: true,
-                iconOnlyWidth: fittedIconWidth,
-              );
-              return Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 7,
-                ),
-                child: SizedBox(
-                  height: 44,
-                  child: Row(
-                    key: const Key('compact-bottom-action-group'),
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _androidBottomSearchDock(),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Collapse before the longest labels can crowd or clip. The
+                // compact rail is intentionally used through medium desktop
+                // widths, not only at phone sizes.
+                final tightDesktop = Platform.isLinux || Platform.isWindows;
+                final iconOnly = constraints.maxWidth < 1180;
+                final taper = ((constraints.maxWidth - 760) / (1180 - 760))
+                    .clamp(0.0, 1.0);
+                final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
+                final addItem = _glassQuickAction(
+                  key: const Key('add-item'),
+                  onPressed: currentRole.canCreateInventory ? _addItem : null,
+                  icon: Icons.add_rounded,
+                  label: 'Add item',
+                  iconOnly: iconOnly,
+                  iconOnlyWidth: iconOnlyWidth,
+                  tight: tightDesktop,
+                );
+                final rightActions = <Widget>[
+                  _scanButton(
+                    iconOnly: iconOnly,
+                    iconOnlyWidth: iconOnlyWidth,
+                    tight: tightDesktop,
+                  ),
+                  const SizedBox(width: 12),
+                  addItem,
+                  const SizedBox(width: 12),
+                  _rapidizerButton(
+                    iconOnly: iconOnly,
+                    iconOnlyWidth: iconOnlyWidth,
+                    tight: tightDesktop,
+                  ),
+                  const SizedBox(width: 12),
+                  _filamentColorsButton(
+                    iconOnly: iconOnly,
+                    iconOnlyWidth: iconOnlyWidth,
+                    tight: tightDesktop,
+                  ),
+                  const SizedBox(width: 12),
+                  _inventoryJsonButton(
+                    iconOnly: iconOnly,
+                    iconOnlyWidth: iconOnlyWidth,
+                    tight: tightDesktop,
+                  ),
+                ];
+                if (iconOnly) {
+                  final fittedIconWidth = math.min(
+                    iconOnlyWidth,
+                    // Reserve the same 14 px outer inset used by the expanded
+                    // bar, plus the compact gaps between its seven actions.
+                    math.max(36.0, (constraints.maxWidth - 48) / 7),
+                  );
+                  final compactAddItem = _glassQuickAction(
+                    key: const Key('add-item'),
+                    onPressed: currentRole.canCreateInventory ? _addItem : null,
+                    icon: Icons.add_rounded,
+                    label: 'Add item',
+                    iconOnly: true,
+                    iconOnlyWidth: fittedIconWidth,
+                  );
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 7,
+                    ),
+                    child: SizedBox(
+                      height: 44,
+                      child: Row(
+                        key: const Key('compact-bottom-action-group'),
                         children: [
-                          _catalogButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _catalogButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                              const SizedBox(width: 4),
+                              _stockroomButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 4),
-                          _stockroomButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
+                          const Spacer(),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _scanButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                              const SizedBox(width: 4),
+                              compactAddItem,
+                              const SizedBox(width: 4),
+                              _rapidizerButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                              const SizedBox(width: 4),
+                              _filamentColorsButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                              const SizedBox(width: 4),
+                              _inventoryJsonButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                      const Spacer(),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _scanButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
+                    ),
+                  );
+                }
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      _catalogButton(tight: tightDesktop),
+                      const SizedBox(width: 12),
+                      _stockroomButton(tight: tightDesktop),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            reverse: false,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: rightActions,
+                            ),
                           ),
-                          const SizedBox(width: 4),
-                          compactAddItem,
-                          const SizedBox(width: 4),
-                          _rapidizerButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
-                          ),
-                          const SizedBox(width: 4),
-                          _filamentColorsButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
-                          ),
-                          const SizedBox(width: 4),
-                          _inventoryJsonButton(
-                            iconOnly: true,
-                            iconOnlyWidth: fittedIconWidth,
-                          ),
-                        ],
+                        ),
                       ),
                     ],
                   ),
-                ),
-              );
-            }
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Row(
-                children: [
-                  _catalogButton(),
-                  const SizedBox(width: 12),
-                  _stockroomButton(),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        reverse: false,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: rightActions,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ],
         ),
       ),
-      builder: (context, scrolling, child) => SafeArea(
-        key: const Key('bottom-quick-actions'),
-        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-        child: IgnorePointer(
-          ignoring: scrolling,
-          child: AnimatedOpacity(
-            key: const Key('bottom-action-visibility'),
-            duration: Duration.zero,
-            opacity: scrolling ? 0 : 1,
-            child: child,
+      builder: (context, scrolling, child) {
+        final hideForScroll = scrolling;
+        return SafeArea(
+          key: const Key('bottom-quick-actions'),
+          minimum: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: IgnorePointer(
+            ignoring: hideForScroll,
+            child: AnimatedOpacity(
+              key: const Key('bottom-action-visibility'),
+              duration: const Duration(milliseconds: 180),
+              opacity: hideForScroll ? 0 : 1,
+              child: child,
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -16307,105 +17024,227 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _catalogButton({bool iconOnly = false, double iconOnlyWidth = 48}) =>
-      _glassQuickAction(
-        key: const Key('open-catalog'),
-        onPressed: currentRole.canManageCatalog ? _openCatalog : null,
-        icon: Icons.category_outlined,
-        label: 'Catalog',
-        iconOnly: iconOnly,
-        iconOnlyWidth: iconOnlyWidth,
-      );
-
-  Widget _viewToggle() => SegmentedButton<bool>(
-    key: const Key('inventory-view-toggle'),
-    style: ButtonStyle(
-      backgroundColor: WidgetStatePropertyAll(
-        Theme.of(context).colorScheme.surface,
-      ),
-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-      foregroundColor: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.disabled)
-            ? const Color(0xff6f7180)
-            : states.contains(WidgetState.selected)
-            ? Theme.of(context).colorScheme.primary
-            : Theme.of(context).colorScheme.onSurface,
-      ),
-      side: WidgetStatePropertyAll(
-        BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      shape: WidgetStatePropertyAll(
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      padding: const WidgetStatePropertyAll(
-        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      ),
-    ),
-    segments: const [
-      ButtonSegment(
-        value: false,
-        icon: Icon(Icons.view_agenda_outlined),
-        tooltip: 'List view',
-      ),
-      ButtonSegment(
-        value: true,
-        icon: Icon(Icons.grid_view_rounded),
-        tooltip: 'Grid view',
-      ),
-    ],
-    selected: {gridView},
-    showSelectedIcon: false,
-    onSelectionChanged: (value) => setState(() => gridView = value.first),
+  Widget _catalogButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+    bool tight = false,
+  }) => _glassQuickAction(
+    key: const Key('open-catalog'),
+    onPressed: currentRole.canManageCatalog ? _openCatalog : null,
+    icon: Icons.category_outlined,
+    label: 'Catalog',
+    iconOnly: iconOnly,
+    iconOnlyWidth: iconOnlyWidth,
+    tight: tight,
   );
 
-  Widget _viewOptions() => Row(
+  Widget _viewToggle() {
+    Widget passthroughButtonLayer(
+      BuildContext context,
+      Set<WidgetState> states,
+      Widget? child,
+    ) => child ?? const SizedBox.shrink();
+
+    return SegmentedButton<bool>(
+      key: const Key('inventory-view-toggle'),
+      style: ButtonStyle(
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            final palette =
+                Theme.of(context).extension<InventorinatorColors>() ??
+                InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+            return palette.base.withValues(alpha: .58);
+          }
+          return Colors.transparent;
+        }),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+        backgroundBuilder: passthroughButtonLayer,
+        foregroundColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.disabled)) {
+            return const Color(0xff6f7180);
+          }
+          final palette =
+              Theme.of(context).extension<InventorinatorColors>() ??
+              InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+          return states.contains(WidgetState.selected)
+              ? palette.accent
+              : Theme.of(context).colorScheme.onSurfaceVariant;
+        }),
+        side: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            final palette =
+                Theme.of(context).extension<InventorinatorColors>() ??
+                InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+            return BorderSide(color: palette.rim.withValues(alpha: .78));
+          }
+          return BorderSide.none;
+        }),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+        ),
+        minimumSize: const WidgetStatePropertyAll(
+          Size(0, _inventorySquareControlSize),
+        ),
+        maximumSize: const WidgetStatePropertyAll(
+          Size(double.infinity, _inventorySquareControlSize),
+        ),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.standard,
+      ),
+      segments: const [
+        ButtonSegment(
+          value: false,
+          icon: Icon(Icons.view_agenda_outlined),
+          tooltip: 'List view',
+        ),
+        ButtonSegment(
+          value: true,
+          icon: Icon(Icons.grid_view_rounded),
+          tooltip: 'Grid view',
+        ),
+      ],
+      // Force both icon-only segments to share the control width evenly so
+      // their glyphs stay centered instead of falling back to intrinsic-size
+      // placement inside the glass shell.
+      expandedInsets: EdgeInsets.zero,
+      selected: {gridView},
+      showSelectedIcon: false,
+      onSelectionChanged: (value) => setState(() => gridView = value.first),
+    );
+  }
+
+  Widget _viewOptionsControls({double gap = 60}) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      _viewToggle(),
-      const SizedBox(width: 8),
+      SizedBox(
+        width: _inventorySquareControlSize * 2 + 4,
+        height: _inventorySquareControlSize,
+        child: _GlassFilterChip(
+          selected: false,
+          child: SizedBox.expand(child: _viewToggle()),
+        ),
+      ),
+      SizedBox(width: gap),
       Tooltip(
         message: hideZeroQuantityItems
             ? 'Show zero-quantity items'
             : 'Hide zero-quantity items',
-        child: IconButton(
-          key: const Key('hide-zero-quantity-items'),
-          isSelected: hideZeroQuantityItems,
-          onPressed: catalogFilter != null
-              ? null
-              : () {
-                  setState(() {
-                    hideZeroQuantityItems = !hideZeroQuantityItems;
-                    currentPage = 0;
-                  });
-                  widget.database?.saveBoolPreference(
-                    'hide_zero_quantity_items',
-                    hideZeroQuantityItems,
-                  );
-                },
-          icon: const Icon(Icons.visibility_outlined),
-          selectedIcon: const Icon(Icons.visibility_off_outlined),
-          style: ButtonStyle(
-            minimumSize: const WidgetStatePropertyAll(
-              Size(_inventorySquareControlSize, _inventorySquareControlSize),
-            ),
-            maximumSize: const WidgetStatePropertyAll(
-              Size(_inventorySquareControlSize, _inventorySquareControlSize),
-            ),
-            backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
-            overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-            foregroundColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.disabled)
-                  ? const Color(0xff6f7180)
-                  : Theme.of(context).colorScheme.onSurface,
-            ),
-            side: const WidgetStatePropertyAll(BorderSide.none),
-            shape: WidgetStatePropertyAll(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        child: SizedBox.square(
+          dimension: _inventorySquareControlSize,
+          child: _GlassFilterChip(
+            selected: hideZeroQuantityItems,
+            child: SizedBox.expand(
+              child: IconButton(
+                key: const Key('hide-zero-quantity-items'),
+                isSelected: hideZeroQuantityItems,
+                onPressed: catalogFilter != null
+                    ? null
+                    : () {
+                        setState(() {
+                          hideZeroQuantityItems = !hideZeroQuantityItems;
+                          currentPage = 0;
+                        });
+                        widget.database?.saveBoolPreference(
+                          'hide_zero_quantity_items',
+                          hideZeroQuantityItems,
+                        );
+                      },
+                icon: const Icon(Icons.visibility_outlined),
+                selectedIcon: const Icon(Icons.visibility_off_outlined),
+                padding: EdgeInsets.zero,
+                style: ButtonStyle(
+                  minimumSize: const WidgetStatePropertyAll(
+                    Size(
+                      _inventorySquareControlSize,
+                      _inventorySquareControlSize,
+                    ),
+                  ),
+                  maximumSize: const WidgetStatePropertyAll(
+                    Size(
+                      _inventorySquareControlSize,
+                      _inventorySquareControlSize,
+                    ),
+                  ),
+                  backgroundColor: const WidgetStatePropertyAll(
+                    Colors.transparent,
+                  ),
+                  backgroundBuilder: (context, states, child) =>
+                      child ?? const SizedBox.shrink(),
+                  overlayColor: const WidgetStatePropertyAll(
+                    Colors.transparent,
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.disabled)) {
+                      return const Color(0xff6f7180);
+                    }
+                    final palette =
+                        Theme.of(context).extension<InventorinatorColors>() ??
+                        InventorinatorColors.palettes[AppColorTheme
+                            .darkPurple]!;
+                    return states.contains(WidgetState.selected)
+                        ? palette.accent
+                        : Theme.of(context).colorScheme.onSurfaceVariant;
+                  }),
+                  side: const WidgetStatePropertyAll(BorderSide.none),
+                  shape: WidgetStatePropertyAll(
+                    RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
       ),
     ],
+  );
+
+  Widget _viewOptions({double gap = 60}) => SizedBox(
+    width: _inventorySquareControlSize * 2 + 4 + gap + 72,
+    child: Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 20),
+          child: _viewOptionsControls(gap: gap),
+        ),
+        const Positioned(
+          left: 0,
+          top: 0,
+          width: _inventorySquareControlSize * 2 + 4,
+          child: Text(
+            'View',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xffa7adbd),
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Positioned(
+          left: _inventorySquareControlSize * 2 + 4 + gap - 16,
+          top: 0,
+          width: 72,
+          child: Text(
+            'Hide Zeroes',
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.visible,
+            style: TextStyle(
+              color: Color(0xffa7adbd),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    ),
   );
 
   String get _activeTypeFilterLabel {
@@ -16422,6 +17261,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       return filamentMaterialFilter == _unspecifiedMaterialKey
           ? 'Material · Unspecified material'
           : 'Material · ${filamentMaterialFilter!}';
+    }
+    if (filamentPurposeTagFilter != null) {
+      return 'Tag · ${filamentPurposeTagFilter!}';
     }
     if (itemColorFilter != null) {
       if (itemColorFilter == _unspecifiedItemColorKey) {
@@ -16460,6 +17302,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     if (filamentMaterialFilter != null) {
       return const Icon(Icons.layers_outlined, size: 20);
+    }
+    if (filamentPurposeTagFilter != null) {
+      return const Icon(Icons.sell_outlined, size: 20);
     }
     if (itemColorFilter != null) {
       return const Icon(Icons.palette_outlined, size: 20);
@@ -16999,10 +17844,33 @@ class _InventoryHomeState extends State<InventoryHome> {
                   runSpacing: 8,
                   children: [
                     _typeChip(null, 'Everything'),
+                    for (final tag in availableFilamentPurposeTags)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _GlassFilterChip(
+                          selected: filamentPurposeTagFilter == tag,
+                          minHeight: 48,
+                          child: FilterChip(
+                            key: Key(
+                              'purpose-tag-filter-${tag.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
+                            ),
+                            avatar: const Icon(Icons.sell_outlined, size: 17),
+                            label: Text(tag),
+                            selected: filamentPurposeTagFilter == tag,
+                            onSelected: (_) => _setPurposeTagFilter(
+                              filamentPurposeTagFilter == tag ? null : tag,
+                            ),
+                            backgroundColor: Colors.transparent,
+                            selectedColor: Colors.transparent,
+                            side: BorderSide.none,
+                          ),
+                        ),
+                      ),
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: _GlassFilterChip(
                         selected: archivedOnly,
+                        minHeight: 48,
                         child: FilterChip(
                           key: const Key('archived-view'),
                           avatar: const Icon(Icons.archive_outlined, size: 18),
@@ -17016,6 +17884,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                               itemColorFilter = null;
                               filamentMaterialFilter = null;
                               filamentBrandFilter = null;
+                              filamentPurposeTagFilter = null;
                               if (selected) {
                                 type = null;
                                 customTypeFilterId = null;
@@ -17099,6 +17968,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         'color': itemColorFilter,
         'material': filamentMaterialFilter,
         'brand': filamentBrandFilter,
+        'purposeTag': filamentPurposeTagFilter,
       }),
     );
   }
@@ -17122,6 +17992,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final savedColor = value(saved['color']);
       final savedMaterial = value(saved['material']);
       final savedBrand = value(saved['brand']);
+      final savedPurposeTag = value(saved['purposeTag']);
       archivedOnly = savedArchived;
       catalogFilter = savedCatalog == null
           ? null
@@ -17153,6 +18024,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       itemColorFilter = savedColor;
       filamentMaterialFilter = savedMaterial;
       filamentBrandFilter = savedBrand;
+      filamentPurposeTagFilter = savedPurposeTag;
 
       if (catalogFilter != null || archivedOnly) {
         type = null;
@@ -17160,15 +18032,18 @@ class _InventoryHomeState extends State<InventoryHome> {
         itemColorFilter = null;
         filamentMaterialFilter = null;
         filamentBrandFilter = null;
+        filamentPurposeTagFilter = null;
       } else if (customTypeFilterId != null) {
         type = InventoryType.custom;
         itemColorFilter = null;
         filamentMaterialFilter = null;
         filamentBrandFilter = null;
+        filamentPurposeTagFilter = null;
       } else if (type == null &&
           (itemColorFilter != null ||
               filamentMaterialFilter != null ||
-              filamentBrandFilter != null)) {
+              filamentBrandFilter != null ||
+              filamentPurposeTagFilter != null)) {
         type = InventoryType.filament;
       }
     } catch (_) {
@@ -17184,6 +18059,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       catalogFilter = null;
       itemColorFilter = null;
       filamentBrandFilter = null;
+      filamentPurposeTagFilter = null;
       if (material != null) {
         type = InventoryType.filament;
         customTypeFilterId = null;
@@ -17202,6 +18078,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       catalogFilter = null;
       filamentMaterialFilter = null;
       filamentBrandFilter = null;
+      filamentPurposeTagFilter = null;
       if (color != null) {
         type = InventoryType.filament;
         customTypeFilterId = null;
@@ -17221,7 +18098,27 @@ class _InventoryHomeState extends State<InventoryHome> {
       catalogFilter = null;
       itemColorFilter = null;
       filamentMaterialFilter = null;
+      filamentPurposeTagFilter = null;
       if (brand != null) {
+        type = InventoryType.filament;
+        customTypeFilterId = null;
+      }
+      archivedOnly = false;
+      currentPage = 0;
+    });
+    _saveInventoryTypeFilter();
+    _scrollToFilteredResults();
+  }
+
+  void _setPurposeTagFilter(String? tag) {
+    _collapseTypePanel();
+    setState(() {
+      filamentPurposeTagFilter = tag;
+      catalogFilter = null;
+      itemColorFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
+      if (tag != null) {
         type = InventoryType.filament;
         customTypeFilterId = null;
       }
@@ -17240,6 +18137,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           type == value &&
           customTypeFilterId == null &&
           (value != null || !archivedOnly),
+      minHeight: 48,
       child: FilterChip(
         key: Key('type-filter-${value?.name ?? 'everything'}'),
         avatar: value == null
@@ -17264,6 +18162,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             itemColorFilter = null;
             filamentMaterialFilter = null;
             filamentBrandFilter = null;
+            filamentPurposeTagFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -17285,6 +18184,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           catalogFilter == null &&
           type == InventoryType.custom &&
           customTypeFilterId == customType.id,
+      minHeight: 48,
       child: FilterChip(
         key: Key('custom-type-filter-${customType.id}'),
         avatar: _typeIconVisual(
@@ -17306,6 +18206,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             itemColorFilter = null;
             filamentMaterialFilter = null;
             filamentBrandFilter = null;
+            filamentPurposeTagFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -17328,6 +18229,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     padding: const EdgeInsets.only(right: 8),
     child: _GlassFilterChip(
       selected: catalogFilter == value,
+      minHeight: 48,
       child: FilterChip(
         key: Key('catalog-filter-${value.name}'),
         avatar: _typeIconVisual(
@@ -17346,6 +18248,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             itemColorFilter = null;
             filamentMaterialFilter = null;
             filamentBrandFilter = null;
+            filamentPurposeTagFilter = null;
             archivedOnly = false;
             currentPage = 0;
           });
@@ -23910,6 +24813,16 @@ ImportedProductColor? extractProductColorMetadata(
 
   inspect(product);
   final document = html_parser.parse(sourceHtml);
+  // Polymaker exposes the selected variant's swatch as visible copy such as
+  // "HEX Code: #0A0A0A" rather than a JSON-LD property or data attribute.
+  // Read the labeled value before falling back to less specific page markup.
+  final labeledHex = RegExp(
+    r'\b(?:color|colour)?\s*hex(?:adecimal)?(?:\s*(?:code|value))?\s*(?:[:=\-]\s*|\s+)#?([0-9a-f]{3}|[0-9a-f]{6})(?![0-9a-f])',
+    caseSensitive: false,
+  ).firstMatch(document.body?.text ?? sourceHtml);
+  if (labeledHex != null && hex.isEmpty) {
+    hex = normalizedHex('#${labeledHex.group(1)!}');
+  }
   for (final element in document.querySelectorAll(
     'meta[property="product:color"], [data-color], [data-colour], [data-color-hex], [data-hex]',
   )) {
@@ -25191,7 +26104,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             child: OutlinedButton.icon(
                               key: const Key('search-filament-colors'),
                               onPressed: _searchFilamentColors,
-                              icon: const Icon(Icons.travel_explore_rounded),
+                              icon: const _FilamentColorsLogo(size: 24),
                               label: const Text('Search FilamentColors.xyz'),
                             ),
                           ),
@@ -26588,33 +27501,47 @@ class _AddItemDialogState extends State<AddItemDialog> {
           sourceHtml = product?['description']?.toString() ?? '';
         }
       }
-      if (product == null) {
-        final response = await _politeProductGet(
-          uri,
-          headers: const {
-            'User-Agent': 'Inventorinator/1.1 (+https://github.com/DavidThePurple/Inventorinator)',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-        );
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw Exception('page returned HTTP ${response.statusCode}');
-        }
-        if (response.bodyBytes.length > _maximumProductPageBytes) {
-          throw Exception('product page is larger than 8 MB');
-        }
-        sourceHtml = response.body;
-        final pageDocument = html_parser.parse(sourceHtml);
-        for (final script in pageDocument.querySelectorAll(
-          'script[type="application/ld+json"]',
-        )) {
-          try {
-            product ??= _findProductJson(jsonDecode(script.text));
-          } catch (_) {
-            // Some sites include malformed analytics JSON-LD; keep looking.
+      // Shopify's lightweight endpoint does not include the visible variant
+      // label (Polymaker puts the value in copy such as "HEX Code: #...").
+      // Keep using the endpoint for structured data, but also read the page
+      // HTML whenever it is available so those labels are not lost.
+      if (product == null || shopifyEndpoint != null) {
+        try {
+          final response = await _politeProductGet(
+            uri,
+            headers: const {
+              'User-Agent': 'Inventorinator/1.1 (+https://github.com/DavidThePurple/Inventorinator)',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          );
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            if (product == null) {
+              throw Exception('page returned HTTP ${response.statusCode}');
+            }
+          } else if (response.bodyBytes.length > _maximumProductPageBytes) {
+            if (product == null) {
+              throw Exception('product page is larger than 8 MB');
+            }
+          } else {
+            sourceHtml = response.body;
+            final pageDocument = html_parser.parse(sourceHtml);
+            for (final script in pageDocument.querySelectorAll(
+              'script[type="application/ld+json"]',
+            )) {
+              try {
+                product ??= _findProductJson(jsonDecode(script.text));
+              } catch (_) {
+                // Some sites include malformed analytics JSON-LD; keep looking.
+              }
+            }
+            product ??= extractFallbackProductMetadata(sourceHtml, uri);
           }
+        } catch (_) {
+          // The lightweight Shopify record is still useful if the full page
+          // is unavailable; only a non-Shopify import needs the page to work.
+          if (product == null) rethrow;
         }
-        product ??= extractFallbackProductMetadata(sourceHtml, uri);
       }
       if (product == null) {
         throw Exception('this page does not expose structured product details');
@@ -26686,9 +27613,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
       final template = detectFilamentTemplate(
         '$productName\n${description ?? ''}\n${document.body?.text ?? ''}',
       );
-      final importedColor = template == null
-          ? null
-          : extractProductColorMetadata(product, sourceHtml);
+      final importedColor = extractProductColorMetadata(product, sourceHtml);
       final instructions = applyFilamentFallbacks(
         extractedInstructions,
         template,
@@ -27832,7 +28757,11 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
   void _save() {
     final used = double.tryParse(usedController.text.trim());
     final waste = double.tryParse(wasteController.text.trim());
-    if (used == null || used < 0 || waste == null || waste < 0 || used + waste <= 0) {
+    if (used == null ||
+        used < 0 ||
+        waste == null ||
+        waste < 0 ||
+        used + waste <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Enter a positive gram amount.')),
       );
@@ -27898,13 +28827,17 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
           const SizedBox(height: 12),
           TextField(
             controller: projectController,
-            decoration: const InputDecoration(labelText: 'Project / build (optional)'),
+            decoration: const InputDecoration(
+              labelText: 'Project / build (optional)',
+            ),
           ),
           if (outcome == SpoolPrintOutcome.failed) ...[
             const SizedBox(height: 12),
             TextField(
               controller: reasonController,
-              decoration: const InputDecoration(labelText: 'Waste reason (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Waste reason (optional)',
+              ),
             ),
           ],
           const SizedBox(height: 12),
@@ -27917,7 +28850,10 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
       ),
     ),
     actions: [
-      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
       FilledButton(onPressed: _save, child: const Text('Save usage')),
     ],
   );
@@ -28415,12 +29351,14 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   }
 
   List<Widget> _spoolUsageContent() {
-    final entries = widget.spoolUsage
-        .where((entry) => entry.spoolId == item.id)
-        .toList()
-      ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    final entries =
+        widget.spoolUsage.where((entry) => entry.spoolId == item.id).toList()
+          ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
     final used = entries.fold<double>(0, (sum, entry) => sum + entry.gramsUsed);
-    final waste = entries.fold<double>(0, (sum, entry) => sum + entry.gramsWaste);
+    final waste = entries.fold<double>(
+      0,
+      (sum, entry) => sum + entry.gramsWaste,
+    );
     final nominal = widget.spoolTypes
         .where((spool) => spool.id == item.spoolTypeId)
         .firstOrNull
@@ -28461,31 +29399,33 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
           ),
         )
       else
-        ...entries.take(8).map(
-          (entry) => ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: Icon(
-              entry.outcome == SpoolPrintOutcome.successful
-                  ? Icons.check_circle_outline_rounded
-                  : Icons.error_outline_rounded,
-              color: entry.outcome == SpoolPrintOutcome.successful
-                  ? const Color(0xff45d2bd)
-                  : const Color(0xffff8f8f),
+        ...entries
+            .take(8)
+            .map(
+              (entry) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: Icon(
+                  entry.outcome == SpoolPrintOutcome.successful
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.error_outline_rounded,
+                  color: entry.outcome == SpoolPrintOutcome.successful
+                      ? const Color(0xff45d2bd)
+                      : const Color(0xffff8f8f),
+                ),
+                title: Text(
+                  '${entry.outcome == SpoolPrintOutcome.successful ? 'Successful' : 'Failed'} · ${entry.gramsUsed.toStringAsFixed(1)} g used · ${entry.gramsWaste.toStringAsFixed(1)} g waste',
+                ),
+                subtitle: Text(
+                  [
+                    if (entry.project.trim().isNotEmpty) entry.project.trim(),
+                    if (entry.wasteReason.trim().isNotEmpty)
+                      'Waste: ${entry.wasteReason.trim()}',
+                    entry.recordedAt.toLocal().toString().split('.').first,
+                  ].join(' · '),
+                ),
+              ),
             ),
-            title: Text(
-              '${entry.outcome == SpoolPrintOutcome.successful ? 'Successful' : 'Failed'} · ${entry.gramsUsed.toStringAsFixed(1)} g used · ${entry.gramsWaste.toStringAsFixed(1)} g waste',
-            ),
-            subtitle: Text(
-              [
-                if (entry.project.trim().isNotEmpty) entry.project.trim(),
-                if (entry.wasteReason.trim().isNotEmpty)
-                  'Waste: ${entry.wasteReason.trim()}',
-                entry.recordedAt.toLocal().toString().split('.').first,
-              ].join(' · '),
-            ),
-          ),
-        ),
     ];
   }
 
@@ -30999,14 +31939,19 @@ class _CardPhotoBackground extends StatelessWidget {
           : requestedWidth <= 960
           ? 960
           : 1200;
-      return Image.memory(
-        bytes,
+      // Paint the photo onto the Card's Material ink layer. InkWell hover,
+      // focus, highlight, and splash features are then composited above the
+      // photo instead of being hidden underneath an opaque Image widget.
+      return Ink(
         key: imageKey,
-        fit: BoxFit.cover,
-        cacheWidth: cacheWidth,
-        filterQuality: FilterQuality.medium,
-        gaplessPlayback: true,
-        errorBuilder: (_, _, _) => const ColoredBox(color: Color(0xff1a1525)),
+        decoration: BoxDecoration(
+          image: DecorationImage(
+            image: ResizeImage(MemoryImage(bytes), width: cacheWidth),
+            fit: BoxFit.cover,
+            filterQuality: FilterQuality.medium,
+            onError: (_, _) {},
+          ),
+        ),
       );
     },
   );
@@ -31096,13 +32041,13 @@ class InventoryCard extends StatelessWidget {
       child: InkWell(
         onTap: onOpen,
         hoverColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .12),
+            .withValues(alpha: .28),
         focusColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .12),
+            .withValues(alpha: .22),
         highlightColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .17),
+            .withValues(alpha: .3),
         splashColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .17),
+            .withValues(alpha: .26),
         child: ItemCardEffects(
           itemId: item.id,
           quantitySyncVersion: quantitySyncVersion,
@@ -31568,13 +32513,13 @@ class InventoryRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(22),
         onTap: onOpen,
         hoverColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .12),
+            .withValues(alpha: .28),
         focusColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .12),
+            .withValues(alpha: .22),
         highlightColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .17),
+            .withValues(alpha: .3),
         splashColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .17),
+            .withValues(alpha: .26),
         child: ItemCardEffects(
           itemId: item.id,
           quantitySyncVersion: quantitySyncVersion,

@@ -4,12 +4,12 @@
 
 ### State-safe delayed writes
 
-Implementation status: complete for the current edit paths in build 8. Normal persistence now
+Implementation status: mostly complete in build 9 for the current edit paths. Normal persistence now
 uses a per-entity outbox with changed-field patches and tombstones. Explicit
 local revisions protect newer edits from stale acknowledgements, incoming
 records merge field-by-field against pending local fields, and conflicts are
 recorded instead of silently replacing the local value. Build 7 added an
-end-to-end delayed create/status race test; build 8 expands that coverage to
+end-to-end delayed create/status race test; build 9 expands that coverage to
 location, lifecycle, and item-detail edits.
 
 - Treat eliminating local-state rollback after a save or Remote Sync response as
@@ -32,10 +32,13 @@ location, lifecycle, and item-detail edits.
   sync waits for that queue before reading or uploading. Keep extending the
   race suite as new edit fields are added. A dedicated isolate is optional and
   should only be introduced if profiling shows the queue still affects frames.
+- Remaining v0.2 work is verification and coverage: exercise every edit path,
+  prove incoming records never erase newer local fields, and finish the
+  event-driven sync scheduler so idle screens do not poll or rebuild inventory.
 
 ### Detailed personalization, notifications, and sound
 
-Implementation status: substantially complete in build 8. Per-device master
+Implementation status: substantially complete in build 9. Per-device master
 mute, sound style, volume, preview, recurrence, and independent Remote-addition,
 drying-complete, and moisture-threshold chime controls are available together
 in Personalization. Card, low-stock, moisture, and Remote Sync visual effects
@@ -48,7 +51,7 @@ can also be disabled independently per device without changing inventory data.
   (low stock is independently switchable today; sound events are independently
   switchable for moisture, drying, and Remote Sync).
 - Add per-alert sound profiles when multiple chime families are available;
-  build 8 provides a shared profile, preview, volume, recurrence, and silence
+  build 9 provides a shared profile, preview, volume, recurrence, and silence
   controls while retaining visual notifications.
 - Keep notification, sound, and appearance preferences per device unless the
   user explicitly chooses a shared behavior.
@@ -56,7 +59,7 @@ can also be disabled independently per device without changing inventory data.
 ### Spool usage controls
 
 Implementation status: initial gram-based print usage and waste tracking is
-available in build 8 through each filament item's details panel. Remaining
+available in build 9 through each filament item's details panel. Remaining
 spool adjustments, transfers, and printer attribution still need completion.
 
 - Treat grams as the canonical filament amount and record spool consumption
@@ -74,10 +77,12 @@ spool adjustments, transfers, and printer attribution still need completion.
   rewriting the spool's audit trail.
 - Make low-material and moisture behavior work from the remaining spool amount.
 
-### Multi-color filament support
+### Multi-color filament support (deferred)
 
-Implementation status: in progress. URL import now recognizes explicit color
-names and hexadecimal swatches from structured product data and product pages.
+Implementation status: shelved for a later roadmap pass. Build 7/9 provide
+gradient/coextruded data entry and initial color import, but the complete model
+needs more design work before it should be a release target. Keep these
+requirements parked rather than expanding this area during v0.2.
 
 - Allow one filament item or spool to contain multiple named colors rather than
   forcing it into a single color field.
@@ -93,11 +98,16 @@ names and hexadecimal swatches from structured product data and product pages.
   retaining the original vendor color name and code.
 - Add import review when a page exposes conflicting product-level and
   variant-level colors instead of silently choosing the wrong value.
+- Future investigation: HueForge-style light-dispersion/translucency metadata
+  (working TLD terminology still to be confirmed) should be designed with the
+  multi-color model, not bolted onto the single-color field.
 
 ### Filament purpose and property tags
 
-Implementation status: in progress. Filament purpose tags can now be edited,
-saved, searched, and displayed on item cards and details.
+Implementation status: base label support is present in build 9, but proper
+filament-tag implementation is still outstanding. Tags can be edited, saved,
+searched, and displayed on item cards and details; they are not yet a complete,
+reviewable filter and provenance system.
 
 - Add visible, filterable filament tags for construction, intended use, print
   role, handling priority, and verified material properties.
@@ -117,7 +127,18 @@ saved, searched, and displayed on item cards and details.
 - Support tag-based search, filters, metrics, purchasing, and spool-selection
   guidance without treating tags as safety certifications.
 
+In practical terms, users should be able to filter to “Use first” or “Support
+only,” see why a tag was applied, and distinguish a manufacturer claim from a
+user note. Imports may suggest tags, but engineering or performance claims must
+stay reviewable and must never be presented as a certification. “Carbon-fiber
+appearance” and verified carbon-fiber composite remain separate values.
+
 ### Filterable item metrics
+
+Implementation status: partial. The current Metrics panel provides inventory
+counts, low-stock counts, filament material/color/brand buckets, and tap-through
+filters. The full historical metrics view is still outstanding; the remaining
+items below are release work, not optional polish.
 
 - Add an item metrics view covering quantity, value, consumption, low stock,
   moisture, age, and inventory movement.
@@ -172,9 +193,12 @@ Implementation status: complete in the current v0.2 development branch.
 
 ### Windows camera compatibility and recovery
 
-- Investigate the front-facing camera on the ROG Flow Z13 Kojima Edition
-  (`z13-kjp`), where Inventorinator can claim or activate the camera without
-  displaying a preview even though other applications can open it normally.
+Implementation status: verified in build 10. The Z13-KJP front and rear
+cameras work, and XREAL integration has been verified. Keep the diagnostics and
+recovery requirements below as regression coverage for future camera changes.
+
+- Retain the verified ROG Flow Z13 Kojima Edition (`z13-kjp`) front/rear and
+  XREAL workflows as camera regression cases.
 - Record camera enumeration, selected device ID, supported formats, negotiated
   resolution/frame rate, initialization state, and native backend errors in a
   user-readable diagnostic view.
@@ -182,8 +206,30 @@ Implementation status: complete in the current v0.2 development branch.
   permission changes, and recovery after a failed initialization.
 - Add a bounded initialization timeout that releases the camera and offers a
   retry or alternate format instead of leaving it apparently busy.
-- Verify the fix on `z13-kjp` hardware and retain regression coverage for the
-  existing Windows camera selector.
+- Retain regression coverage for the existing Windows camera selector and the
+  verified `z13-kjp` workflows.
+
+Hardware regression testing means rerunning the camera workflow on the actual
+Z13-KJP and at least one known-good Windows camera after each camera/backend
+change: enumerate devices, switch front/rear, open and close the scanner,
+recover from permission or initialization failure, suspend/resume the app, and
+confirm that preview and capture still work. This is separate from a successful
+compile or simulated test; it catches device-specific drivers, formats, and
+camera-claim regressions.
+
+### Print-ready PDF lists
+
+Implementation status: not started. This must land before external attachment
+storage so users have printable, portable shopping and kit lists first.
+
+- Generate a print-ready PDF shopping list with item names, quantities, units,
+  optional locations, notes, and checkboxes.
+- Generate a print-ready PDF kit list with kit metadata, buildable quantity,
+  parts, quantities, and shortage state.
+- Keep generation local and non-blocking, with predictable pagination and
+  readable desktop/Android output.
+- Offer preview, save, share, and print without requiring Remote Sync or a
+  storage provider.
 
 ### Printed-part model attachments
 
@@ -201,3 +247,15 @@ Implementation status: complete in the current v0.2 development branch.
   replace inventory synchronization, roles, audit history, or conflict rules.
 - Add offline transfer state, checksum verification, retry handling, and clear
   local-only/remote-available indicators before enabling shared attachments.
+
+## v2.0 (planned)
+
+### Multiple sync profiles and separate local inventories
+
+- Keep multiple named Remote Sync profiles on one device.
+- Allow a separate local inventory alongside each shared workspace instead of
+  forcing local and shared data into one database.
+- Make the active profile and local inventory explicit before any import,
+  export, sync, or purge operation.
+- Preserve per-profile device identity, role, revocation, offline-retention,
+  and re-pairing behavior.

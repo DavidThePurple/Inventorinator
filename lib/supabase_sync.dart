@@ -5,12 +5,19 @@ import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
 
-const requiredInventorinatorSchemaVersion = 15;
+const requiredInventorinatorSchemaVersion = 17;
 
-bool canManageWorkspaceDevices(String? role) =>
-    role == 'owner' || role == 'admin' || role == 'manager';
+String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
-bool canRemoveWorkspaceDevices(String? role) => role == 'owner';
+bool canManageWorkspaceDevices(String? role) {
+  final normalized = normalizeWorkspaceRole(role);
+  return normalized == 'owner' ||
+      normalized == 'admin' ||
+      normalized == 'manager';
+}
+
+bool canRemoveWorkspaceDevices(String? role) =>
+    normalizeWorkspaceRole(role) == 'owner';
 
 String visibleSyncErrorForRole(Object error, String? role) {
   if (error is SupabaseSyncException && error.isInvalidRefreshToken) {
@@ -27,12 +34,13 @@ enum WorkspaceRole {
   editor,
   builder;
 
-  static WorkspaceRole fromServer(String? value) => switch (value) {
-    'owner' || 'admin' => WorkspaceRole.admin,
-    'manager' => WorkspaceRole.manager,
-    'editor' => WorkspaceRole.editor,
-    _ => WorkspaceRole.builder,
-  };
+  static WorkspaceRole fromServer(String? value) =>
+      switch (normalizeWorkspaceRole(value)) {
+        'owner' || 'admin' => WorkspaceRole.admin,
+        'manager' => WorkspaceRole.manager,
+        'editor' => WorkspaceRole.editor,
+        _ => WorkspaceRole.builder,
+      };
 
   bool get canDeleteDatabase => this == WorkspaceRole.admin;
   bool get canHardDeleteItems => this == WorkspaceRole.admin;
@@ -62,6 +70,7 @@ class SupabaseConfig {
     this.refreshToken,
     this.lastSyncedAt,
     this.lastSyncedStateJson,
+    this.remotePurgeAfterDays,
   });
 
   final String url;
@@ -76,6 +85,7 @@ class SupabaseConfig {
   final String? refreshToken;
   final DateTime? lastSyncedAt;
   final String? lastSyncedStateJson;
+  final int? remotePurgeAfterDays;
 
   bool get isConfigured {
     final server = Uri.tryParse(url);
@@ -122,6 +132,7 @@ class SupabaseConfig {
     String? refreshToken,
     DateTime? lastSyncedAt,
     String? lastSyncedStateJson,
+    int? remotePurgeAfterDays,
     bool clearLastSyncedStateJson = false,
   }) => SupabaseConfig(
     url: url ?? this.url,
@@ -138,6 +149,7 @@ class SupabaseConfig {
     lastSyncedStateJson: clearLastSyncedStateJson
         ? null
         : lastSyncedStateJson ?? this.lastSyncedStateJson,
+    remotePurgeAfterDays: remotePurgeAfterDays ?? this.remotePurgeAfterDays,
   );
 
   Map<String, Object?> toJson() => {
@@ -153,6 +165,7 @@ class SupabaseConfig {
     'refreshToken': refreshToken,
     'lastSyncedAt': lastSyncedAt?.toIso8601String(),
     'lastSyncedStateJson': lastSyncedStateJson,
+    'remotePurgeAfterDays': remotePurgeAfterDays,
   };
 
   factory SupabaseConfig.fromJson(Map<String, dynamic> json) => SupabaseConfig(
@@ -172,6 +185,7 @@ class SupabaseConfig {
         ? null
         : DateTime.parse(json['lastSyncedAt'] as String),
     lastSyncedStateJson: json['lastSyncedStateJson'] as String?,
+    remotePurgeAfterDays: (json['remotePurgeAfterDays'] as num?)?.toInt(),
   );
 }
 
@@ -242,6 +256,10 @@ class SupabaseSyncException implements Exception {
             normalized.contains('expired') ||
             normalized.contains('not found'));
   }
+
+  bool get isWorkspaceAccessDenied =>
+      message.toLowerCase().contains('workspace access denied') ||
+      message.toLowerCase().contains('locked out of the workspace');
 
   @override
   String toString() => message;
@@ -604,9 +622,14 @@ class SupabaseSyncService {
     return result as String;
   }
 
-  Future<String> redeemPairingCode(SupabaseSession session, String code) async {
+  Future<String> redeemPairingCode(
+    SupabaseSession session,
+    String code, {
+    String? deviceId,
+  }) async {
     final result = await _rpc(session, 'redeem_inventorinator_pairing_code', {
       'pairing_code': code.trim().toUpperCase(),
+      'device_identifier': deviceId,
     });
     return result as String;
   }
@@ -622,8 +645,33 @@ class SupabaseSyncService {
     final result = await _rpc(session, 'get_inventorinator_role', {
       'target_workspace': config.workspaceId,
     });
-    return result as String;
+    final role = result is String ? normalizeWorkspaceRole(result) : null;
+    if (role == null || role.isEmpty) {
+      // A removed member can arrive as a JSON null from older connector
+      // versions instead of the newer explicit access-denied exception.
+      throw const SupabaseSyncException('Workspace access denied');
+    }
+    return role;
   }
+
+  Future<int> remotePurgeAfterDays(SupabaseSession session) async {
+    final result = await _rpc(session, 'get_inventorinator_remote_purge_days', {
+      'target_workspace': config.workspaceId,
+    });
+    final days = result is num ? result.toInt() : int.tryParse('$result');
+    if (days == null || days < 1 || days > 365) {
+      throw const SupabaseSyncException(
+        'The shared inventory returned an invalid offline purge policy.',
+      );
+    }
+    return days;
+  }
+
+  Future<void> setRemotePurgeAfterDays(SupabaseSession session, int days) =>
+      _rpc(session, 'set_inventorinator_remote_purge_days', {
+        'target_workspace': config.workspaceId,
+        'target_days': days,
+      });
 
   Future<List<WorkspaceDevice>> listDevices(SupabaseSession session) async {
     final result = await _rpc(session, 'list_inventorinator_devices', {

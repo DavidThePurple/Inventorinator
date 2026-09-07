@@ -15,12 +15,18 @@ extract full administrator access. Therefore:
 - an outdated server is rejected with its installed and required versions;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current schema: **v15**. Schema v12 replaces whole-inventory snapshot transfers
+Current schema: **v17**. Schema v12 replaces whole-inventory snapshot transfers
 with per-record revisions, deletion markers, and client outboxes. Schema v13
 prevents stale snapshot clients from deleting locations they never loaded and
 recovers location tombstones caused by that bug. Schema v14 repairs
 authenticated entity reads. Schema v15 blocks obsolete whole-snapshot writers
 so an older client cannot overwrite newer per-record changes.
+Schema v16 adds an owner/admin-controlled remote offline purge policy for
+non-owner devices; owners are exempt by default.
+Schema v17 gives devices a stable repair identity so re-pairing restores the
+previous membership instead of creating another device record.
+Memberships created before v17 have no stable identity and cannot be merged
+safely automatically; remove any stale duplicate rows once after upgrading.
 
 Schema v8-v10 add owner recovery and durability. Save the recovery package
 when creating a shared inventory. It can transfer ownership to a replacement

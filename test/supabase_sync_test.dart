@@ -37,6 +37,7 @@ void main() {
       refreshToken: 'refresh-token',
       lastSyncedAt: DateTime.utc(2026, 8, 28),
       lastSyncedStateJson: '{"inventory":[]}',
+      remotePurgeAfterDays: 14,
     );
 
     final restored = SupabaseConfig.fromJson(configured.toJson());
@@ -47,6 +48,7 @@ void main() {
     expect(restored.cachedSession?.accessToken, 'access-token');
     expect(restored.lastSyncedAt, DateTime.utc(2026, 8, 28));
     expect(restored.lastSyncedStateJson, '{"inventory":[]}');
+    expect(restored.remotePurgeAfterDays, 14);
   });
 
   test('device management hierarchy and session errors are role-aware', () {
@@ -68,6 +70,18 @@ void main() {
       contains('session expired'),
     );
     expect(visibleSyncErrorForRole(expired, 'admin'), isNot(contains('Token')));
+    expect(canManageWorkspaceDevices(' Admin '), isTrue);
+    expect(WorkspaceRole.fromServer(' ADMIN '), WorkspaceRole.admin);
+    expect(
+      const SupabaseSyncException('Workspace access denied')
+          .isWorkspaceAccessDenied,
+      isTrue,
+    );
+    expect(
+      const SupabaseSyncException('This device is locked out of the workspace')
+          .isWorkspaceAccessDenied,
+      isTrue,
+    );
   });
 
   test(
@@ -493,6 +507,87 @@ void main() {
     expect(devices.single.name, 'Workshop tablet');
     await service.setDeviceRole(session, 'device-id', 'editor');
     await service.removeDevice(session, 'device-id', lockOut: true);
+  });
+
+  test('null role responses are treated as revoked workspace access', () async {
+    final service = SupabaseSyncService(
+      config.copyWith(workspaceId: 'workspace-id'),
+      client: MockClient((request) async {
+        expect(request.url.path, '/rest/v1/rpc/get_inventorinator_role');
+        return http.Response('null', 200);
+      }),
+    );
+    expect(
+      service.currentRole(
+        const SupabaseSession(
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          userId: 'user-id',
+        ),
+      ),
+      throwsA(
+        isA<SupabaseSyncException>().having(
+          (error) => error.isWorkspaceAccessDenied,
+          'isWorkspaceAccessDenied',
+          isTrue,
+        ),
+      ),
+    );
+  });
+
+  test('remote purge policy uses the workspace RPCs', () async {
+    final calls = <String>[];
+    final service = SupabaseSyncService(
+      config.copyWith(workspaceId: 'workspace-id'),
+      client: MockClient((request) async {
+        calls.add(request.url.path);
+        if (request.url.path.endsWith('get_inventorinator_remote_purge_days')) {
+          return http.Response('14', 200);
+        }
+        if (request.url.path.endsWith('set_inventorinator_remote_purge_days')) {
+          return http.Response('', 204);
+        }
+        fail('Unexpected RPC ${request.url.path}');
+      }),
+    );
+    final session = const SupabaseSession(
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      userId: 'user-id',
+    );
+    expect(await service.remotePurgeAfterDays(session), 14);
+    await service.setRemotePurgeAfterDays(session, 30);
+    expect(calls, [
+      '/rest/v1/rpc/get_inventorinator_remote_purge_days',
+      '/rest/v1/rpc/set_inventorinator_remote_purge_days',
+    ]);
+  });
+
+  test('pairing sends the stable device identity for repair', () async {
+    final service = SupabaseSyncService(
+      config,
+      client: MockClient((request) async {
+        expect(
+          request.url.path,
+          '/rest/v1/rpc/redeem_inventorinator_pairing_code',
+        );
+        expect(jsonDecode(request.body), {
+          'pairing_code': 'ABC123',
+          'device_identifier': 'DEVICE-stable',
+        });
+        return http.Response(jsonEncode('workspace-id'), 200);
+      }),
+    );
+    final workspaceId = await service.redeemPairingCode(
+      const SupabaseSession(
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        userId: 'user-id',
+      ),
+      'abc123',
+      deviceId: 'DEVICE-stable',
+    );
+    expect(workspaceId, 'workspace-id');
   });
 
   test('invalid rotated refresh tokens are treated as fatal sessions', () {

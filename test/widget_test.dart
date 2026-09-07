@@ -1154,6 +1154,28 @@ Bed Temperature: 80°C
     expect(color?.hex, '#7B4CFF');
   });
 
+  test('URL import extracts Polymaker visible HEX Code labels', () {
+    final color = extractProductColorMetadata({
+      '@type': 'Product',
+      'color': 'Black',
+    }, '<div>1.75mm SKU: PA13002 HEX Code: #0A0A0A</div>');
+
+    expect(color?.label, 'Black');
+    expect(color?.hex, '#0A0A0A');
+  });
+
+  test(
+    'URL import reads a labeled HEX value even without a recognized material',
+    () {
+      final color = extractProductColorMetadata({
+        '@type': 'Product',
+        'color': 'Black',
+      }, '<div>HEX Code: #0A0A0A</div>');
+
+      expect(color?.hex, '#0A0A0A');
+    },
+  );
+
   test('filament template detection preserves specific material families', () {
     expect(
       detectFilamentTemplate('Proto-pasta HTPLA')?.family,
@@ -4769,6 +4791,21 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('compact-header-actions')), findsOneWidget);
     expect(find.byKey(const Key('header-more-indicator')), findsOneWidget);
     expect(find.byKey(const Key('database-settings')), findsOneWidget);
+    final sortDirection = find.byKey(const Key('sort-direction-toggle'));
+    final viewToggle = find.byKey(const Key('inventory-view-toggle'));
+    final hideZeroes = find.byKey(const Key('hide-zero-quantity-items'));
+    expect(sortDirection, findsOneWidget);
+    expect(viewToggle, findsOneWidget);
+    expect(hideZeroes, findsOneWidget);
+    expect(
+      (tester.getCenter(sortDirection).dy - tester.getCenter(viewToggle).dy)
+          .abs(),
+      lessThanOrEqualTo(4),
+    );
+    expect(
+      (tester.getCenter(viewToggle).dy - tester.getCenter(hideZeroes).dy).abs(),
+      lessThanOrEqualTo(1),
+    );
     expect(find.byKey(const Key('cloud-sync')), findsOneWidget);
     final configGroup = find.byKey(const Key('config-action-group'));
     expect(configGroup, findsOneWidget);

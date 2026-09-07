@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
 
-const requiredInventorinatorSchemaVersion = 17;
+const requiredInventorinatorSchemaVersion = 18;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 

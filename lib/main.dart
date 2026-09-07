@@ -28957,6 +28957,48 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   );
 
   Widget _sidebarColorCard({required bool overlay}) {
+    final swatch = _itemColorSwatch(item.itemColorName);
+    final gradientColors = _itemGradientColors(item);
+    final coextrudedColors = _itemCoextrudedColors(item);
+    final coextrudedName = _itemCoextrudedName(item);
+    final hasColor =
+        item.itemColorName.trim().isNotEmpty ||
+        gradientColors != null ||
+        coextrudedColors != null;
+    final colorLabel = item.itemColorLabel.trim().isNotEmpty
+        ? item.itemColorLabel.trim()
+        : gradientColors != null
+        ? (_itemGradientName(item).isEmpty
+              ? 'Gradient'
+              : _itemGradientName(item))
+        : coextrudedColors != null
+        ? (coextrudedName.isEmpty ? 'Coextruded' : coextrudedName)
+        : 'Color';
+    final colorDetail = gradientColors != null
+        ? gradientColors.map(_colorHex).join(' → ')
+        : coextrudedColors != null
+        ? coextrudedColors.map(_colorHex).join(' · ')
+        : _itemColorHex(item.itemColorName);
+    final colorChicklet = coextrudedColors != null
+        ? _PieColorChicklet(
+            key: const Key('sidebar-color-swatch'),
+            colors: coextrudedColors,
+            size: 38,
+          )
+        : Container(
+            key: const Key('sidebar-color-swatch'),
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: gradientColors == null
+                  ? swatch ?? const Color(0xff8c929f)
+                  : null,
+              gradient: gradientColors == null
+                  ? null
+                  : LinearGradient(colors: gradientColors),
+              borderRadius: BorderRadius.circular(11),
+            ),
+          );
     final card = ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: BackdropFilter(
@@ -28976,17 +29018,10 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
           child: Row(
             mainAxisSize: overlay ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              Container(
-                key: const Key('sidebar-color-swatch'),
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color:
-                      _itemColorSwatch(item.itemColorName) ??
-                      const Color(0xff8c929f),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-              ),
+              if (hasColor)
+                coextrudedColors != null && coextrudedName.isNotEmpty
+                    ? Tooltip(message: coextrudedName, child: colorChicklet)
+                    : colorChicklet,
               const SizedBox(width: 11),
               Flexible(
                 child: Column(
@@ -28994,9 +29029,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item.itemColorLabel.isEmpty
-                          ? 'Color'
-                          : item.itemColorLabel,
+                      colorLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -29006,7 +29039,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                       ),
                     ),
                     Text(
-                      _itemColorHex(item.itemColorName),
+                      colorDetail,
                       style: const TextStyle(
                         color: Color(0xffc5c9d4),
                         fontFamily: 'monospace',
@@ -29526,7 +29559,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                                 filterQuality: FilterQuality.high,
                               ),
                             ),
-                            if (item.itemColorName.isNotEmpty)
+                            if (item.itemColorName.isNotEmpty ||
+                                _itemGradientColors(item) != null ||
+                                _itemCoextrudedColors(item) != null)
                               Positioned(
                                 left: 12,
                                 right: 12,
@@ -29719,7 +29754,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         icon: const Icon(Icons.download_rounded),
                         label: const Text('Download labeled QR'),
                       ),
-                      if (item.itemColorName.isNotEmpty &&
+                      if ((item.itemColorName.isNotEmpty ||
+                              _itemGradientColors(item) != null ||
+                              _itemCoextrudedColors(item) != null) &&
                           item.imageBytes == null) ...[
                         const SizedBox(height: 22),
                         _sidebarColorCard(overlay: false),

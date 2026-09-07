@@ -7395,6 +7395,69 @@ Bed Temperature: 80°C
       greaterThan(tester.getBottomLeft(photo).dy),
     );
   });
+  testWidgets('sidebar renders gradient and coextruded color chicklets', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    Future<void> pumpItem(FilamentStyleEntry style) async {
+      final testItem = sampleInventory.first.copyWith(
+        itemColorName: '',
+        itemColorLabel: '',
+        styleEntries: [style],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ItemDetailsPanel(
+              key: ValueKey(style.style),
+              item: testItem,
+              onChanged: (_) {},
+              machines: const [],
+              machineTypes: const [],
+              spoolTypes: starterSpoolTypes,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await pumpItem(
+      const FilamentStyleEntry(
+        style: 'gradient',
+        colors: ['#FF0000', '#0000FF'],
+        gradientName: 'Sunset Fade',
+      ),
+    );
+    final gradientSwatch = tester.widget<Container>(
+      find.byKey(const Key('sidebar-color-swatch')),
+    );
+    expect(gradientSwatch.decoration, isA<BoxDecoration>());
+    expect(
+      (gradientSwatch.decoration! as BoxDecoration).gradient,
+      isA<LinearGradient>(),
+    );
+    expect(find.text('Sunset Fade'), findsOneWidget);
+
+    await pumpItem(
+      const FilamentStyleEntry(
+        style: 'coextruded',
+        colors: ['#000000', '#FFFFFF'],
+        colorNames: ['Black', 'White'],
+      ),
+    );
+    final coextrudedSwatch = tester.widget(
+      find.byKey(const Key('sidebar-color-swatch')),
+    );
+    expect(
+      coextrudedSwatch.runtimeType.toString(),
+      contains('PieColorChicklet'),
+    );
+    expect(find.byTooltip('Black + White'), findsOneWidget);
+  });
   testWidgets('desktop item details panel can be resized and remembers width', (
     tester,
   ) async {

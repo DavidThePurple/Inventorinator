@@ -1501,6 +1501,30 @@ Bed Temperature: 80°C
     expect(entry.colorNameAt(1), 'White');
   });
 
+  test('retired catalog records survive export and import', () {
+    final decoded = decodeWorkshopState(
+      encodeWorkshopState(
+        inventory: const [],
+        vendors: const [
+          VendorRecord(id: 'VEN-RETIRED', name: 'Old supplier', archived: true),
+        ],
+        brands: const [
+          BrandRecord(
+            id: 'BR-RETIRED',
+            name: 'Old brand',
+            vendorIds: {'VEN-RETIRED'},
+            categories: {InventoryType.filament},
+            archived: true,
+          ),
+        ],
+        products: const [],
+      ),
+    )!;
+
+    expect(decoded.vendors.single.archived, isTrue);
+    expect(decoded.brands.single.archived, isTrue);
+  });
+
   testWidgets(
     'coextruded item cards show a pie chicklet with names on hover only',
     (tester) async {

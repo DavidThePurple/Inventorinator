@@ -1454,11 +1454,13 @@ class VendorRecord {
     required this.name,
     this.isBrand = false,
     this.logoBytes,
+    this.archived = false,
   });
   final String id;
   final String name;
   final bool isBrand;
   final Uint8List? logoBytes;
+  final bool archived;
 }
 
 class BrandRecord {
@@ -1468,12 +1470,14 @@ class BrandRecord {
     required this.vendorIds,
     required this.categories,
     this.logoBytes,
+    this.archived = false,
   });
   final String id;
   final String name;
   final Set<String> vendorIds;
   final Set<InventoryType> categories;
   final Uint8List? logoBytes;
+  final bool archived;
 }
 
 class SpoolTypeRecord {
@@ -4615,6 +4619,7 @@ String encodeWorkshopState({
           'name': vendor.name,
           'isBrand': vendor.isBrand,
           'logo': _bytesToJson(vendor.logoBytes),
+          'archived': vendor.archived,
         },
       )
       .toList(),
@@ -4626,6 +4631,7 @@ String encodeWorkshopState({
           'vendorIds': brand.vendorIds.toList(),
           'categories': brand.categories.map((type) => type.name).toList(),
           'logo': _bytesToJson(brand.logoBytes),
+          'archived': brand.archived,
         },
       )
       .toList(),
@@ -4915,6 +4921,7 @@ WorkshopState? decodeWorkshopState(String? source) {
             name: vendor['name'] as String,
             isBrand: vendor['isBrand'] as bool? ?? false,
             logoBytes: _bytesFromJson(vendor['logo']),
+            archived: vendor['archived'] as bool? ?? false,
           ),
         )
         .toList();
@@ -4930,6 +4937,7 @@ WorkshopState? decodeWorkshopState(String? source) {
                 .map(InventoryType.values.byName)
                 .toSet(),
             logoBytes: _bytesFromJson(brand['logo']),
+            archived: brand['archived'] as bool? ?? false,
           ),
         )
         .toList();
@@ -5012,6 +5020,7 @@ WorkshopState? decodeWorkshopState(String? source) {
           vendorIds: brand.vendorIds,
           categories: {...brand.categories, InventoryType.fastener},
           logoBytes: brand.logoBytes,
+          archived: brand.archived,
         );
       }
     }
@@ -9641,6 +9650,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             name: vendor.name,
             isBrand: true,
             logoBytes: vendor.logoBytes,
+            archived: vendor.archived,
           );
           final availableIndex = availableVendors.indexWhere(
             (candidate) => candidate.id == vendor!.id,
@@ -9675,6 +9685,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           vendorIds: vendorIds,
           categories: categories,
           logoBytes: existingBrand?.logoBytes,
+          archived: existingBrand?.archived ?? false,
         );
         if (existingBrand == null) {
           availableBrands.add(replacement);
@@ -10272,8 +10283,26 @@ class _InventoryHomeState extends State<InventoryHome> {
         setState(() => vendors.add(vendor));
         _persist();
       },
+      onVendorUpdated: (vendor) {
+        setState(() {
+          final index = vendors.indexWhere(
+            (candidate) => candidate.id == vendor.id,
+          );
+          if (index >= 0) vendors[index] = vendor;
+        });
+        _persist();
+      },
       onBrandAdded: (brand) {
         setState(() => brands.add(brand));
+        _persist();
+      },
+      onBrandUpdated: (brand) {
+        setState(() {
+          final index = brands.indexWhere(
+            (candidate) => candidate.id == brand.id,
+          );
+          if (index >= 0) brands[index] = brand;
+        });
         _persist();
       },
       onSpoolTypeAdded: (spoolType) {
@@ -10725,6 +10754,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             vendorIds: existing.vendorIds,
             categories: {...existing.categories, type},
             logoBytes: existing.logoBytes,
+            archived: existing.archived,
           );
         }
         brandId = nextBrands[brandIndex].id;
@@ -19989,7 +20019,9 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.machines,
     required this.kits,
     required this.onVendorAdded,
+    required this.onVendorUpdated,
     required this.onBrandAdded,
+    required this.onBrandUpdated,
     required this.onSpoolTypeAdded,
     this.onMaterialAdded,
     this.onMaterialUpdated,
@@ -20031,7 +20063,9 @@ class CatalogManagerDialog extends StatefulWidget {
   final List<MachineRecord> machines;
   final List<KitRecord> kits;
   final ValueChanged<VendorRecord> onVendorAdded;
+  final ValueChanged<VendorRecord> onVendorUpdated;
   final ValueChanged<BrandRecord> onBrandAdded;
+  final ValueChanged<BrandRecord> onBrandUpdated;
   final ValueChanged<SpoolTypeRecord> onSpoolTypeAdded;
   final ValueChanged<MaterialRecord>? onMaterialAdded;
   final ValueChanged<MaterialRecord>? onMaterialUpdated;
@@ -20323,6 +20357,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     required String name,
     required String details,
     Widget? badge,
+    Widget? action,
   }) => Container(
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
@@ -20363,10 +20398,105 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             ],
           ),
         ),
-        if (badge != null) ...[const SizedBox(width: 10), badge],
+        if (badge != null || action != null) ...[
+          const SizedBox(width: 10),
+          ?badge,
+          ?action,
+        ],
       ],
     ),
   );
+
+  Future<void> _toggleVendorArchived(VendorRecord vendor) async {
+    final retiring = !vendor.archived;
+    final linkedBrands = brands
+        .where((brand) => brand.vendorIds.contains(vendor.id))
+        .length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('${retiring ? 'Retire' : 'Restore'} ${vendor.name}?'),
+        content: Text(
+          retiring
+              ? linkedBrands == 0
+                    ? 'This vendor will be hidden from new catalog selections. Existing inventory history is preserved.'
+                    : 'This vendor will be hidden from new catalog selections. It remains linked to $linkedBrands ${linkedBrands == 1 ? 'brand' : 'brands'} and existing inventory history.'
+              : 'Restore this vendor to the active catalog selections?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: Key('confirm-vendor-archive-${vendor.id}'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(retiring ? 'Retire vendor' : 'Restore vendor'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final updated = VendorRecord(
+      id: vendor.id,
+      name: vendor.name,
+      isBrand: vendor.isBrand,
+      logoBytes: vendor.logoBytes,
+      archived: retiring,
+    );
+    setState(() {
+      final index = vendors.indexWhere(
+        (candidate) => candidate.id == vendor.id,
+      );
+      if (index >= 0) vendors[index] = updated;
+    });
+    widget.onVendorUpdated(updated);
+  }
+
+  Future<void> _toggleBrandArchived(BrandRecord brand) async {
+    final retiring = !brand.archived;
+    final linkedProducts = products
+        .where((product) => product.brandId == brand.id)
+        .length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('${retiring ? 'Retire' : 'Restore'} ${brand.name}?'),
+        content: Text(
+          retiring
+              ? linkedProducts == 0
+                    ? 'This brand will be hidden from new catalog selections. Existing inventory history is preserved.'
+                    : 'This brand will be hidden from new catalog selections. Its $linkedProducts ${linkedProducts == 1 ? 'product template remains' : 'product templates remain'} available for existing inventory.'
+              : 'Restore this brand to the active catalog selections?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: Key('confirm-brand-archive-${brand.id}'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(retiring ? 'Retire brand' : 'Restore brand'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final updated = BrandRecord(
+      id: brand.id,
+      name: brand.name,
+      vendorIds: brand.vendorIds,
+      categories: brand.categories,
+      logoBytes: brand.logoBytes,
+      archived: retiring,
+    );
+    setState(() {
+      final index = brands.indexWhere((candidate) => candidate.id == brand.id);
+      if (index >= 0) brands[index] = updated;
+    });
+    widget.onBrandUpdated(updated);
+  }
 
   Widget _vendorCatalogSection() => ExpansionTile(
     key: const Key('catalog-vendors-section'),
@@ -20490,12 +20620,33 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               details: vendor.isBrand
                   ? 'Purchase source · also a product brand'
                   : 'Purchase source',
-              badge: vendor.isBrand
-                  ? const Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text('Also a brand'),
+              badge: vendor.archived || vendor.isBrand
+                  ? Wrap(
+                      spacing: 6,
+                      children: [
+                        if (vendor.archived)
+                          const Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text('Retired'),
+                          ),
+                        if (vendor.isBrand)
+                          const Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text('Also a brand'),
+                          ),
+                      ],
                     )
                   : null,
+              action: IconButton(
+                key: Key('toggle-vendor-archive-${vendor.id}'),
+                tooltip: vendor.archived ? 'Restore vendor' : 'Retire vendor',
+                onPressed: () => _toggleVendorArchived(vendor),
+                icon: Icon(
+                  vendor.archived
+                      ? Icons.unarchive_outlined
+                      : Icons.archive_outlined,
+                ),
+              ),
             ),
           ),
         ),
@@ -20537,6 +20688,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               helperText: 'Choose the vendor that sells this brand.',
             ),
             items: vendors
+                .where((vendor) => !vendor.archived)
                 .map(
                   (vendor) => DropdownMenuItem(
                     value: vendor.id,
@@ -20630,6 +20782,22 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                 if (linkedVendors.isNotEmpty) 'Sold by $linkedVendors',
                 if (categoryLabels.isNotEmpty) 'Makes $categoryLabels',
               ].join(' · '),
+              badge: brand.archived
+                  ? const Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text('Retired'),
+                    )
+                  : null,
+              action: IconButton(
+                key: Key('toggle-brand-archive-${brand.id}'),
+                tooltip: brand.archived ? 'Restore brand' : 'Retire brand',
+                onPressed: () => _toggleBrandArchived(brand),
+                icon: Icon(
+                  brand.archived
+                      ? Icons.unarchive_outlined
+                      : Icons.archive_outlined,
+                ),
+              ),
             ),
           );
         }),
@@ -21015,6 +21183,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                                 labelText: 'Brand',
                               ),
                               items: brands
+                                  .where((brand) => !brand.archived)
                                   .map(
                                     (brand) => DropdownMenuItem(
                                       value: brand.id,
@@ -27697,7 +27866,11 @@ class _AddItemDialogState extends State<AddItemDialog> {
   }
 
   List<VendorRecord> get _availableVendors => widget.vendors
-      .where((vendor) => _selectedBrand?.vendorIds.contains(vendor.id) ?? false)
+      .where(
+        (vendor) =>
+            (!vendor.archived || vendor.id == vendorId) &&
+            (_selectedBrand?.vendorIds.contains(vendor.id) ?? false),
+      )
       .toList();
 
   String _locationPathForEditor(String id, [Set<String>? visited]) {
@@ -27712,8 +27885,13 @@ class _AddItemDialogState extends State<AddItemDialog> {
     return parent.isEmpty ? location.name : '$parent / ${location.name}';
   }
 
-  List<BrandRecord> get _availableBrands =>
-      widget.brands.where((brand) => brand.categories.contains(type)).toList();
+  List<BrandRecord> get _availableBrands => widget.brands
+      .where(
+        (brand) =>
+            (!brand.archived || brand.id == brandId) &&
+            brand.categories.contains(type),
+      )
+      .toList();
 
   CustomItemTypeRecord? get _selectedCustomType => widget.customItemTypes
       .where((customType) => customType.id == customTypeId)

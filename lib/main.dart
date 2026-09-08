@@ -16882,7 +16882,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 final bottomActionsEnabled = currentRole.canCreateInventory;
                 final disabledActionMessage = bottomActionsEnabled
                     ? null
-                    : 'Your role (${_workspaceRoleLabel}) cannot add inventory items.';
+                    : 'Your role ($_workspaceRoleLabel) cannot add inventory items.';
                 final iconOnly = constraints.maxWidth < 1180;
                 final taper = ((constraints.maxWidth - 760) / (1180 - 760))
                     .clamp(0.0, 1.0);

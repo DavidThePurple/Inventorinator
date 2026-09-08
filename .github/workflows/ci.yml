@@ -132,19 +132,19 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build apk --debug
+      - run: flutter build apk --release --split-per-abi
       - name: Android app lint
         working-directory: android
-        run: ./gradlew :app:lintDebug
+        run: ./gradlew :app:lintRelease
       - name: Compute artifact name
         id: artifact
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
-          echo "name=Inventorinator-v${app_version}-Android-debug" >> "$GITHUB_OUTPUT"
+          echo "name=Inventorinator-v${app_version}-Android-production" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: build/app/outputs/flutter-apk/*-release.apk
           if-no-files-found: error
           retention-days: 7
 

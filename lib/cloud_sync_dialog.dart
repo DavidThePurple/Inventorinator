@@ -63,6 +63,12 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         'owner' || 'admin' => true,
         _ => false,
       };
+  String get roleLabel {
+    if (isWorkspaceOwner) return 'Owner';
+    final role = normalizeWorkspaceRole(config.workspaceRole) ?? '';
+    if (role.isEmpty) return 'Unknown';
+    return '${role[0].toUpperCase()}${role.substring(1)}';
+  }
 
   String _visibleSyncError(Object error) =>
       visibleSyncErrorForRole(error, config.workspaceRole);
@@ -1415,22 +1421,58 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                 ],
               ),
             ] else if (connected)
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                    sessionNeedsReconnect
-                        ? Icons.link_off_rounded
-                        : Icons.check_circle_outline,
-                    color: sessionNeedsReconnect
-                        ? Colors.orangeAccent
-                        : Theme.of(context).colorScheme.secondary,
+                  Row(
+                    children: [
+                      Icon(
+                        sessionNeedsReconnect
+                            ? Icons.link_off_rounded
+                            : Icons.check_circle_outline,
+                        color: sessionNeedsReconnect
+                            ? Colors.orangeAccent
+                            : Theme.of(context).colorScheme.secondary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          sessionNeedsReconnect
+                              ? 'Reconnect this device to verify its access.'
+                              : 'Shared inventory ${config.workspaceId!.substring(0, 8)}',
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      sessionNeedsReconnect
-                          ? 'Reconnect this device to verify its access.'
-                          : 'Shared inventory ${config.workspaceId!.substring(0, 8)}',
+                  const SizedBox(height: 8),
+                  Container(
+                    key: const Key('remote-sync-role'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withValues(alpha: .72),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant
+                            .withValues(alpha: .7),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.badge_outlined, size: 18),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Your role',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const Spacer(),
+                        Text(roleLabel),
+                      ],
                     ),
                   ),
                 ],

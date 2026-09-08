@@ -432,6 +432,85 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('new item history renders gradient and coextrusion chicklets', (
+    tester,
+  ) async {
+    final gradient = InventoryItem(
+      id: 'INV-HISTORY-GRADIENT',
+      name: 'Gradient Blue Purple PLA',
+      type: InventoryType.filament,
+      compatibility: const [],
+      added: DateTime(2026, 9, 2, 12),
+      cost: 34.99,
+      color: const Color(0xff8e75ff),
+      itemColorName: 'purple',
+      styleEntries: const [
+        FilamentStyleEntry(
+          style: 'gradient',
+          colors: ['#00a8c8', '#6c4cff'],
+          gradientName: 'Blue Purple',
+        ),
+      ],
+    );
+    final coextruded = InventoryItem(
+      id: 'INV-HISTORY-COEXTRUDED',
+      name: 'Coextruded Green Blue PLA',
+      type: InventoryType.filament,
+      compatibility: const [],
+      added: DateTime(2026, 9, 2, 12, 1),
+      cost: 29.99,
+      color: const Color(0xff8e75ff),
+      itemColorName: 'orange',
+      styleEntries: const [
+        FilamentStyleEntry(
+          style: 'coextruded',
+          colors: ['#00ff00', '#0000ff'],
+          colorNames: ['Green', 'Blue'],
+        ),
+      ],
+    );
+    final state = encodeWorkshopState(
+      inventory: [gradient, coextruded],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      additionHistory: [
+        AdditionHistoryEntry.fromItem(gradient),
+        AdditionHistoryEntry.fromItem(coextruded),
+      ],
+    );
+
+    await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('addition-history')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('item-color-indicator-INV-HISTORY-GRADIENT')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('item-color-indicator-INV-HISTORY-COEXTRUDED')),
+      findsOneWidget,
+    );
+    expect(find.text('Blue Purple'), findsOneWidget);
+    expect(find.text('Green + Blue'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('addition-color-INV-HISTORY-GRADIENT')),
+        matching: find.text('purple'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('addition-color-INV-HISTORY-COEXTRUDED')),
+        matching: find.text('orange'),
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('new item history keeps missing details explicit on Android', (
     tester,
   ) async {
@@ -2424,6 +2503,14 @@ Bed Temperature: 80°C
       isTrue,
     );
     expect(find.byKey(const Key('spool-tare-weight')), findsOneWidget);
+    expect(find.byKey(const Key('filament-weight')), findsOneWidget);
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const Key('filament-weight')))
+          .controller
+          ?.text,
+      '3000',
+    );
     expect(find.byKey(const Key('spool-outer-diameter')), findsOneWidget);
     expect(find.byKey(const Key('spool-width')), findsOneWidget);
     expect(find.byKey(const Key('spool-hole-diameter')), findsOneWidget);
@@ -2478,11 +2565,17 @@ Bed Temperature: 80°C
     expect(find.text('×18'), findsOneWidget);
     final typeRow = find.byKey(const Key('item-type-row-INV-M2X8'));
     final priceRow = find.byKey(const Key('item-price-row-INV-M2X8'));
+    final itemName = find.byKey(const Key('item-card-name-INV-M2X8'));
     expect(typeRow, findsOneWidget);
     expect(priceRow, findsOneWidget);
+    expect(itemName, findsOneWidget);
     expect(
-      tester.getCenter(typeRow).dy,
-      lessThan(tester.getCenter(priceRow).dy),
+      tester.getCenter(itemName).dy,
+      lessThan(tester.getCenter(typeRow).dy),
+    );
+    expect(
+      tester.getCenter(priceRow).dy,
+      lessThan(tester.getCenter(typeRow).dy),
     );
     final material = find.byKey(const Key('item-material-INV-M2X8'));
     expect(material, findsOneWidget);
@@ -2994,6 +3087,8 @@ Bed Temperature: 80°C
       findsOneWidget,
     );
     expect(find.byKey(const Key('hide-zero-personalization')), findsOneWidget);
+    expect(find.byKey(const Key('main-scrollbar-width')), findsOneWidget);
+    expect(find.text('Main view scrollbar · 16 px'), findsOneWidget);
     expect(find.byKey(const Key('sync-chime-personalization')), findsOneWidget);
     expect(
       find.byKey(const Key('drying-chime-personalization')),
@@ -3026,6 +3121,27 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('animation-duration')), findsOneWidget);
     expect(find.byKey(const Key('animation-recurrence')), findsOneWidget);
     expect(find.byKey(const Key('debug-item')), findsNothing);
+  });
+
+  testWidgets('main scrollbar width personalization updates the main view', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+
+    final scrollbar = find.byKey(const Key('main-inventory-scrollbar'));
+    expect(tester.widget<Scrollbar>(scrollbar).thickness, 16);
+    await tester.tap(find.byKey(const Key('personalization-settings')));
+    await tester.pumpAndSettle();
+    final widthSlider = find.byKey(const Key('main-scrollbar-width'));
+    await tester.drag(widthSlider, const Offset(1000, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Main view scrollbar · 32 px'), findsOneWidget);
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Scrollbar>(scrollbar).thickness, 32);
   });
 
   testWidgets('personalization settings fit Android phone width', (
@@ -5153,6 +5269,75 @@ Bed Temperature: 80°C
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'restricted remote roles explain disabled actions and show role in sync',
+    (tester) async {
+      tester.view.physicalSize = const Size(1300, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final directory = Directory.systemTemp.createTempSync(
+        'inventorinator-role-bubble-',
+      );
+      final database = (await tester.runAsync(
+        () => LocalDatabase.open(
+          overridePath: '${directory.path}/inventory.sqlite3',
+        ),
+      ))!;
+      final state = encodeWorkshopState(
+        inventory: const [],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+      );
+      database.saveState(state);
+      database.saveSyncConfig(
+        jsonEncode(
+          const SupabaseConfig(
+            syncMode: 'supabase',
+            url: '',
+            publishableKey: '',
+            userId: 'builder-device',
+            workspaceId: 'workspace-builder',
+            workspaceRole: 'builder',
+            refreshToken: 'cached-refresh-token',
+          ).toJson(),
+        ),
+      );
+
+      await tester.pumpWidget(
+        InventorinatorApp(database: database, persistedState: state),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('workspace-role-bubble')), findsNothing);
+      expect(
+        find.byTooltip('Your role (Builder) cannot add inventory items.'),
+        findsNWidgets(7),
+      );
+      await tester.tap(find.byKey(const Key('cloud-sync')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('remote-sync-role')), findsOneWidget);
+      expect(find.text('Builder'), findsOneWidget);
+      for (final key in const [
+        'open-catalog',
+        'open-stockroom',
+        'open-scanner',
+        'add-item',
+        'open-rapidizer',
+        'open-filament-colors',
+        'open-inventory-json-import',
+      ]) {
+        final button = tester.widget<OutlinedButton>(find.byKey(Key(key)));
+        expect(button.onPressed, isNull, reason: key);
+      }
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      database.close();
+      directory.deleteSync(recursive: true);
+    },
+  );
+
   testWidgets('mobile list rows give long item names a dedicated row', (
     tester,
   ) async {
@@ -5204,6 +5389,110 @@ Bed Temperature: 80°C
           .getSize(find.byKey(const Key('inventory-row-INV-MOBILE-LONG-NAME')))
           .height,
       lessThan(190),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('card tags sit below usage metadata', (tester) async {
+    final item = InventoryItem(
+      id: 'INV-TAG-STACK',
+      name: 'Tagged filament',
+      type: InventoryType.filament,
+      compatibility: const [],
+      purposeTags: const ['Flexible'],
+      added: DateTime(2026),
+      cost: 20,
+      color: Colors.purple,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 320,
+              height: 320,
+              child: InventoryCard(
+                item: item,
+                spoolSizeLabel: '760g',
+                onOpen: () {},
+                onAction: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('760g'), findsOneWidget);
+    expect(find.text('Flexible'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Flexible')).dy,
+      greaterThan(tester.getTopLeft(find.text('760g')).dy),
+    );
+  });
+
+  testWidgets('photo-backed hamburger rows show special color chicklets', (
+    tester,
+  ) async {
+    final imageBytes = Uint8List.fromList(
+      img.encodePng(img.Image(width: 2, height: 2)),
+    );
+    final gradient = InventoryItem(
+      id: 'INV-GRADIENT-ROW',
+      name: 'Gradient filament',
+      type: InventoryType.filament,
+      compatibility: const [],
+      added: DateTime(2026),
+      cost: 24,
+      color: Colors.purple,
+      imageBytes: imageBytes,
+      styleEntries: const [
+        FilamentStyleEntry(
+          style: 'gradient',
+          colors: ['#ff0000', '#0000ff'],
+          gradientName: 'Red Blue',
+        ),
+      ],
+    );
+    final coextruded = gradient.copyWith(
+      id: 'INV-COEXTRUDED-ROW',
+      name: 'Coextruded filament',
+      styleEntries: const [
+        FilamentStyleEntry(
+          style: 'coextruded',
+          colors: ['#00ff00', '#0000ff'],
+          colorNames: ['Green', 'Blue'],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              InventoryRow(item: gradient, onOpen: () {}, onAction: (_) {}),
+              InventoryRow(item: coextruded, onOpen: () {}, onAction: (_) {}),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('item-color-indicator-INV-GRADIENT-ROW')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('item-color-indicator-INV-COEXTRUDED-ROW')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(
+        find.byKey(const Key('item-color-indicator-INV-GRADIENT-ROW')),
+      ),
+      const Size.square(20),
     );
     expect(tester.takeException(), isNull);
   });
@@ -7326,6 +7615,7 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final item = sampleInventory.first.copyWith(
+      materialName: 'PLA',
       itemColorName: '#FFFFFF',
       itemColorLabel: 'White',
     );
@@ -7345,6 +7635,8 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('sidebar-color-swatch')), findsOneWidget);
+    expect(find.byKey(Key('item-material-${item.id}')), findsOneWidget);
+    expect(find.text('PLA'), findsOneWidget);
     expect(find.byKey(Key('item-color-swatch-${item.id}')), findsNothing);
     expect(find.byKey(const Key('sidebar-type-indicator')), findsOneWidget);
     expect(
@@ -7364,6 +7656,7 @@ Bed Temperature: 80°C
       imageBytes: Uint8List.fromList(
         img.encodePng(img.Image(width: 320, height: 240)),
       ),
+      materialName: 'PLA',
       itemColorName: '#E94F64',
       itemColorLabel: 'Galaxy Red',
     );
@@ -7395,6 +7688,12 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('sidebar-color-swatch')), findsOneWidget);
     expect(find.text('Galaxy Red'), findsOneWidget);
     expect(find.text('#E94F64'), findsOneWidget);
+    expect(find.byKey(Key('item-material-${item.id}')), findsOneWidget);
+    expect(find.text('PLA'), findsOneWidget);
+    expect(
+      tester.getTopRight(find.byKey(Key('item-material-${item.id}'))).dx,
+      closeTo(tester.getTopRight(lowerThird).dx - 12, 1),
+    );
     final positioned = tester.widget<Positioned>(
       find.ancestor(of: lowerThird, matching: find.byType(Positioned)).first,
     );
@@ -7485,6 +7784,107 @@ Bed Temperature: 80°C
       contains('PieColorChicklet'),
     );
     expect(find.byTooltip('Black + White'), findsOneWidget);
+  });
+  testWidgets('filament sidebar shows spool, tare, and remaining weights', (
+    tester,
+  ) async {
+    final item = sampleInventory.first.copyWith(
+      spoolTypeId: defaultSpoolTypeId,
+      spoolTareWeightGrams: 240,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ItemDetailsPanel(
+            item: item,
+            onChanged: (_) {},
+            machines: const [],
+            machineTypes: const [],
+            spoolTypes: starterSpoolTypes,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final spoolTab = find.byKey(const Key('filament-details-tab-spool'));
+    await tester.ensureVisible(spoolTab);
+    await tester.tap(spoolTab);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Spool weight'), findsNothing);
+    expect(find.text('1000 g'), findsNothing);
+    expect(find.text('Spool type'), findsOneWidget);
+    expect(find.text('1 kg'), findsOneWidget);
+    expect(find.text('Empty spool weight'), findsOneWidget);
+    expect(find.text('240 g'), findsOneWidget);
+    expect(find.text('Filament remaining'), findsNothing);
+    expect(find.text('760.0 g remaining'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('sidebar-ams-compatibility')),
+        matching: find.byIcon(Icons.cancel_rounded),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(find.text('Spool type')).dy,
+      greaterThan(tester.getTopLeft(find.text('Usage tracking')).dy),
+    );
+  });
+  testWidgets('print log notes expose a tooltip indicator', (tester) async {
+    final item = sampleInventory.first.copyWith(
+      spoolTypeId: defaultSpoolTypeId,
+      spoolTareWeightGrams: 240,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ItemDetailsPanel(
+            item: item,
+            onChanged: (_) {},
+            machines: const [],
+            machineTypes: const [],
+            spoolTypes: starterSpoolTypes,
+            spoolUsage: [
+              SpoolUsageRecord(
+                id: 'USAGE-NOTES',
+                spoolId: item.id,
+                recordedAt: DateTime(2026),
+                gramsUsed: 10,
+                outcome: SpoolPrintOutcome.successful,
+                notes: 'Nozzle clogged halfway through.',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final spoolTab = find.byKey(const Key('filament-details-tab-spool'));
+    await tester.ensureVisible(spoolTab);
+    await tester.tap(spoolTab);
+    await tester.pumpAndSettle();
+
+    final notes = find.byKey(const Key('spool-usage-notes-USAGE-NOTES'));
+    await tester.ensureVisible(notes);
+    final tooltip = tester.widget<Tooltip>(notes);
+    expect(tooltip.message, 'Nozzle clogged halfway through.');
+    expect(
+      find.descendant(
+        of: notes,
+        matching: find.byKey(
+          const Key('spool-usage-notes-glyph-USAGE-NOTES'),
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const Key('spool-usage-notes-button-USAGE-NOTES')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Print notes'), findsOneWidget);
+    expect(find.text('Nozzle clogged halfway through.'), findsOneWidget);
+    await tester.tap(find.text('Close'));
   });
   testWidgets('desktop item details panel can be resized and remembers width', (
     tester,

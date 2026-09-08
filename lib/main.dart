@@ -100,6 +100,52 @@ class _ShoppingCartPainter extends CustomPainter {
       color != oldDelegate.color || remove != oldDelegate.remove;
 }
 
+class _PrintNotesIcon extends StatelessWidget {
+  const _PrintNotesIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 20,
+    child: CustomPaint(
+      painter: _PrintNotesPainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
+}
+
+class _PrintNotesPainter extends CustomPainter {
+  const _PrintNotesPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final page = RRect.fromRectAndRadius(
+      Rect.fromLTWH(3.5, 3.5, 13, 14),
+      const Radius.circular(1.8),
+    );
+    canvas.drawRRect(page, stroke);
+    canvas.drawLine(const Offset(7, 2.5), const Offset(7, 5), stroke);
+    canvas.drawLine(const Offset(13, 2.5), const Offset(13, 5), stroke);
+    canvas.drawLine(const Offset(6.5, 9), const Offset(13.5, 9), stroke);
+    canvas.drawLine(const Offset(6.5, 12), const Offset(13.5, 12), stroke);
+    canvas.drawLine(const Offset(6.5, 15), const Offset(11, 15), stroke);
+  }
+
+  @override
+  bool shouldRepaint(_PrintNotesPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 class _LocationIcon extends StatelessWidget {
   const _LocationIcon({super.key});
 
@@ -1406,6 +1452,30 @@ class SpoolUsageRecord {
   final String notes;
 
   double get totalGrams => gramsUsed + gramsWaste;
+
+  SpoolUsageRecord copyWith({
+    String? id,
+    String? spoolId,
+    DateTime? recordedAt,
+    double? gramsUsed,
+    double? gramsWaste,
+    SpoolPrintOutcome? outcome,
+    String? buildId,
+    String? project,
+    String? wasteReason,
+    String? notes,
+  }) => SpoolUsageRecord(
+    id: id ?? this.id,
+    spoolId: spoolId ?? this.spoolId,
+    recordedAt: recordedAt ?? this.recordedAt,
+    gramsUsed: gramsUsed ?? this.gramsUsed,
+    gramsWaste: gramsWaste ?? this.gramsWaste,
+    outcome: outcome ?? this.outcome,
+    buildId: buildId ?? this.buildId,
+    project: project ?? this.project,
+    wasteReason: wasteReason ?? this.wasteReason,
+    notes: notes ?? this.notes,
+  );
 }
 
 enum ArchiveDisposition { archived, depleted, destroyed }
@@ -2923,6 +2993,7 @@ class InventoryItem {
     this.productUrl = '',
     this.compatibleMachineIds = const [],
     this.spoolTypeId = defaultSpoolTypeId,
+    this.filamentWeightGrams,
     this.amsCompatible = false,
     this.spoolTareWeightGrams,
     this.spoolOuterDiameterMm,
@@ -2981,6 +3052,7 @@ class InventoryItem {
   final String productUrl;
   final List<String> compatibleMachineIds;
   final String spoolTypeId;
+  final double? filamentWeightGrams;
   final bool amsCompatible;
   final double? spoolTareWeightGrams;
   final double? spoolOuterDiameterMm;
@@ -3040,6 +3112,7 @@ class InventoryItem {
     String? productUrl,
     List<String>? compatibleMachineIds,
     String? spoolTypeId,
+    double? filamentWeightGrams,
     bool? amsCompatible,
     double? spoolTareWeightGrams,
     double? spoolOuterDiameterMm,
@@ -3128,6 +3201,9 @@ class InventoryItem {
     spoolTypeId: clearFilamentData
         ? defaultSpoolTypeId
         : spoolTypeId ?? this.spoolTypeId,
+    filamentWeightGrams: clearFilamentData
+        ? null
+        : filamentWeightGrams ?? this.filamentWeightGrams,
     amsCompatible: clearFilamentData
         ? false
         : amsCompatible ?? this.amsCompatible,
@@ -4441,6 +4517,7 @@ Map<String, dynamic> _inventoryItemJson(
   'productUrl': item.productUrl,
   'compatibleMachineIds': item.compatibleMachineIds,
   'spoolTypeId': item.spoolTypeId,
+  'filamentWeightGrams': item.filamentWeightGrams,
   'amsCompatible': item.amsCompatible,
   'spoolTareWeightGrams': item.spoolTareWeightGrams,
   'spoolOuterDiameterMm': item.spoolOuterDiameterMm,
@@ -4831,6 +4908,8 @@ WorkshopState? decodeWorkshopState(String? source) {
                 (item['compatibleMachineIds'] as List<dynamic>? ?? const [])
                     .cast<String>(),
             spoolTypeId: item['spoolTypeId'] as String? ?? defaultSpoolTypeId,
+            filamentWeightGrams: (item['filamentWeightGrams'] as num?)
+                ?.toDouble(),
             amsCompatible: item['amsCompatible'] as bool? ?? false,
             spoolTareWeightGrams: (item['spoolTareWeightGrams'] as num?)
                 ?.toDouble(),
@@ -6334,6 +6413,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   late int animationRecurrenceSeconds;
   late bool photoCardsEnabled;
   late CustomIconAnimationMode customIconAnimationMode;
+  late double mainScrollbarWidth;
   late final Set<String> _moistureAlertChimedCycles;
   final Map<String, DateTime> _lastMoistureAlertChimeAt = {};
   late final Set<String> _readInventoryAlertKeys;
@@ -6371,6 +6451,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _pageSizes = [12, 25, 100, 250, 1000];
   static const _minimumCardSizePercent = 75.0;
   static const _maximumCardSizePercent = 150.0;
+  static const _minimumMainScrollbarWidth = 4.0;
+  static const _maximumMainScrollbarWidth = 32.0;
+  static const _defaultDesktopScrollbarWidth = 16.0;
+  static const _defaultMobileScrollbarWidth = 8.0;
   static const _defaultRemotePurgeAfterDays = 3;
   // Thumbnail backfills can make a single changed-record patch tens of KiB.
   // Keep remote transactions short enough for conservative PostgREST limits.
@@ -6403,6 +6487,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool colorPanelExpanded = false;
   bool metricsPanelExpanded = false;
 
+  double get _defaultMainScrollbarWidth => Platform.isAndroid || Platform.isIOS
+      ? _defaultMobileScrollbarWidth
+      : _defaultDesktopScrollbarWidth;
+
   /// Type keys (see [_inventoryTypeDefinitionKey]) excluded from the
   /// metrics panel's stats and charts. Empty means every type is tracked.
   Set<String> metricsUntrackedTypeKeys = {};
@@ -6433,6 +6521,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   final List<Map<String, Object?>> _pendingAuditEvents = [];
   WorkspaceRole currentRole = WorkspaceRole.admin;
   bool workspaceOwner = true;
+  String get _workspaceRoleLabel => workspaceOwner
+      ? 'Owner'
+      : '${currentRole.name[0].toUpperCase()}${currentRole.name.substring(1)}';
   final Map<String, int> _remoteQuantityAnimationVersions = {};
   final Map<String, int> _lowStockAnimationVersions = {};
   final Map<String, int> _moistureAnimationVersions = {};
@@ -6682,6 +6773,18 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ) ??
                 100)
             .clamp(_minimumCardSizePercent, _maximumCardSizePercent);
+    final defaultScrollbarWidth = _defaultMainScrollbarWidth;
+    mainScrollbarWidth =
+        (double.tryParse(
+                  widget.database?.loadStringPreference(
+                        'main_scrollbar_width',
+                        fallback: defaultScrollbarWidth.toString(),
+                      ) ??
+                      defaultScrollbarWidth.toString(),
+                ) ??
+                defaultScrollbarWidth)
+            .clamp(_minimumMainScrollbarWidth, _maximumMainScrollbarWidth)
+            .toDouble();
     _pageSizeSliderValue.value = pageSizeIndex.toDouble();
     _cardSizeSliderValue.value = cardSizePercent;
     animationDurationPercent =
@@ -8301,84 +8404,108 @@ class _InventoryHomeState extends State<InventoryHome> {
                 child: SafeArea(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _handleInventoryScrollNotification,
-                    child: CustomScrollView(
-                      key: const Key('inventory-scroll-view'),
-                      controller: inventoryScrollController,
-                      scrollCacheExtent:
-                          Platform.isAndroid ||
-                              Platform.isLinux ||
-                              Platform.isWindows
-                          ? const ScrollCacheExtent.viewport(.75)
-                          : null,
-                      slivers: [
-                        SliverToBoxAdapter(child: _titleHeader()),
-                        SliverPersistentHeader(
-                          pinned: true,
-                          delegate: _PinnedActionBarDelegate(
-                            height: 80,
-                            child: _floatingHeaderActionBar(),
-                          ),
-                        ),
-                        SliverToBoxAdapter(child: _header()),
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
-                          sliver: resultCount == 0
-                              ? const SliverFillRemaining(
-                                  hasScrollBody: false,
-                                  child: Center(
-                                    child: Text(
-                                      'Nothing matches those filters.',
-                                    ),
-                                  ),
+                    child: ScrollConfiguration(
+                      behavior: ScrollConfiguration.of(context)
+                          .copyWith(scrollbars: false),
+                      child: Scrollbar(
+                        key: const Key('main-inventory-scrollbar'),
+                        controller: inventoryScrollController,
+                        thickness: mainScrollbarWidth,
+                        radius: Radius.circular(mainScrollbarWidth / 2),
+                        child: CustomScrollView(
+                          key: const Key('inventory-scroll-view'),
+                          controller: inventoryScrollController,
+                          scrollCacheExtent:
+                              Platform.isAndroid ||
+                                  Platform.isLinux ||
+                                  Platform.isWindows
+                              ? ScrollCacheExtent.viewport(
+                                  pageSize >= 250 ? .25 : .75,
                                 )
-                              : gridView
-                              ? ValueListenableBuilder<double>(
-                                  valueListenable: _cardSizeSliderValue,
-                                  builder: (context, liveCardSizePercent, _) =>
-                                      SliverLayoutBuilder(
-                                        builder: (context, constraints) {
-                                          const spacing = 14.0;
-                                          return SliverGrid.builder(
-                                            itemCount: records.length,
-                                            gridDelegate:
-                                                _CenteredSquareGridDelegate(
-                                                  cardExtent:
-                                                      274.0 *
-                                                      (liveCardSizePercent /
-                                                          100),
-                                                  spacing: spacing,
-                                                ),
-                                            itemBuilder: (_, index) =>
-                                                _recordWidget(records[index]),
-                                          );
-                                        },
-                                      ),
-                                )
-                              : SliverList.separated(
-                                  itemCount: records.length,
-                                  separatorBuilder: (_, _) =>
-                                      const SizedBox(height: 10),
-                                  itemBuilder: (_, index) =>
-                                      _recordWidget(records[index], list: true),
-                                ),
-                        ),
-                        if (resultCount > 0)
-                          SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                20,
-                                8,
-                                20,
-                                110,
-                              ),
-                              child: _pageNavigation(
-                                page,
-                                pageCount,
-                                resultCount,
+                              : null,
+                          slivers: [
+                            SliverToBoxAdapter(child: _titleHeader()),
+                            SliverPersistentHeader(
+                              pinned: true,
+                              delegate: _PinnedActionBarDelegate(
+                                height: 80,
+                                child: _floatingHeaderActionBar(),
                               ),
                             ),
-                          ),
-                      ],
+                            SliverToBoxAdapter(child: _header()),
+                            SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
+                              sliver: resultCount == 0
+                                  ? const SliverFillRemaining(
+                                      hasScrollBody: false,
+                                      child: Center(
+                                        child: Text(
+                                          'Nothing matches those filters.',
+                                        ),
+                                      ),
+                                    )
+                                  : gridView
+                                  ? ValueListenableBuilder<double>(
+                                      valueListenable: _cardSizeSliderValue,
+                                      builder:
+                                          (
+                                            context,
+                                            liveCardSizePercent,
+                                            _,
+                                          ) => SliverLayoutBuilder(
+                                            builder: (context, constraints) {
+                                              const spacing = 14.0;
+                                              return SliverGrid.builder(
+                                                itemCount: records.length,
+                                                addAutomaticKeepAlives: false,
+                                                addSemanticIndexes: false,
+                                                gridDelegate:
+                                                    _CenteredSquareGridDelegate(
+                                                      cardExtent:
+                                                          274.0 *
+                                                          (liveCardSizePercent /
+                                                              100),
+                                                      spacing: spacing,
+                                                    ),
+                                                itemBuilder: (_, index) =>
+                                                    _recordWidget(
+                                                      records[index],
+                                                    ),
+                                              );
+                                            },
+                                          ),
+                                    )
+                                  : SliverList.separated(
+                                      itemCount: records.length,
+                                      addAutomaticKeepAlives: false,
+                                      addSemanticIndexes: false,
+                                      separatorBuilder: (_, _) =>
+                                          const SizedBox(height: 10),
+                                      itemBuilder: (_, index) => _recordWidget(
+                                        records[index],
+                                        list: true,
+                                      ),
+                                    ),
+                            ),
+                            if (resultCount > 0)
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    20,
+                                    8,
+                                    20,
+                                    110,
+                                  ),
+                                  child: _pageNavigation(
+                                    page,
+                                    pageCount,
+                                    resultCount,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -8450,7 +8577,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     final common = (
       selected: selectedInventoryIds.contains(record.id),
       typeLabel: _itemTypeDisplayLabel(record),
-      spoolSizeLabel: _spoolSizeLabel(record),
+      spoolSizeLabel: record.type == InventoryType.filament
+          ? _filamentCardRemainingLabel(record, spoolTypes, usage: spoolUsage)
+          : '',
       quantitySyncVersion: _remoteQuantityAnimationVersions[record.id] ?? 0,
       lowStockAnimationVersion: _lowStockAnimationVersions[record.id] ?? 0,
       moistureAnimationVersion: _moistureAnimationVersions[record.id] ?? 0,
@@ -9874,6 +10003,12 @@ class _InventoryHomeState extends State<InventoryHome> {
           spoolTypes: spoolTypes,
           spoolUsage: spoolUsage,
           onSpoolUsageAdded: _addSpoolUsage,
+          onSpoolUsageChanged: currentRole.canEditInventory
+              ? _updateSpoolUsage
+              : null,
+          onSpoolUsageDeleted: currentRole.canEditInventory
+              ? _deleteSpoolUsage
+              : null,
           onChanged: (updated) =>
               _updateItemById(_withoutFullInventoryImages(updated)),
           onEdit: currentRole.canEditInventory
@@ -10178,6 +10313,44 @@ class _InventoryHomeState extends State<InventoryHome> {
     setState(() {
       spoolUsage.insert(0, entry);
       _recordAudit('spool_usage', 'inventory', entry.spoolId, {
+        'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
+        'outcome': entry.outcome.name,
+      });
+    });
+    _persist();
+  }
+
+  void _updateSpoolUsage(SpoolUsageRecord entry) {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return;
+    }
+    final index = spoolUsage.indexWhere(
+      (candidate) => candidate.id == entry.id,
+    );
+    if (index < 0) return;
+    setState(() {
+      spoolUsage[index] = entry;
+      _recordAudit('edit', 'spool_usage', entry.spoolId, {
+        'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
+        'outcome': entry.outcome.name,
+      });
+    });
+    _persist();
+  }
+
+  void _deleteSpoolUsage(SpoolUsageRecord entry) {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return;
+    }
+    final index = spoolUsage.indexWhere(
+      (candidate) => candidate.id == entry.id,
+    );
+    if (index < 0) return;
+    setState(() {
+      spoolUsage.removeAt(index);
+      _recordAudit('delete', 'spool_usage', entry.spoolId, {
         'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
         'outcome': entry.outcome.name,
       });
@@ -11899,6 +12072,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       animationDurationPercent: animationDurationPercent,
       animationRecurrenceSeconds: animationRecurrenceSeconds,
       photoCardsEnabled: photoCardsEnabled,
+      mainScrollbarWidth: mainScrollbarWidth,
       customIconAnimationMode: customIconAnimationMode,
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
@@ -12007,6 +12181,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       onPhotoCardsChanged: (value) {
         setState(() => photoCardsEnabled = value);
         widget.database?.saveBoolPreference('photo_cards_enabled', value);
+      },
+      onMainScrollbarWidthChanged: (value) {
+        setState(() => mainScrollbarWidth = value);
+        widget.database?.saveStringPreference(
+          'main_scrollbar_width',
+          value.toStringAsFixed(1),
+        );
       },
       onCustomIconAnimationModeChanged: (value) {
         setState(() => customIconAnimationMode = value);
@@ -12496,6 +12677,33 @@ class _InventoryHomeState extends State<InventoryHome> {
     required String label,
   }) {
     final colors = Theme.of(context).colorScheme;
+    if (item != null) {
+      final gradientColors = _itemGradientColors(item);
+      final coextrudedColors = _itemCoextrudedColors(item);
+      if (gradientColors != null || coextrudedColors != null) {
+        final styleLabel = coextrudedColors != null
+            ? _itemCoextrudedName(item)
+            : _itemGradientName(item);
+        final displayLabel = styleLabel.isNotEmpty
+            ? styleLabel
+            : coextrudedColors != null
+            ? 'Coextruded'
+            : 'Gradient';
+        return Row(
+          key: key,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ItemColorIndicator(item: item, size: 17),
+            const SizedBox(width: 6),
+            Text(
+              displayLabel,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colors.onSurface),
+            ),
+          ],
+        );
+      }
+    }
     final colorValue = item?.itemColorName.trim() ?? '';
     final swatch = _itemColorSwatch(colorValue);
     if (colorValue.isEmpty || swatch == null) {
@@ -15380,6 +15588,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     double iconOnlyHeight = 44,
     Widget? iconWidget,
     bool tight = false,
+    String? disabledMessage,
   }) {
     final iconChild = Transform.translate(
       offset: iconOffset,
@@ -15387,7 +15596,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (iconOnly) {
       return Tooltip(
-        message: label,
+        message: disabledMessage ?? label,
         child: OutlinedButton(
           key: key,
           onPressed: onPressed,
@@ -15406,7 +15615,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       );
     }
-    return OutlinedButton(
+    final button = OutlinedButton(
       key: key,
       onPressed: onPressed,
       style: tight
@@ -15423,51 +15632,63 @@ class _InventoryHomeState extends State<InventoryHome> {
         children: [iconChild, const SizedBox(width: 10), Text(label)],
       ),
     );
+    return disabledMessage == null
+        ? button
+        : Tooltip(message: disabledMessage, child: button);
   }
 
   Widget _scanButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => _glassQuickAction(
     key: const Key('open-scanner'),
-    onPressed: _openScanner,
+    onPressed: enabled ? _openScanner : null,
     icon: Icons.qr_code_scanner_rounded,
     label: 'Scan',
     iconOnly: iconOnly,
     iconOnlyWidth: iconOnlyWidth,
     tight: tight,
+    disabledMessage: disabledMessage,
   );
 
   Widget _rapidizerButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => _glassQuickAction(
     key: const Key('open-rapidizer'),
-    onPressed: _openRapidizer,
+    onPressed: enabled ? _openRapidizer : null,
     icon: Icons.bolt_rounded,
     label: 'RAPIDIZER',
     iconOnly: iconOnly,
     iconOnlyWidth: iconOnlyWidth,
     tight: tight,
+    disabledMessage: disabledMessage,
   );
 
   Widget _filamentColorsButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => Tooltip(
     message: 'Search FilamentColors.xyz',
     child: _glassQuickAction(
       key: const Key('open-filament-colors'),
-      onPressed: _openFilamentColors,
+      onPressed: enabled ? _openFilamentColors : null,
       icon: Icons.palette_outlined,
       iconWidget: const _FilamentColorsLogo(size: 24),
       label: 'FilamentColors.xyz',
       iconOnly: iconOnly,
       iconOnlyWidth: iconOnlyWidth,
       tight: tight,
+      disabledMessage: disabledMessage,
     ),
   );
 
@@ -15475,16 +15696,21 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => Tooltip(
     message: 'Import inventory items from JSON',
     child: _glassQuickAction(
       key: const Key('open-inventory-json-import'),
-      onPressed: currentRole.canCreateInventory ? _importInventoryJson : null,
+      onPressed: enabled && currentRole.canCreateInventory
+          ? _importInventoryJson
+          : null,
       icon: Icons.data_object_rounded,
       label: 'JSON',
       iconOnly: iconOnly,
       iconOnlyWidth: iconOnlyWidth,
       tight: tight,
+      disabledMessage: disabledMessage,
     ),
   );
 
@@ -16569,17 +16795,20 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => Tooltip(
     message: 'Locations, shopping, and receiving',
     child: _glassQuickAction(
       key: const Key('open-stockroom'),
-      onPressed: _openStockroom,
+      onPressed: enabled ? _openStockroom : null,
       icon: Icons.warehouse_outlined,
       label: 'Stockroom',
       iconOnly: iconOnly,
       iconOffset: const Offset(-2, 0),
       iconOnlyWidth: iconOnlyWidth,
       tight: tight,
+      disabledMessage: disabledMessage,
     ),
   );
 
@@ -16650,24 +16879,31 @@ class _InventoryHomeState extends State<InventoryHome> {
                 // compact rail is intentionally used through medium desktop
                 // widths, not only at phone sizes.
                 final tightDesktop = Platform.isLinux || Platform.isWindows;
+                final bottomActionsEnabled = currentRole.canCreateInventory;
+                final disabledActionMessage = bottomActionsEnabled
+                    ? null
+                    : 'Your role (${_workspaceRoleLabel}) cannot add inventory items.';
                 final iconOnly = constraints.maxWidth < 1180;
                 final taper = ((constraints.maxWidth - 760) / (1180 - 760))
                     .clamp(0.0, 1.0);
                 final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
                 final addItem = _glassQuickAction(
                   key: const Key('add-item'),
-                  onPressed: currentRole.canCreateInventory ? _addItem : null,
+                  onPressed: bottomActionsEnabled ? _addItem : null,
                   icon: Icons.add_rounded,
                   label: 'Add item',
                   iconOnly: iconOnly,
                   iconOnlyWidth: iconOnlyWidth,
                   tight: tightDesktop,
+                  disabledMessage: disabledActionMessage,
                 );
                 final rightActions = <Widget>[
                   _scanButton(
                     iconOnly: iconOnly,
                     iconOnlyWidth: iconOnlyWidth,
                     tight: tightDesktop,
+                    enabled: bottomActionsEnabled,
+                    disabledMessage: disabledActionMessage,
                   ),
                   const SizedBox(width: 12),
                   addItem,
@@ -16676,18 +16912,24 @@ class _InventoryHomeState extends State<InventoryHome> {
                     iconOnly: iconOnly,
                     iconOnlyWidth: iconOnlyWidth,
                     tight: tightDesktop,
+                    enabled: bottomActionsEnabled,
+                    disabledMessage: disabledActionMessage,
                   ),
                   const SizedBox(width: 12),
                   _filamentColorsButton(
                     iconOnly: iconOnly,
                     iconOnlyWidth: iconOnlyWidth,
                     tight: tightDesktop,
+                    enabled: bottomActionsEnabled,
+                    disabledMessage: disabledActionMessage,
                   ),
                   const SizedBox(width: 12),
                   _inventoryJsonButton(
                     iconOnly: iconOnly,
                     iconOnlyWidth: iconOnlyWidth,
                     tight: tightDesktop,
+                    enabled: bottomActionsEnabled,
+                    disabledMessage: disabledActionMessage,
                   ),
                 ];
                 if (iconOnly) {
@@ -16699,11 +16941,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                   );
                   final compactAddItem = _glassQuickAction(
                     key: const Key('add-item'),
-                    onPressed: currentRole.canCreateInventory ? _addItem : null,
+                    onPressed: bottomActionsEnabled ? _addItem : null,
                     icon: Icons.add_rounded,
                     label: 'Add item',
                     iconOnly: true,
                     iconOnlyWidth: fittedIconWidth,
+                    disabledMessage: disabledActionMessage,
                   );
                   return Padding(
                     padding: const EdgeInsets.symmetric(
@@ -16721,11 +16964,15 @@ class _InventoryHomeState extends State<InventoryHome> {
                               _catalogButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                               const SizedBox(width: 4),
                               _stockroomButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                             ],
                           ),
@@ -16736,6 +16983,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                               _scanButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                               const SizedBox(width: 4),
                               compactAddItem,
@@ -16743,16 +16992,22 @@ class _InventoryHomeState extends State<InventoryHome> {
                               _rapidizerButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                               const SizedBox(width: 4),
                               _filamentColorsButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                               const SizedBox(width: 4),
                               _inventoryJsonButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
+                                enabled: bottomActionsEnabled,
+                                disabledMessage: disabledActionMessage,
                               ),
                             ],
                           ),
@@ -16768,9 +17023,17 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                   child: Row(
                     children: [
-                      _catalogButton(tight: tightDesktop),
+                      _catalogButton(
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
                       const SizedBox(width: 12),
-                      _stockroomButton(tight: tightDesktop),
+                      _stockroomButton(
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Align(
@@ -17058,14 +17321,17 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
+    bool enabled = true,
+    String? disabledMessage,
   }) => _glassQuickAction(
     key: const Key('open-catalog'),
-    onPressed: currentRole.canManageCatalog ? _openCatalog : null,
+    onPressed: enabled && currentRole.canManageCatalog ? _openCatalog : null,
     icon: Icons.category_outlined,
     label: 'Catalog',
     iconOnly: iconOnly,
     iconOnlyWidth: iconOnlyWidth,
     tight: tight,
+    disabledMessage: disabledMessage,
   );
 
   Widget _viewToggle() {
@@ -23781,6 +24047,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.animationDurationPercent,
     required this.animationRecurrenceSeconds,
     required this.photoCardsEnabled,
+    required this.mainScrollbarWidth,
     required this.customIconAnimationMode,
     required this.colorTheme,
     required this.brightnessMode,
@@ -23821,11 +24088,13 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onSearchGlowChanged,
     required this.onNewItemGlowChanged,
     required this.onPhotoCardsChanged,
+    required this.onMainScrollbarWidthChanged,
     required this.onCustomIconAnimationModeChanged,
   });
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final bool photoCardsEnabled;
+  final double mainScrollbarWidth;
   final CustomIconAnimationMode customIconAnimationMode;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
@@ -23867,6 +24136,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<bool> onSearchGlowChanged;
   final ValueChanged<bool> onNewItemGlowChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
+  final ValueChanged<double> onMainScrollbarWidthChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
   @override
@@ -23879,6 +24149,7 @@ class _PersonalizationSettingsDialogState
   late int durationPercent = widget.animationDurationPercent;
   late int recurrenceSeconds = widget.animationRecurrenceSeconds;
   late bool photoCardsEnabled = widget.photoCardsEnabled;
+  late double mainScrollbarWidth = widget.mainScrollbarWidth;
   late CustomIconAnimationMode customIconAnimationMode =
       widget.customIconAnimationMode;
   late AppColorTheme colorTheme = widget.colorTheme;
@@ -24082,6 +24353,23 @@ class _PersonalizationSettingsDialogState
               onChanged: (value) {
                 setState(() => hideZeroQuantityItems = value);
                 widget.onHideZeroQuantityItemsChanged(value);
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Main view scrollbar · ${mainScrollbarWidth.round()} px',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            Slider(
+              key: const Key('main-scrollbar-width'),
+              value: mainScrollbarWidth,
+              min: 4,
+              max: 32,
+              divisions: 14,
+              label: '${mainScrollbarWidth.round()} px',
+              onChanged: (value) {
+                setState(() => mainScrollbarWidth = value);
+                widget.onMainScrollbarWidthChanged(value);
               },
             ),
             const Divider(height: 28),
@@ -24579,6 +24867,48 @@ String _formatBomQuantity(double value) => value == value.roundToDouble()
 
 String _optionalNumber(double? value) =>
     value == null ? '' : _formatBomQuantity(value);
+
+SpoolTypeRecord? _spoolTypeForItem(
+  InventoryItem item,
+  Iterable<SpoolTypeRecord> spoolTypes,
+) => item.type != InventoryType.filament
+    ? null
+    : spoolTypes.where((spool) => spool.id == item.spoolTypeId).firstOrNull;
+
+double? _startingFilamentWeightGrams(
+  InventoryItem item,
+  Iterable<SpoolTypeRecord> spoolTypes,
+) {
+  final configured = item.filamentWeightGrams;
+  if (configured != null) return configured;
+  return _spoolTypeForItem(item, spoolTypes)?.weightGrams.toDouble();
+}
+
+double? _filamentRemainingGrams(
+  InventoryItem item,
+  Iterable<SpoolTypeRecord> spoolTypes, {
+  Iterable<SpoolUsageRecord> usage = const [],
+}) {
+  final startingWeight = _startingFilamentWeightGrams(item, spoolTypes);
+  final tare = item.spoolTareWeightGrams;
+  if (startingWeight == null || tare == null) return null;
+  final used = usage
+      .where((entry) => entry.spoolId == item.id)
+      .fold<double>(0, (sum, entry) => sum + entry.totalGrams);
+  final remaining = startingWeight - tare - used;
+  return remaining < 0 ? 0 : remaining;
+}
+
+String _filamentCardRemainingLabel(
+  InventoryItem item,
+  Iterable<SpoolTypeRecord> spoolTypes, {
+  Iterable<SpoolUsageRecord> usage = const [],
+}) {
+  final remaining = _filamentRemainingGrams(item, spoolTypes, usage: usage);
+  return remaining == null
+      ? 'Usage Not Tracked'
+      : '${_optionalNumber(remaining)}g';
+}
 
 String _newCatalogId(String prefix) =>
     '$prefix-${DateTime.now().microsecondsSinceEpoch}';
@@ -25332,6 +25662,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   late final TextEditingController barcodeController;
   late final TextEditingController productUrlController;
   late final TextEditingController customSearchController;
+  late final TextEditingController filamentWeightController;
   late final TextEditingController spoolTareWeightController;
   late final TextEditingController spoolOuterDiameterController;
   late final TextEditingController spoolWidthController;
@@ -25348,6 +25679,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   String? brandId;
   String? productId;
   late String spoolTypeId;
+  bool filamentWeightManuallyEdited = false;
   late bool amsCompatible;
   late bool refill;
   Uint8List? itemImage;
@@ -25453,6 +25785,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
     customSearchController = TextEditingController(
       text: 'https://www.google.com/search?q={query}',
     );
+    filamentWeightController = TextEditingController(
+      text: _optionalNumber(item?.filamentWeightGrams),
+    );
+    filamentWeightManuallyEdited = item?.filamentWeightGrams != null;
     spoolTareWeightController = TextEditingController(
       text: _optionalNumber(item?.spoolTareWeightGrams),
     );
@@ -25542,6 +25878,15 @@ class _AddItemDialogState extends State<AddItemDialog> {
     if (!widget.spoolTypes.any((spool) => spool.id == spoolTypeId)) {
       spoolTypeId = widget.spoolTypes.firstOrNull?.id ?? defaultSpoolTypeId;
     }
+    if (filamentWeightController.text.trim().isEmpty) {
+      filamentWeightController.text = _optionalNumber(
+        widget.spoolTypes
+            .where((spool) => spool.id == spoolTypeId)
+            .firstOrNull
+            ?.weightGrams
+            .toDouble(),
+      );
+    }
     amsCompatible = item?.amsCompatible ?? false;
     refill = item?.refill ?? false;
     itemImage = item?.imageBytes;
@@ -25586,6 +25931,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
     barcodeController.dispose();
     productUrlController.dispose();
     customSearchController.dispose();
+    filamentWeightController.dispose();
     spoolTareWeightController.dispose();
     spoolOuterDiameterController.dispose();
     spoolWidthController.dispose();
@@ -26847,10 +27193,13 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           const SizedBox(height: 14),
                           InputDecorator(
                             decoration: const InputDecoration(
-                              labelText: 'Filament spool',
+                              label: Padding(
+                                padding: EdgeInsets.only(left: 24),
+                                child: Text('Filament Metrics'),
+                              ),
                               contentPadding: EdgeInsets.fromLTRB(
                                 16,
-                                16,
+                                32,
                                 16,
                                 12,
                               ),
@@ -26858,21 +27207,88 @@ class _AddItemDialogState extends State<AddItemDialog> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: widget.spoolTypes
-                                      .map(
-                                        (spool) => ChoiceChip(
-                                          key: Key('spool-size-${spool.id}'),
-                                          label: Text(spool.label),
-                                          selected: spoolTypeId == spool.id,
-                                          onSelected: (_) => setState(
-                                            () => spoolTypeId = spool.id,
+                                InputDecorator(
+                                  decoration: const InputDecoration(
+                                    labelText: 'Spool Type',
+                                    contentPadding: EdgeInsets.all(12),
+                                  ),
+                                  child: Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: widget.spoolTypes
+                                        .map(
+                                          (spool) => ChoiceChip(
+                                            key: Key('spool-size-${spool.id}'),
+                                            label: Text(spool.label),
+                                            selected: spoolTypeId == spool.id,
+                                            onSelected: (_) => setState(() {
+                                              spoolTypeId = spool.id;
+                                              if (!filamentWeightManuallyEdited) {
+                                                filamentWeightController
+                                                    .text = _optionalNumber(
+                                                  spool.weightGrams.toDouble(),
+                                                );
+                                              }
+                                            }),
                                           ),
+                                        )
+                                        .toList(),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                _responsiveFieldPair(
+                                  compact,
+                                  TextFormField(
+                                    key: const Key('filament-weight'),
+                                    controller: filamentWeightController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
                                         ),
-                                      )
-                                      .toList(),
+                                    decoration: const InputDecoration(
+                                      floatingLabelBehavior:
+                                          FloatingLabelBehavior.always,
+                                      label: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text('Start weight'),
+                                          SizedBox(width: 6),
+                                          Tooltip(
+                                            message: 'Weight of a full spool of filament before first use. (Or whenever you plan to start tracking)  Filament metrics will subtract empty spool weight and usage from this value.',
+                                            triggerMode: TooltipTriggerMode.tap,
+                                            constraints: BoxConstraints(
+                                              maxWidth: 320,
+                                            ),
+                                            child: Padding(
+                                              padding: EdgeInsets.all(4),
+                                              child: Icon(
+                                                Icons.help_outline_rounded,
+                                                size: 16,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      suffixText: 'g',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                    onChanged: (_) =>
+                                        filamentWeightManuallyEdited = true,
+                                  ),
+                                  TextFormField(
+                                    key: const Key('spool-tare-weight'),
+                                    controller: spoolTareWeightController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Empty spool weight',
+                                      suffixText: 'g',
+                                      helperText: 'Tare weight',
+                                    ),
+                                    validator: _validateOptionalPositiveNumber,
+                                  ),
                                 ),
                                 const SizedBox(height: 14),
                                 DropdownButtonFormField<String>(
@@ -26896,23 +27312,20 @@ class _AddItemDialogState extends State<AddItemDialog> {
                                   onChanged: (value) =>
                                       setState(() => spoolMaterialId = value),
                                 ),
-                                const SizedBox(height: 14),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Filament spool dimensions',
+                              contentPadding: EdgeInsets.all(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
                                 _responsiveFieldPair(
                                   compact,
-                                  TextFormField(
-                                    key: const Key('spool-tare-weight'),
-                                    controller: spoolTareWeightController,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
-                                        ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Empty spool weight',
-                                      suffixText: 'g',
-                                      helperText: 'Tare weight',
-                                    ),
-                                    validator: _validateOptionalPositiveNumber,
-                                  ),
                                   TextFormField(
                                     key: const Key('spool-outer-diameter'),
                                     controller: spoolOuterDiameterController,
@@ -26926,10 +27339,6 @@ class _AddItemDialogState extends State<AddItemDialog> {
                                     ),
                                     validator: _validateOptionalPositiveNumber,
                                   ),
-                                ),
-                                const SizedBox(height: 14),
-                                _responsiveFieldPair(
-                                  compact,
                                   TextFormField(
                                     key: const Key('spool-width'),
                                     controller: spoolWidthController,
@@ -26943,80 +27352,79 @@ class _AddItemDialogState extends State<AddItemDialog> {
                                     ),
                                     validator: _validateOptionalPositiveNumber,
                                   ),
-                                  TextFormField(
-                                    key: const Key('spool-hole-diameter'),
-                                    controller: spoolHoleDiameterController,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
-                                        ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Center-hole ID',
-                                      suffixText: 'mm',
-                                      helperText: 'Inner diameter',
-                                    ),
-                                    validator: _validateOptionalPositiveNumber,
-                                  ),
                                 ),
-                                SwitchListTile(
-                                  key: const Key('filament-refill'),
-                                  contentPadding: EdgeInsets.zero,
-                                  title: const Text('Refill / reload'),
-                                  subtitle: const Text(
-                                    'This filament requires a reusable master spool.',
+                                const SizedBox(height: 14),
+                                TextFormField(
+                                  key: const Key('spool-hole-diameter'),
+                                  controller: spoolHoleDiameterController,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Center-hole ID',
+                                    suffixText: 'mm',
+                                    helperText: 'Inner diameter',
                                   ),
-                                  value: refill,
-                                  onChanged: (value) =>
-                                      setState(() => refill = value),
-                                ),
-                                if (refill) ...[
-                                  TextFormField(
-                                    key: const Key('master-spool'),
-                                    controller: masterSpoolController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Master spool / reload system',
-                                      hintText: 'Polymaker MasterSpool',
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  DropdownButtonFormField<String>(
-                                    key: const Key('master-spool-material'),
-                                    initialValue: _materialById(
-                                      masterSpoolMaterialId,
-                                      'component:master-spool',
-                                    )?.id,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Master-spool material',
-                                      helperText: 'Optional',
-                                    ),
-                                    items:
-                                        _materialsFor('component:master-spool')
-                                            .map(
-                                              (material) => DropdownMenuItem(
-                                                value: material.id,
-                                                child: Text(material.name),
-                                              ),
-                                            )
-                                            .toList(),
-                                    onChanged: (value) => setState(
-                                      () => masterSpoolMaterialId = value,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                ],
-                                SwitchListTile(
-                                  key: const Key('ams-compatible'),
-                                  contentPadding: EdgeInsets.zero,
-                                  title: const Text('AMS compatible'),
-                                  subtitle: const Text(
-                                    'The loaded spool dimensions and material work in an automatic material system.',
-                                  ),
-                                  value: amsCompatible,
-                                  onChanged: (value) =>
-                                      setState(() => amsCompatible = value),
+                                  validator: _validateOptionalPositiveNumber,
                                 ),
                               ],
                             ),
+                          ),
+                          SwitchListTile(
+                            key: const Key('filament-refill'),
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Refill / reload'),
+                            subtitle: const Text(
+                              'This filament requires a reusable master spool.',
+                            ),
+                            value: refill,
+                            onChanged: (value) =>
+                                setState(() => refill = value),
+                          ),
+                          if (refill) ...[
+                            TextFormField(
+                              key: const Key('master-spool'),
+                              controller: masterSpoolController,
+                              decoration: const InputDecoration(
+                                labelText: 'Master spool / reload system',
+                                hintText: 'Polymaker MasterSpool',
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              key: const Key('master-spool-material'),
+                              initialValue: _materialById(
+                                masterSpoolMaterialId,
+                                'component:master-spool',
+                              )?.id,
+                              decoration: const InputDecoration(
+                                labelText: 'Master-spool material',
+                                helperText: 'Optional',
+                              ),
+                              items: _materialsFor('component:master-spool')
+                                  .map(
+                                    (material) => DropdownMenuItem(
+                                      value: material.id,
+                                      child: Text(material.name),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) =>
+                                  setState(() => masterSpoolMaterialId = value),
+                            ),
+                            const SizedBox(height: 4),
+                          ],
+                          SwitchListTile(
+                            key: const Key('ams-compatible'),
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('AMS compatible'),
+                            subtitle: const Text(
+                              'The loaded spool dimensions and material work in an automatic material system.',
+                            ),
+                            value: amsCompatible,
+                            onChanged: (value) =>
+                                setState(() => amsCompatible = value),
                           ),
                         ],
                         if (widget.machines.isNotEmpty) ...[
@@ -27414,6 +27822,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
         spoolTypeId: type == InventoryType.filament
             ? spoolTypeId
             : defaultSpoolTypeId,
+        filamentWeightGrams: type == InventoryType.filament
+            ? double.tryParse(filamentWeightController.text.trim())
+            : null,
         amsCompatible: type == InventoryType.filament && amsCompatible,
         spoolTareWeightGrams: type == InventoryType.filament
             ? double.tryParse(spoolTareWeightController.text.trim())
@@ -28880,6 +29291,8 @@ class ItemDetailsPanel extends StatefulWidget {
     required this.spoolTypes,
     this.spoolUsage = const [],
     this.onSpoolUsageAdded,
+    this.onSpoolUsageChanged,
+    this.onSpoolUsageDeleted,
     this.onEdit,
     this.onSplitOne,
     this.typeLabel,
@@ -28900,6 +29313,8 @@ class ItemDetailsPanel extends StatefulWidget {
   final List<SpoolTypeRecord> spoolTypes;
   final List<SpoolUsageRecord> spoolUsage;
   final ValueChanged<SpoolUsageRecord>? onSpoolUsageAdded;
+  final ValueChanged<SpoolUsageRecord>? onSpoolUsageChanged;
+  final ValueChanged<SpoolUsageRecord>? onSpoolUsageDeleted;
   final Future<void> Function(InventoryItem item)? onEdit;
   final Future<void> Function(InventoryItem item)? onSplitOne;
   final String? typeLabel;
@@ -28918,7 +29333,9 @@ class ItemDetailsPanel extends StatefulWidget {
 }
 
 class _SpoolUsageDialog extends StatefulWidget {
-  const _SpoolUsageDialog();
+  const _SpoolUsageDialog({this.initialEntry});
+
+  final SpoolUsageRecord? initialEntry;
 
   @override
   State<_SpoolUsageDialog> createState() => _SpoolUsageDialogState();
@@ -28931,6 +29348,19 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
   final reasonController = TextEditingController();
   final notesController = TextEditingController();
   SpoolPrintOutcome outcome = SpoolPrintOutcome.successful;
+
+  @override
+  void initState() {
+    super.initState();
+    final entry = widget.initialEntry;
+    if (entry == null) return;
+    usedController.text = _formatBomQuantity(entry.gramsUsed);
+    wasteController.text = _formatBomQuantity(entry.gramsWaste);
+    projectController.text = entry.project;
+    reasonController.text = entry.wasteReason;
+    notesController.text = entry.notes;
+    outcome = entry.outcome;
+  }
 
   @override
   void dispose() {
@@ -28958,12 +29388,13 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
     Navigator.pop(
       context,
       SpoolUsageRecord(
-        id: '',
+        id: widget.initialEntry?.id ?? '',
         spoolId: '',
-        recordedAt: DateTime.now(),
+        recordedAt: widget.initialEntry?.recordedAt ?? DateTime.now(),
         gramsUsed: used,
         gramsWaste: waste,
         outcome: outcome,
+        buildId: widget.initialEntry?.buildId,
         project: projectController.text.trim(),
         wasteReason: reasonController.text.trim(),
         notes: notesController.text.trim(),
@@ -29048,6 +29479,8 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
 }
 
 enum _FilamentSidebarTab { instructions, spool, brand }
+
+enum _SpoolUsageAction { edit, delete }
 
 class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   bool useFahrenheit = false;
@@ -29237,6 +29670,16 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                   ],
                 ),
               ),
+              if (item.materialName.trim().isNotEmpty) ...[
+                if (overlay) const Spacer() else const SizedBox(width: 11),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 130),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _MaterialBadge(item: item),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -29473,22 +29916,6 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
       ],
       _FilamentSidebarTab.spool => <Widget>[
         _DetailSection(
-          icon: Icons.scale_outlined,
-          title: 'Filament weight',
-          text:
-              widget.spoolTypes
-                  .where((spool) => spool.id == item.spoolTypeId)
-                  .firstOrNull
-                  ?.label ??
-              '1 kg',
-        ),
-        if (item.spoolTareWeightGrams != null)
-          _DetailSection(
-            icon: Icons.monitor_weight_outlined,
-            title: 'Empty spool weight',
-            text: '${_optionalNumber(item.spoolTareWeightGrams)} g tare',
-          ),
-        _DetailSection(
           icon: Icons.straighten_rounded,
           title: 'Spool dimensions',
           text: spoolDimensions.isEmpty ? 'Not configured' : spoolDimensions,
@@ -29503,15 +29930,48 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
               : 'Factory spool',
         ),
         _DetailSection(
-          icon: item.amsCompatible
-              ? Icons.check_circle_outline_rounded
-              : Icons.block_rounded,
+          key: const Key('sidebar-ams-compatibility'),
+          icon: Icons.memory_outlined,
           title: 'AMS compatibility',
-          text: item.amsCompatible ? 'Compatible' : 'Not marked compatible',
+          text: '',
+          valueWidget: Icon(
+            item.amsCompatible
+                ? Icons.check_circle_rounded
+                : Icons.cancel_rounded,
+            color: item.amsCompatible
+                ? const Color(0xff4dd68c)
+                : const Color(0xffff6b6b),
+          ),
         ),
         if (item.styleEntries.isNotEmpty)
           _FilamentStyleDetailSection(entries: item.styleEntries),
-        ..._spoolUsageContent(),
+        _spoolUsageSection(),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _DetailSection(
+                key: const Key('sidebar-spool-type'),
+                icon: Icons.donut_large_rounded,
+                title: 'Spool type',
+                text:
+                    _spoolTypeForItem(item, widget.spoolTypes)?.label ??
+                    'Custom',
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _DetailSection(
+                key: const Key('sidebar-empty-spool-weight'),
+                icon: Icons.monitor_weight_outlined,
+                title: 'Empty spool weight',
+                text: item.spoolTareWeightGrams == null
+                    ? 'Not configured'
+                    : '${_optionalNumber(item.spoolTareWeightGrams)} g',
+              ),
+            ),
+          ],
+        ),
       ],
       _FilamentSidebarTab.brand => <Widget>[
         _DetailSection(
@@ -29571,6 +30031,34 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     );
   }
 
+  Widget _spoolUsageSection() => Padding(
+    key: const Key('sidebar-usage-tracking'),
+    padding: const EdgeInsets.only(bottom: 24),
+    child: InputDecorator(
+      decoration: const InputDecoration(
+        labelText: 'Usage tracking',
+        contentPadding: EdgeInsets.fromLTRB(16, 18, 16, 8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.onSpoolUsageAdded != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                key: const Key('log-spool-usage'),
+                onPressed: widget.canEdit ? _logSpoolUsage : null,
+                icon: const Icon(Icons.add_chart_rounded, size: 18),
+                label: const Text('Log print'),
+              ),
+            ),
+          if (widget.onSpoolUsageAdded != null) const SizedBox(height: 8),
+          ..._spoolUsageContent(),
+        ],
+      ),
+    ),
+  );
+
   List<Widget> _spoolUsageContent() {
     final entries =
         widget.spoolUsage.where((entry) => entry.spoolId == item.id).toList()
@@ -29580,42 +30068,40 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
       0,
       (sum, entry) => sum + entry.gramsWaste,
     );
-    final nominal = widget.spoolTypes
-        .where((spool) => spool.id == item.spoolTypeId)
-        .firstOrNull
-        ?.weightGrams;
-    final remaining = nominal == null ? null : nominal - used - waste;
+    final remaining = _filamentRemainingGrams(
+      item,
+      widget.spoolTypes,
+      usage: widget.spoolUsage,
+    );
     return [
-      const Divider(height: 34),
-      Row(
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
         children: [
-          const Expanded(
-            child: Text(
-              'Usage tracking',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-            ),
-          ),
-          if (widget.onSpoolUsageAdded != null)
-            OutlinedButton.icon(
-              key: const Key('log-spool-usage'),
-              onPressed: widget.canEdit ? _logSpoolUsage : null,
-              icon: const Icon(Icons.add_chart_rounded, size: 18),
-              label: const Text('Log print'),
+          for (final metric in [
+            if (remaining != null)
+              '${remaining.toStringAsFixed(1)} g remaining',
+            '${used.toStringAsFixed(1)} g used',
+            '${waste.toStringAsFixed(1)} g waste',
+          ])
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xff272331),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                metric,
+                style: const TextStyle(color: Color(0xffb4bac9)),
+              ),
             ),
         ],
-      ),
-      const SizedBox(height: 8),
-      Text(
-        remaining == null
-            ? '${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste'
-            : '${remaining.clamp(0, double.infinity).toStringAsFixed(1)} g remaining · ${used.toStringAsFixed(1)} g used · ${waste.toStringAsFixed(1)} g waste',
-        style: const TextStyle(color: Color(0xffb4bac9)),
       ),
       if (entries.isEmpty)
         const Padding(
           padding: EdgeInsets.only(top: 12),
           child: Text(
-            'No print usage recorded yet. Amounts are tracked in grams.',
+            'No prints logged yet.',
             style: TextStyle(color: Color(0xff929aac)),
           ),
         )
@@ -29645,10 +30131,126 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                     entry.recordedAt.toLocal().toString().split('.').first,
                   ].join(' · '),
                 ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (entry.notes.trim().isNotEmpty)
+                      Tooltip(
+                        key: Key('spool-usage-notes-${entry.id}'),
+                        message: entry.notes.trim(),
+                        waitDuration: const Duration(milliseconds: 300),
+                        showDuration: const Duration(seconds: 8),
+                        preferBelow: false,
+                        child: IconButton(
+                          key: Key('spool-usage-notes-button-${entry.id}'),
+                          onPressed: () =>
+                              _showSpoolUsageNotes(entry.notes.trim()),
+                          icon: Semantics(
+                            label: 'Print log notes',
+                            value: entry.notes.trim(),
+                            child: _PrintNotesIcon(
+                              key: Key('spool-usage-notes-glyph-${entry.id}'),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (widget.canEdit &&
+                        (widget.onSpoolUsageChanged != null ||
+                            widget.onSpoolUsageDeleted != null))
+                      PopupMenuButton<_SpoolUsageAction>(
+                        key: Key('spool-usage-actions-${entry.id}'),
+                        tooltip: 'Print log actions',
+                        borderRadius: BorderRadius.circular(14),
+                        clipBehavior: Clip.antiAlias,
+                        onSelected: (action) {
+                          switch (action) {
+                            case _SpoolUsageAction.edit:
+                              unawaited(_editSpoolUsage(entry));
+                            case _SpoolUsageAction.delete:
+                              unawaited(_confirmDeleteSpoolUsage(entry));
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          if (widget.onSpoolUsageChanged != null)
+                            const PopupMenuItem(
+                              value: _SpoolUsageAction.edit,
+                              height: 52,
+                              padding: EdgeInsets.symmetric(horizontal: 12),
+                              child: _PopupActionRow(
+                                actionKey: 'spool-usage-edit',
+                                icon: Icons.edit_outlined,
+                                label: 'Edit log',
+                              ),
+                            ),
+                          if (widget.onSpoolUsageDeleted != null)
+                            const PopupMenuItem(
+                              value: _SpoolUsageAction.delete,
+                              height: 52,
+                              padding: EdgeInsets.symmetric(horizontal: 12),
+                              child: _PopupActionRow(
+                                actionKey: 'spool-usage-delete',
+                                icon: Icons.delete_outline_rounded,
+                                label: 'Delete log',
+                                destructive: true,
+                              ),
+                            ),
+                        ],
+                      ),
+                  ],
+                ),
               ),
             ),
     ];
   }
+
+  Future<void> _editSpoolUsage(SpoolUsageRecord entry) async {
+    final edited = await showDialog<SpoolUsageRecord>(
+      context: context,
+      builder: (_) => _SpoolUsageDialog(initialEntry: entry),
+    );
+    if (!mounted || edited == null) return;
+    widget.onSpoolUsageChanged?.call(edited.copyWith(spoolId: entry.spoolId));
+    setState(() {});
+  }
+
+  Future<void> _confirmDeleteSpoolUsage(SpoolUsageRecord entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete print log?'),
+        content: const Text(
+          'This removes the usage entry and updates the spool total.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    widget.onSpoolUsageDeleted?.call(entry);
+    setState(() {});
+  }
+
+  Future<void> _showSpoolUsageNotes(String notes) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Print notes'),
+      content: SelectableText(notes),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 
   Future<void> _logSpoolUsage() async {
     final entry = await showDialog<SpoolUsageRecord>(
@@ -30101,6 +30703,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         ),
                       if (item.productUrl.isNotEmpty)
                         _ProductSourceSection(url: item.productUrl),
+                      const SizedBox(height: 24),
                       _DetailSection(
                         key: const Key('sidebar-added-to-inventory'),
                         icon: Icons.schedule_rounded,
@@ -30568,10 +31171,12 @@ class _DetailSection extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.text,
+    this.valueWidget,
   });
   final IconData icon;
   final String title;
   final String text;
+  final Widget? valueWidget;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -30587,10 +31192,14 @@ class _DetailSection extends StatelessWidget {
             children: [
               Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 5),
-              Text(
-                text.isEmpty ? 'No instructions recorded.' : text,
-                style: const TextStyle(color: Color(0xffa2a9b9), height: 1.45),
-              ),
+              valueWidget ??
+                  Text(
+                    text.isEmpty ? 'No instructions recorded.' : text,
+                    style: const TextStyle(
+                      color: Color(0xffa2a9b9),
+                      height: 1.45,
+                    ),
+                  ),
             ],
           ),
         ),
@@ -31287,7 +31896,7 @@ class _RemoteQuantityChangeEffectState extends State<RemoteQuantityChangeEffect>
     with SingleTickerProviderStateMixin {
   late final AnimationController controller = AnimationController(
     vsync: this,
-    duration: _scaledAnimationDuration(1700, widget.durationPercent),
+    duration: _scaledAnimationDuration(2040, widget.durationPercent),
   );
 
   @override
@@ -31295,7 +31904,7 @@ class _RemoteQuantityChangeEffectState extends State<RemoteQuantityChangeEffect>
     super.didUpdateWidget(oldWidget);
     if (widget.durationPercent != oldWidget.durationPercent) {
       controller.duration = _scaledAnimationDuration(
-        1700,
+        2040,
         widget.durationPercent,
       );
     }
@@ -31327,7 +31936,7 @@ class _RemoteQuantityChangeEffectState extends State<RemoteQuantityChangeEffect>
             Positioned.fill(
               child: IgnorePointer(
                 child: Opacity(
-                  opacity: (.24 * opacity).clamp(0, 1),
+                  opacity: (.46 * opacity).clamp(0, 1),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -31347,7 +31956,7 @@ class _RemoteQuantityChangeEffectState extends State<RemoteQuantityChangeEffect>
             Positioned.fill(
               child: IgnorePointer(
                 child: Opacity(
-                  opacity: (.48 * opacity).clamp(0, 1),
+                  opacity: (.86 * opacity).clamp(0, 1),
                   child: Align(
                     alignment: Alignment(
                       -1.45 + (2.9 * travel),
@@ -31405,7 +32014,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
     with SingleTickerProviderStateMixin {
   late final AnimationController controller = AnimationController(
     vsync: this,
-    duration: _scaledAnimationDuration(1450, widget.durationPercent),
+    duration: _scaledAnimationDuration(1740, widget.durationPercent),
   );
   Timer? recurrenceTimer;
   ValueNotifier<bool>? scrollingNotifier;
@@ -31415,6 +32024,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
   void initState() {
     super.initState();
     _restartVisibilityTracking();
+    if (widget.trigger > 0) controller.forward(from: 0);
   }
 
   @override
@@ -31435,7 +32045,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
     super.didUpdateWidget(oldWidget);
     if (widget.durationPercent != oldWidget.durationPercent) {
       controller.duration = _scaledAnimationDuration(
-        1450,
+        1740,
         widget.durationPercent,
       );
     }
@@ -31511,7 +32121,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
             Positioned.fill(
               child: IgnorePointer(
                 child: Opacity(
-                  opacity: (.34 * pulse).clamp(0, 1),
+                  opacity: (.62 * pulse).clamp(0, 1),
                   child: const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: RadialGradient(
@@ -31526,7 +32136,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
             Positioned.fill(
               child: IgnorePointer(
                 child: Opacity(
-                  opacity: (.52 * pulse).clamp(0, 1),
+                  opacity: (.96 * pulse).clamp(0, 1),
                   child: Align(
                     // Low-stock warnings drop down through the card instead
                     // of sliding laterally across it.
@@ -31584,7 +32194,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
   static const horizontalPositions = [-.72, -.2, .38, .76, -.48, .08, .58];
   late final AnimationController controller = AnimationController(
     vsync: this,
-    duration: _scaledAnimationDuration(2300, widget.durationPercent),
+    duration: _scaledAnimationDuration(2760, widget.durationPercent),
   );
   Timer? recurrenceTimer;
   ValueNotifier<bool>? scrollingNotifier;
@@ -31594,6 +32204,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
   void initState() {
     super.initState();
     _restartVisibilityTracking();
+    if (widget.trigger > 0) controller.forward(from: 0);
   }
 
   @override
@@ -31614,7 +32225,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
     super.didUpdateWidget(oldWidget);
     if (widget.durationPercent != oldWidget.durationPercent) {
       controller.duration = _scaledAnimationDuration(
-        2300,
+        2760,
         widget.durationPercent,
       );
     }
@@ -31688,7 +32299,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
             Positioned.fill(
               child: IgnorePointer(
                 child: Opacity(
-                  opacity: (.2 * wash).clamp(0, 1),
+                  opacity: (.41 * wash).clamp(0, 1),
                   child: const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -31716,7 +32327,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
     return Positioned.fill(
       child: IgnorePointer(
         child: Opacity(
-          opacity: (.72 * visibility).clamp(0, 1),
+          opacity: (1.0 * visibility).clamp(0, 1),
           child: Align(
             alignment: Alignment(
               horizontalPositions[index],
@@ -31786,7 +32397,9 @@ class ItemCardEffects extends StatelessWidget {
           child: result,
         );
       }
-      if (lowStockEffectsEnabled) {
+      // Keep idle cards cheap: alert animation controllers and builders are
+      // only needed while an alert is active or has fired.
+      if (lowStockEffectsEnabled && (lowStockActive || lowStockVersion > 0)) {
         result = LowStockPulseEffect(
           itemId: itemId,
           trigger: lowStockVersion,
@@ -31797,7 +32410,7 @@ class ItemCardEffects extends StatelessWidget {
           child: result,
         );
       }
-      if (moistureEffectsEnabled) {
+      if (moistureEffectsEnabled && (moistureActive || moistureVersion > 0)) {
         result = MoistureDropletWaveEffect(
           itemId: itemId,
           trigger: moistureVersion,
@@ -31894,25 +32507,29 @@ class _CardTagMetadataRow extends StatelessWidget {
   final bool overlay;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      if (metadata.isNotEmpty)
-        Text(
-          metadata,
-          maxLines: 1,
-          style: TextStyle(
-            color: overlay ? const Color(0xffc3c8d3) : const Color(0xff929aac),
-            fontSize: 12,
+  Widget build(BuildContext context) {
+    final tags = _itemDisplayTags(item);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (metadata.isNotEmpty)
+          Text(
+            metadata,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: overlay
+                  ? const Color(0xffc3c8d3)
+                  : const Color(0xff929aac),
+              fontSize: 12,
+            ),
           ),
-        ),
-      if (metadata.isNotEmpty && _itemDisplayTags(item).isNotEmpty)
-        const SizedBox(width: 7),
-      if (_itemDisplayTags(item).isNotEmpty)
-        Expanded(
-          child: _ItemTagRow(item: item, overlay: overlay),
-        ),
-    ],
-  );
+        if (metadata.isNotEmpty && tags.isNotEmpty) const SizedBox(height: 6),
+        if (tags.isNotEmpty) _ItemTagRow(item: item, overlay: overlay),
+      ],
+    );
+  }
 }
 
 class _PhotoInventoryCardContent extends StatelessWidget {
@@ -32025,24 +32642,13 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _CardTypeAndPrice(
+                        _CardNameAndType(
                           item: item,
                           typeLabel: typeLabel,
                           typeIcon: typeIcon,
                           typeIconImageBytes: typeIconImageBytes,
                           overlay: true,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          item.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: compact ? 15 : 17,
-                            height: 1.15,
-                            fontWeight: FontWeight.w800,
-                          ),
+                          compact: compact,
                         ),
                         if (!compact &&
                             (metadata.isNotEmpty ||
@@ -32451,21 +33057,12 @@ class InventoryCard extends StatelessWidget {
                             ],
                           ),
                           const Spacer(),
-                          _CardTypeAndPrice(
+                          _CardNameAndType(
                             item: item,
                             typeLabel: typeLabel ?? item.typeLabel,
                             typeIcon: typeIcon,
                             typeIconImageBytes: typeIconImageBytes,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            item.name,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: compact ? 15 : 17,
-                              fontWeight: FontWeight.w700,
-                            ),
+                            compact: compact,
                           ),
                           if (!compact) ...[
                             const SizedBox(height: 8),
@@ -32534,13 +33131,14 @@ class InventoryCard extends StatelessWidget {
   );
 }
 
-class _CardTypeAndPrice extends StatelessWidget {
-  const _CardTypeAndPrice({
+class _CardNameAndType extends StatelessWidget {
+  const _CardNameAndType({
     required this.item,
     required this.typeLabel,
     required this.typeIcon,
     required this.typeIconImageBytes,
     this.overlay = false,
+    this.compact = false,
   });
 
   final InventoryItem item;
@@ -32548,12 +33146,49 @@ class _CardTypeAndPrice extends StatelessWidget {
   final IconData? typeIcon;
   final Uint8List? typeIconImageBytes;
   final bool overlay;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     mainAxisSize: MainAxisSize.min,
     children: [
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              item.name,
+              key: Key('item-card-name-${item.id}'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: overlay ? Colors.white : null,
+                fontSize: compact ? 15 : 17,
+                height: 1.15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Align(
+            alignment: Alignment.topRight,
+            key: Key('item-price-row-${item.id}'),
+            child: Text(
+              '\$${item.cost.toStringAsFixed(2)}',
+              style: TextStyle(
+                color: overlay
+                    ? Colors.white
+                    : Theme.of(context).colorScheme.onSurface,
+                fontSize: compact ? 15 : 17,
+                height: 1.15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 3),
       Row(
         key: Key('item-type-row-${item.id}'),
         children: [
@@ -32577,21 +33212,6 @@ class _CardTypeAndPrice extends StatelessWidget {
             ),
           ),
         ],
-      ),
-      const SizedBox(height: 3),
-      Align(
-        key: Key('item-price-row-${item.id}'),
-        alignment: Alignment.centerRight,
-        child: Text(
-          '\$${item.cost.toStringAsFixed(2)}',
-          style: TextStyle(
-            color: overlay
-                ? Colors.white
-                : Theme.of(context).colorScheme.onSurface,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
       ),
     ],
   );
@@ -32735,7 +33355,7 @@ class InventoryRow extends StatelessWidget {
     ],
   );
 
-  Widget _mobileLayout() => ConstrainedBox(
+  Widget _mobileLayout(BuildContext context) => ConstrainedBox(
     key: Key('mobile-inventory-row-${item.id}'),
     constraints: const BoxConstraints(minHeight: 132),
     child: Padding(
@@ -32810,7 +33430,7 @@ class InventoryRow extends StatelessWidget {
     ),
   );
 
-  Widget _desktopLayout() => ConstrainedBox(
+  Widget _desktopLayout(BuildContext context) => ConstrainedBox(
     constraints: const BoxConstraints(minHeight: 86),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -32924,8 +33544,9 @@ class InventoryRow extends StatelessWidget {
           recurrenceSeconds: animationRecurrenceSeconds,
           scrollingListenable: scrollingListenable,
           child: LayoutBuilder(
-            builder: (_, constraints) =>
-                constraints.maxWidth < 600 ? _mobileLayout() : _desktopLayout(),
+            builder: (_, constraints) => constraints.maxWidth < 600
+                ? _mobileLayout(context)
+                : _desktopLayout(context),
           ),
         ),
       ),
@@ -33111,7 +33732,8 @@ class _PinnedActionBarDelegate extends SliverPersistentHeaderDelegate {
 }
 
 String _age(DateTime added) {
-  final days = DateTime(2026, 8, 25).difference(added).inDays;
+  final days = math.max(0, DateTime.now().difference(added).inDays);
+  if (days == 0) return 'Added today';
   if (days < 30) return '${days}d old';
   if (days < 365) return '${days ~/ 30}mo old';
   return '${(days / 365).toStringAsFixed(1)}y old';

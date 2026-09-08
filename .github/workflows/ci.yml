@@ -110,8 +110,7 @@ jobs:
         id: artifact
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
-          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
-          echo "name=Inventorinator-v${app_version}-build${app_build}-Linux-x64" >> "$GITHUB_OUTPUT"
+          echo "name=Inventorinator-v${app_version}-Linux-x64" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
@@ -141,8 +140,7 @@ jobs:
         id: artifact
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
-          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
-          echo "name=Inventorinator-v${app_version}-build${app_build}-Android-debug" >> "$GITHUB_OUTPUT"
+          echo "name=Inventorinator-v${app_version}-Android-debug" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
@@ -169,8 +167,7 @@ jobs:
         shell: bash
         run: |
           app_version="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)"
-          app_build="$(sed -n 's/^version: [^+]*+\([0-9][0-9]*\).*/\1/p' pubspec.yaml)"
-          echo "name=Inventorinator-v${app_version}-build${app_build}-Windows-x64" >> "$GITHUB_OUTPUT"
+          echo "name=Inventorinator-v${app_version}-Windows-x64" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}

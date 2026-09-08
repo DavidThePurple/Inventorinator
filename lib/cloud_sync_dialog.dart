@@ -16,6 +16,15 @@ import 'workshop_delta.dart';
 
 enum _SyncChoice { device, cloud }
 
+List<WorkspaceDevice> _currentDeviceFirst(
+  List<WorkspaceDevice> devices,
+  String userId,
+) {
+  final current = devices.where((device) => device.userId == userId);
+  final others = devices.where((device) => device.userId != userId);
+  return [...current, ...others];
+}
+
 class CloudSyncDialog extends StatefulWidget {
   const CloudSyncDialog({
     super.key,
@@ -692,7 +701,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     if (!canManageWorkspaceDevices(callerRole)) {
       throw const SupabaseSyncException('Your role cannot manage devices.');
     }
-    var devices = await service.listDevices(session);
+    var devices = _currentDeviceFirst(
+      await service.listDevices(session),
+      session.userId,
+    );
     var accessMessage = '';
     if (!mounted) return;
     await showDialog<void>(
@@ -706,7 +718,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           final isAdmin = me?.role == 'admin';
           final isManager = me?.role == 'manager';
           Future<void> refresh() async {
-            devices = await service.listDevices(session);
+            devices = _currentDeviceFirst(
+              await service.listDevices(session),
+              session.userId,
+            );
             setDeviceState(() {});
           }
 

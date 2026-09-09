@@ -83,11 +83,16 @@ declare
   used_quantity numeric;
 begin
   select
-    (state_json #>> '{inventory,0,quantity}')::numeric,
-    (state_json #>> '{builds,0,lines,0,usedQuantity}')::numeric
+    (select (payload->>'quantity')::numeric
+       from public.inventorinator_entities
+      where workspace_id = '10000000-0000-0000-0000-000000000001'
+        and entity_type = 'inventory' and entity_id = 'INV-1' and not deleted),
+    (select (payload #>> '{lines,0,usedQuantity}')::numeric
+       from public.inventorinator_entities
+      where workspace_id = '10000000-0000-0000-0000-000000000001'
+        and entity_type = 'builds' and entity_id = 'B-1' and not deleted)
   into inventory_quantity, used_quantity
-  from public.workshop_states
-  where workspace_id = '10000000-0000-0000-0000-000000000001';
+  ;
   if inventory_quantity <> 0 or used_quantity <> 1 then
     raise exception 'legitimate Build use was not persisted';
   end if;

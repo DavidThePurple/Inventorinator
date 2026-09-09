@@ -53,41 +53,35 @@ begin
   if definition is null then
     raise exception 'The incremental entity-sync RPC is missing';
   end if;
+  -- Stop touching workshop_states for incremental writes. Normal roles only
+  -- write the changed entity row; builders get a validation snapshot before
+  -- and after their small, privileged operation.
   updated := regexp_replace(
     definition,
-    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'on'\s*,\s*true\s*\);$pattern$,
-    '',
+    $pattern$(?is)select\s+coalesce\(state_json,\s*'\{\}'::jsonb\)\s+into\s+snapshot\s+from\s+public\.workshop_states\s+where\s+workspace_id\s*=\s*target_workspace\s+for\s+update;\s*snapshot\s*:=\s*coalesce\(snapshot,\s*'\{"schemaVersion":8\}'::jsonb\);\s*initial_snapshot\s*:=\s*snapshot;$pattern$,
+    E'if caller_role = ''builder'' then\n' ||
+      E'    snapshot := public.build_inventorinator_entity_snapshot(target_workspace);\n' ||
+      E'    initial_snapshot := snapshot;\n' ||
+      E'  end if;',
     1
   );
   updated := regexp_replace(
     updated,
-    $pattern$(?is)insert\s+into\s+public\.workshop_states\s*\([^;]*?;\s*$pattern$,
-    '',
+    $pattern$(?is)\n\s*--\s*Maintain the v1\.1 snapshot as a compatibility mirror\..*?\n\s*end if;\s*\n\s*end loop;$pattern$,
+    E'\n  end loop;',
     1
   );
-  updated := regexp_replace(
+  updated := replace(
     updated,
-    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'off'\s*,\s*true\s*\);$pattern$,
-    '',
-    1
+    E'  end loop;\n\n  if caller_role = ''builder'' then',
+    E'  end loop;\n\n  if caller_role = ''builder'' then\n    snapshot := public.build_inventorinator_entity_snapshot(target_workspace);'
   );
   if updated = definition or
      updated ~ $assert$inventorinator\.incremental_snapshot_write$assert$ or
-     updated ~* $assert$insert\s+into\s+public\.workshop_states$assert$ then
+     updated ~* $assert$public\.workshop_states$assert$ or
+     updated ~ $assert$Maintain the v1\.1 snapshot$assert$ then
     raise exception 'Could not remove the synchronous compatibility snapshot write';
   end if;
-  with_builder_snapshot := replace(
-    updated,
-    'snapshot := coalesce(snapshot, ''{"schemaVersion":8}''::jsonb);',
-    'snapshot := coalesce(snapshot, ''{"schemaVersion":8}''::jsonb);' ||
-      E'\n  if caller_role = ''builder'' then\n' ||
-      '    snapshot := public.build_inventorinator_entity_snapshot(target_workspace);' ||
-      E'\n  end if;'
-  );
-  if with_builder_snapshot = updated then
-    raise exception 'Could not add the builder validation snapshot';
-  end if;
-  updated := with_builder_snapshot;
   execute updated;
 end;
 $migration$;

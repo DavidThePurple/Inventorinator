@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -50,6 +51,9 @@ class CloudSyncDialog extends StatefulWidget {
 class _CloudSyncDialogState extends State<CloudSyncDialog> {
   static const _knownWorkspacesPreference = 'known_supabase_workspaces';
   static const _syncIntervalOptions = <int>[15, 30, 60, 300, 900];
+  // Keep each server transaction small enough for conservative PostgREST
+  // statement timeouts. Spool-usage records can make a single patch expensive.
+  static const _syncUploadBatchSize = 1;
   static const _defaultUrl = String.fromEnvironment(
     'SUPABASE_URL',
     defaultValue: '',
@@ -991,17 +995,29 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     cursor = incoming.revision;
     widget.database.saveSyncCursor(workspaceId, cursor);
 
-    final pending = widget.database.loadPendingWorkshopChanges();
+    var pending = widget.database.loadPendingWorkshopChanges();
     if (pending.isNotEmpty) {
-      await service.uploadChanges(
-        session,
-        pending.map((entry) => entry.change),
-        deviceId: widget.database.loadStringPreference(
-          'device_id',
-          fallback: '',
-        ),
+      final deviceId = widget.database.loadStringPreference(
+        'device_id',
+        fallback: '',
       );
-      widget.database.acknowledgePendingWorkshopChanges(pending);
+      for (
+        var offset = 0;
+        offset < pending.length;
+        offset += _syncUploadBatchSize
+      ) {
+        final end = math.min(offset + _syncUploadBatchSize, pending.length);
+        final batch = pending.sublist(offset, end);
+        await service.uploadChanges(
+          session,
+          batch.map((entry) => entry.change),
+          deviceId: deviceId,
+        );
+        // Version matching preserves edits made while an earlier batch was in
+        // flight instead of acknowledging newer local changes accidentally.
+        widget.database.acknowledgePendingWorkshopChanges(batch);
+      }
+      pending = widget.database.loadPendingWorkshopChanges();
     }
     final confirmed = await service.downloadChanges(
       session,

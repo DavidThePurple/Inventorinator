@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
 
-const requiredInventorinatorSchemaVersion = 19;
+const requiredInventorinatorSchemaVersion = 20;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -283,13 +283,15 @@ class SupabaseSyncService {
 
   final SupabaseConfig config;
   final http.Client _client;
-  static const _requestTimeout = Duration(seconds: 20);
+  // The incremental RPC has a scoped 45 second server timeout on larger
+  // self-hosted workspaces. Keep the client deadline aligned with it.
+  static const _requestTimeout = Duration(seconds: 45);
 
   Future<http.Response> _request(Future<http.Response> request) =>
       request.timeout(
         _requestTimeout,
         onTimeout: () => throw const SupabaseSyncException(
-          'The sync server did not respond within 20 seconds.',
+          'The sync server did not respond within 45 seconds.',
         ),
       );
 

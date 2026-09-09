@@ -6519,6 +6519,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _autoSyncPausedForAuthentication = false;
   bool _applyingCloudState = false;
   final List<Map<String, Object?>> _pendingAuditEvents = [];
+  // Keep audit metadata bounded per RPC. A device that was offline for a long
+  // time must not make its first inventory upload exceed the server timeout.
+  static const _syncAuditBatchSize = 25;
   WorkspaceRole currentRole = WorkspaceRole.admin;
   bool workspaceOwner = true;
   String get _workspaceRoleLabel => workspaceOwner
@@ -13200,7 +13203,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     _syncDebounce = Timer(delay, _syncAutomatically);
   }
 
-  List<Map<String, Object?>> _pendingAuditBatch() => [..._pendingAuditEvents];
+  List<Map<String, Object?>> _pendingAuditBatch() =>
+      _pendingAuditEvents.take(_syncAuditBatchSize).toList();
 
   void _acknowledgeAuditBatch(List<Map<String, Object?>> sent) {
     var acknowledged = 0;

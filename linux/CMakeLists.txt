@@ -117,8 +117,8 @@ install(FILES "${CMAKE_SOURCE_DIR}/packaging/media.everlasting.inventorinator.de
 # data that they never use.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64/"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/linux_x64"
-  PATTERN "tesseract" EXCLUDE
-  COMPONENT Runtime)
+  COMPONENT Runtime
+  PATTERN "tesseract" EXCLUDE)
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64/tesseract"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/linux_x64"
   COMPONENT Runtime)

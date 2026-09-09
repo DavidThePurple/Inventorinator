@@ -59,9 +59,8 @@ begin
   select state_json #> '{inventory,0}' into mirrored
   from public.workshop_states
   where workspace_id = '60000000-0000-0000-0000-000000000001';
-  if mirrored->>'name' <> 'M3 screw' or
-     (mirrored->>'quantity')::numeric <> 3 then
-    raise exception 'compatibility snapshot did not mirror entity patch';
+  if mirrored is not null then
+    raise exception 'incremental entity write rebuilt the compatibility snapshot';
   end if;
 end;
 $$;
@@ -86,9 +85,9 @@ begin
   ) then
     raise exception 'entity tombstone was not retained';
   end if;
-  if jsonb_array_length((select state_json->'inventory'
+  if coalesce(jsonb_array_length((select state_json->'inventory'
       from public.workshop_states
-      where workspace_id = '60000000-0000-0000-0000-000000000001')) <> 0 then
+      where workspace_id = '60000000-0000-0000-0000-000000000001')), 0) <> 0 then
     raise exception 'deleted entity remained in compatibility snapshot';
   end if;
 end;

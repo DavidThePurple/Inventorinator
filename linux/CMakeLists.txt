@@ -115,8 +115,12 @@ install(FILES "${CMAKE_SOURCE_DIR}/packaging/media.everlasting.inventorinator.de
 # Linux-only OCR payload. Keep this outside Flutter's cross-platform asset
 # bundle so Android and Windows do not ship the Tesseract engine and language
 # data that they never use.
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64"
-  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr"
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64/"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/linux_x64"
+  PATTERN "tesseract" EXCLUDE
+  COMPONENT Runtime)
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64/tesseract"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/linux_x64"
   COMPONENT Runtime)
 
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})

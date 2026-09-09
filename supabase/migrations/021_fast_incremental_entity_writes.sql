@@ -82,9 +82,6 @@ perform\s+set_config\('inventorinator.incremental_snapshot_write',\s*'off',\s*tr
 end;
 $migration$;
 
-grant execute on function public.build_inventorinator_entity_snapshot(uuid)
-  to authenticated;
-
 -- Restore the normal role-level limits now that incremental writes are small.
 alter function public.apply_inventorinator_entity_changes(uuid, text, jsonb, jsonb)
   reset statement_timeout;

@@ -55,15 +55,25 @@ begin
   end if;
   updated := regexp_replace(
     definition,
-    $pattern$perform\s+set_config\('inventorinator.incremental_snapshot_write',\s*'on',\s*true\);\s*
-insert\s+into\s+public\.workshop_states\s*\(workspace_id,\s*state_json\)\s*
-values\s*\(target_workspace,\s*snapshot\)\s*
-on\s+conflict\s*\(workspace_id\)\s+do\s+update\s+set\s+state_json\s*=\s*excluded\.state_json,\s*updated_at\s*=\s*now\(\);\s*
-perform\s+set_config\('inventorinator.incremental_snapshot_write',\s*'off',\s*true\);$pattern$,
+    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'on'\s*,\s*true\s*\);$pattern$,
     '',
     1
   );
-  if updated = definition then
+  updated := regexp_replace(
+    updated,
+    $pattern$(?is)insert\s+into\s+public\.workshop_states\s*\([^;]*?;\s*$pattern$,
+    '',
+    1
+  );
+  updated := regexp_replace(
+    updated,
+    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'off'\s*,\s*true\s*\);$pattern$,
+    '',
+    1
+  );
+  if updated = definition or
+     updated ~ $assert$inventorinator\.incremental_snapshot_write$assert$ or
+     updated ~* $assert$insert\s+into\s+public\.workshop_states$assert$ then
     raise exception 'Could not remove the synchronous compatibility snapshot write';
   end if;
   with_builder_snapshot := replace(

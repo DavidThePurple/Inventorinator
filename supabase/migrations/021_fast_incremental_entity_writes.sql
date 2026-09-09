@@ -76,6 +76,24 @@ begin
     E'  end loop;\n\n  if caller_role = ''builder'' then',
     E'  end loop;\n\n  if caller_role = ''builder'' then\n    snapshot := public.build_inventorinator_entity_snapshot(target_workspace);'
   );
+  updated := regexp_replace(
+    updated,
+    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'on'\s*,\s*true\s*\);$pattern$,
+    '',
+    1
+  );
+  updated := regexp_replace(
+    updated,
+    $pattern$(?is)insert\s+into\s+public\.workshop_states\s*\([^;]*?;\s*$pattern$,
+    '',
+    1
+  );
+  updated := regexp_replace(
+    updated,
+    $pattern$(?is)perform\s+set_config\('inventorinator\.incremental_snapshot_write'\s*,\s*'off'\s*,\s*true\s*\);$pattern$,
+    '',
+    1
+  );
   if updated = definition or
      updated ~ $assert$inventorinator\.incremental_snapshot_write$assert$ or
      updated ~* $assert$public\.workshop_states$assert$ or

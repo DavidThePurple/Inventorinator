@@ -58,6 +58,24 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/incremental_entity_sync.sql
       - name: Build connector image
         run: docker build -f supabase/connector/Dockerfile supabase
+      - name: Package Supabase schema artifact
+        run: |
+          schema_version="$(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | tail -n 1 | sed 's/^0*\([0-9][0-9]*\)_.*/\1/')"
+          test -n "$schema_version"
+          package_dir="dist/Inventorinator-v$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)-Supabase-schema${schema_version}"
+          install -d "$package_dir/connector" "$package_dir/migrations"
+          install -m 644 supabase/README.md supabase/docker-compose.inventorinator.yml "$package_dir/"
+          install -m 755 supabase/install-or-update.sh supabase/apply-migrations.sh "$package_dir/"
+          install -m 644 supabase/connector/Dockerfile supabase/connector/server.py "$package_dir/connector/"
+          install -m 755 supabase/connector/entrypoint.sh "$package_dir/connector/"
+          install -m 644 supabase/migrations/*.sql "$package_dir/migrations/"
+          test "$(find "$package_dir/migrations" -maxdepth 1 -name '*.sql' | wc -l)" -eq "$schema_version"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inventorinator-supabase-schema
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
 
   linux:
     # Build on the oldest supported Ubuntu baseline so native plugins do not

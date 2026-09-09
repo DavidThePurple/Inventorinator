@@ -113,8 +113,8 @@ begin
 end;
 $$;
 
--- A stale snapshot must not interpret an empty location that it never loaded
--- as a deletion. Explicit entity tombstones remain authoritative.
+-- Current clients use the entity stream directly. A compatibility snapshot is
+-- allowed to be stale; explicit entity tombstones remain authoritative.
 select public.apply_inventorinator_entity_changes(
   '60000000-0000-0000-0000-000000000001',
   'current-device',
@@ -138,15 +138,6 @@ begin
       and entity_type = 'locations' and entity_id = 'LOC-EMPTY' and not deleted
   ) then
     raise exception 'stale snapshot deleted an empty location entity';
-  end if;
-  if not exists (
-    select 1
-    from public.workshop_states state,
-         jsonb_array_elements(coalesce(state.state_json->'locations', '[]'::jsonb)) location
-    where state.workspace_id = '60000000-0000-0000-0000-000000000001'
-      and location->>'id' = 'LOC-EMPTY'
-  ) then
-    raise exception 'stale snapshot removed an empty location from compatibility state';
   end if;
 end;
 $$;

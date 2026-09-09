@@ -49,6 +49,7 @@ class CloudSyncDialog extends StatefulWidget {
 
 class _CloudSyncDialogState extends State<CloudSyncDialog> {
   static const _knownWorkspacesPreference = 'known_supabase_workspaces';
+  static const _syncIntervalOptions = <int>[15, 30, 60, 300, 900];
   static const _defaultUrl = String.fromEnvironment(
     'SUPABASE_URL',
     defaultValue: '',
@@ -131,7 +132,23 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     refreshToken: config.refreshToken,
     lastSyncedAt: config.lastSyncedAt,
     lastSyncedStateJson: config.lastSyncedStateJson,
+    remotePurgeAfterDays: config.remotePurgeAfterDays,
+    autoSyncEnabled: config.autoSyncEnabled,
+    syncIntervalSeconds: config.syncIntervalSeconds,
   );
+
+  int get _selectedSyncInterval =>
+      _syncIntervalOptions.contains(config.syncIntervalSeconds)
+      ? config.syncIntervalSeconds
+      : 60;
+
+  String _formatSyncTime(DateTime value) {
+    final local = value.toLocal();
+    final date = MaterialLocalizations.of(context).formatMediumDate(local);
+    final time = MaterialLocalizations.of(context)
+        .formatTimeOfDay(TimeOfDay.fromDateTime(local));
+    return '$date at $time';
+  }
 
   void _save(SupabaseConfig value) {
     config = value;
@@ -283,7 +300,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   void _requireServer(SupabaseConfig value) {
     if (!value.isConfigured) {
       throw const SupabaseSyncException(
-        'Open Advanced and enter a sync server and publishable key.',
+        'Open Supabase Settings and enter a sync server and publishable key.',
       );
     }
   }
@@ -1498,11 +1515,68 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
               ),
             const SizedBox(height: 8),
             ExpansionTile(
-              key: const Key('advanced-sync-settings'),
+              key: const Key('supabase-settings'),
               tilePadding: EdgeInsets.zero,
-              title: const Text('Advanced'),
+              title: const Text('Supabase Settings'),
               children: [
                 if (connected) ...[
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Automatic sync'),
+                    subtitle: Text(
+                      config.autoSyncEnabled
+                          ? 'Check for shared changes and upload local edits automatically.'
+                          : 'Disabled. Use Sync now to update this device manually.',
+                    ),
+                    value: config.autoSyncEnabled,
+                    onChanged: busy
+                        ? null
+                        : (enabled) {
+                            _save(config.copyWith(autoSyncEnabled: enabled));
+                            setState(() {});
+                          },
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Sync interval'),
+                    subtitle: const Text(
+                      'How often this device checks the shared inventory.',
+                    ),
+                    trailing: DropdownButton<int>(
+                      value: _selectedSyncInterval,
+                      items: _syncIntervalOptions
+                          .map(
+                            (seconds) => DropdownMenuItem<int>(
+                              value: seconds,
+                              child: Text(
+                                seconds < 60
+                                    ? '$seconds sec'
+                                    : '${seconds ~/ 60} min',
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: busy || !config.autoSyncEnabled
+                          ? null
+                          : (seconds) {
+                              if (seconds == null) return;
+                              _save(
+                                config.copyWith(syncIntervalSeconds: seconds),
+                              );
+                              setState(() {});
+                            },
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Last sync'),
+                    subtitle: Text(
+                      config.lastSyncedAt == null
+                          ? 'Not synced yet'
+                          : _formatSyncTime(config.lastSyncedAt!),
+                    ),
+                  ),
+                  const Divider(height: 20),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Remote offline-data purge'),

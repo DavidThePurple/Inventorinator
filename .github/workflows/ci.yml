@@ -90,6 +90,8 @@ jobs:
             ldd assets/ocr/linux_x64/tesseract
             exit 1
           fi
+          test -x build/linux/x64/release/bundle/data/ocr/linux_x64/tesseract
+          test -s build/linux/x64/release/bundle/data/ocr/linux_x64/tessdata/eng.traineddata
       - name: Exercise native Code 128 decoder
         env:
           INVENTORINATOR_NATIVE_DECODER_TEST: "1"
@@ -151,6 +153,14 @@ jobs:
             > android/key.properties
       - run: flutter pub get
       - run: flutter build apk --release --split-per-abi
+      - name: Verify Android package contents
+        run: |
+          for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            if unzip -l "$apk" | grep -q 'assets/flutter_assets/assets/ocr/linux_x64/'; then
+              echo "Linux OCR assets leaked into Android package: $apk" >&2
+              exit 1
+            fi
+          done
       - name: Android app lint
         working-directory: android
         run: ./gradlew :app:lintRelease

@@ -81,11 +81,6 @@ flutter:
     - assets/audio/moisture_alert.wav
     - assets/images/inventorinator-raygun-v2.png
     - assets/images/filamentcolors-logo.png
-    - assets/ocr/linux_x64/tesseract
-    - assets/ocr/linux_x64/tessdata/eng.traineddata
-    - assets/ocr/linux_x64/LICENSE-tesseract.txt
-    - assets/ocr/linux_x64/LICENSE-tessdata.txt
-    - assets/ocr/linux_x64/LICENSE-leptonica.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

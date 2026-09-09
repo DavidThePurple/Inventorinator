@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
 
-const requiredInventorinatorSchemaVersion = 18;
+const requiredInventorinatorSchemaVersion = 19;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -71,6 +71,8 @@ class SupabaseConfig {
     this.lastSyncedAt,
     this.lastSyncedStateJson,
     this.remotePurgeAfterDays,
+    this.autoSyncEnabled = true,
+    this.syncIntervalSeconds = 60,
   });
 
   final String url;
@@ -86,6 +88,8 @@ class SupabaseConfig {
   final DateTime? lastSyncedAt;
   final String? lastSyncedStateJson;
   final int? remotePurgeAfterDays;
+  final bool autoSyncEnabled;
+  final int syncIntervalSeconds;
 
   bool get isConfigured {
     final server = Uri.tryParse(url);
@@ -133,6 +137,8 @@ class SupabaseConfig {
     DateTime? lastSyncedAt,
     String? lastSyncedStateJson,
     int? remotePurgeAfterDays,
+    bool? autoSyncEnabled,
+    int? syncIntervalSeconds,
     bool clearLastSyncedStateJson = false,
   }) => SupabaseConfig(
     url: url ?? this.url,
@@ -150,6 +156,8 @@ class SupabaseConfig {
         ? null
         : lastSyncedStateJson ?? this.lastSyncedStateJson,
     remotePurgeAfterDays: remotePurgeAfterDays ?? this.remotePurgeAfterDays,
+    autoSyncEnabled: autoSyncEnabled ?? this.autoSyncEnabled,
+    syncIntervalSeconds: syncIntervalSeconds ?? this.syncIntervalSeconds,
   );
 
   Map<String, Object?> toJson() => {
@@ -166,6 +174,8 @@ class SupabaseConfig {
     'lastSyncedAt': lastSyncedAt?.toIso8601String(),
     'lastSyncedStateJson': lastSyncedStateJson,
     'remotePurgeAfterDays': remotePurgeAfterDays,
+    'autoSyncEnabled': autoSyncEnabled,
+    'syncIntervalSeconds': syncIntervalSeconds,
   };
 
   factory SupabaseConfig.fromJson(Map<String, dynamic> json) => SupabaseConfig(
@@ -186,6 +196,8 @@ class SupabaseConfig {
         : DateTime.parse(json['lastSyncedAt'] as String),
     lastSyncedStateJson: json['lastSyncedStateJson'] as String?,
     remotePurgeAfterDays: (json['remotePurgeAfterDays'] as num?)?.toInt(),
+    autoSyncEnabled: json['autoSyncEnabled'] as bool? ?? true,
+    syncIntervalSeconds: (json['syncIntervalSeconds'] as num?)?.toInt() ?? 60,
   );
 }
 

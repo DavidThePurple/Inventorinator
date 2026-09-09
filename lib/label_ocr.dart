@@ -1,6 +1,6 @@
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
 
@@ -235,18 +235,30 @@ int _labelTextScore(String text) {
 Future<(String, String)> _prepareBundledLinuxTesseract(
   Directory directory,
 ) async {
-  const root = 'assets/ocr/linux_x64';
   final executable = File('${directory.path}/tesseract');
   final tessdata = Directory('${directory.path}/tessdata');
   await tessdata.create(recursive: true);
-  final executableData = await rootBundle.load('$root/tesseract');
-  final languageData = await rootBundle.load('$root/tessdata/eng.traineddata');
+
+  final bundledRoot = Directory(
+    '${File(Platform.resolvedExecutable).parent.path}/data/ocr/linux_x64',
+  );
+  final bundledExecutable = File('${bundledRoot.path}/tesseract');
+  final bundledLanguage = File(
+    '${bundledRoot.path}/tessdata/eng.traineddata',
+  );
+  if (!await bundledExecutable.exists() || !await bundledLanguage.exists()) {
+    throw const LabelOcrUnavailable(
+      'The bundled Linux OCR engine is not installed with this build.',
+    );
+  }
   await executable.writeAsBytes(
-    executableData.buffer.asUint8List(),
+    await bundledExecutable.readAsBytes(),
     flush: true,
   );
-  await File('${tessdata.path}/eng.traineddata')
-      .writeAsBytes(languageData.buffer.asUint8List(), flush: true);
+  await File('${tessdata.path}/eng.traineddata').writeAsBytes(
+    await bundledLanguage.readAsBytes(),
+    flush: true,
+  );
   final chmod = await Process.run('chmod', ['700', executable.path]);
   if (chmod.exitCode != 0) {
     throw LabelOcrUnavailable(

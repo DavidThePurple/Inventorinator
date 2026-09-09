@@ -7658,13 +7658,34 @@ class _InventoryHomeState extends State<InventoryHome> {
     _syncPoll?.cancel();
     _syncPoll = null;
     _autoSyncPausedForAuthentication = false;
-    // Sync is event-driven: local edits schedule a debounced pass, and the
-    // Remote Sync dialog performs explicit pulls. Do not poll an idle device
-    // or keep opening connections when its outbox is empty.
     final database = widget.database;
-    if (database != null && database.loadPendingWorkshopChanges().isNotEmpty) {
-      unawaited(_syncAutomatically());
+    if (database == null) return;
+    final source = database.loadSyncConfig();
+    if (source == null) return;
+    late SupabaseConfig config;
+    try {
+      config = SupabaseConfig.fromJson(
+        jsonDecode(source) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return;
     }
+    if (config.syncMode != 'supabase' ||
+        !config.isConfigured ||
+        !config.hasSession ||
+        config.workspaceId == null ||
+        !config.autoSyncEnabled) {
+      return;
+    }
+    final intervalSeconds =
+        config.syncIntervalSeconds >= 15 && config.syncIntervalSeconds <= 3600
+        ? config.syncIntervalSeconds
+        : 60;
+    _syncPoll = Timer.periodic(
+      Duration(seconds: intervalSeconds),
+      (_) => unawaited(_syncAutomatically(force: true)),
+    );
+    unawaited(_syncAutomatically(force: true));
   }
 
   bool get _needsSyncOnboarding {
@@ -9001,6 +9022,9 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   Widget _bulkEditToolbar() {
     final selected = _selectedInventoryItems;
+    final selectedFilamentCount = selected
+        .where((item) => item.type == InventoryType.filament)
+        .length;
     final restore =
         selected.isNotEmpty && selected.every((item) => item.archived);
     final actions =
@@ -9041,6 +9065,15 @@ class _InventoryHomeState extends State<InventoryHome> {
             icon: Icons.swap_horiz_rounded,
             label: 'Change Type',
             onPressed: currentRole.canEditInventory ? _bulkChangeType : null,
+            destructive: false,
+          ),
+          (
+            key: const Key('bulk-change-status'),
+            icon: Icons.water_drop_outlined,
+            label: 'Set Status',
+            onPressed: currentRole.canEditInventory && selectedFilamentCount > 0
+                ? _bulkChangeStatus
+                : null,
             destructive: false,
           ),
         ];
@@ -9342,6 +9375,91 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
     _persist();
   }
+
+  Future<void> _bulkChangeStatus() async {
+    final selected = _selectedInventoryItems
+        .where((item) => item.type == InventoryType.filament)
+        .toList();
+    if (selected.isEmpty) return;
+    final choice = await showDialog<FilamentStatus>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text('Set status for ${selected.length} filament items'),
+        children: [
+          for (final status in FilamentStatus.values)
+            SimpleDialogOption(
+              key: Key('bulk-status-${status.name}'),
+              onPressed: () => Navigator.pop(dialogContext, status),
+              child: ListTile(
+                leading: Icon(_filamentStatusIcon(status)),
+                title: Text(_filamentStatusLabel(status)),
+                subtitle: status == FilamentStatus.ready
+                    ? const Text('Ready to use; marks a drying cycle complete.')
+                    : status == FilamentStatus.drying
+                    ? const Text('Uses each item’s configured drying duration.')
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == FilamentStatus.drying &&
+        selected.any(
+          (item) => item.dryingMinutes == null || item.dryingMinutes! <= 0,
+        )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Set a drying duration on every selected filament before starting drying.',
+          ),
+        ),
+      );
+      return;
+    }
+    final now = DateTime.now();
+    setState(() {
+      for (final item in selected) {
+        _publishInventoryItem(
+          item.copyWith(
+            filamentStatus: choice,
+            deployed: choice == FilamentStatus.deployed,
+            dryingRemaining: choice == FilamentStatus.drying
+                ? item.dryingMinutes
+                : 0,
+            dryingStartedAt: choice == FilamentStatus.drying
+                ? now
+                : item.dryingStartedAt,
+            lastDriedAt:
+                choice == FilamentStatus.ready &&
+                    item.filamentStatus == FilamentStatus.drying
+                ? now
+                : item.lastDriedAt,
+          ),
+        );
+        _recordAudit('change status', 'inventory', item.id, {
+          'status': choice.name,
+          'bulk': 'true',
+        });
+      }
+      selectedInventoryIds.clear();
+    });
+    _persist();
+  }
+
+  String _filamentStatusLabel(FilamentStatus status) => switch (status) {
+    FilamentStatus.ready => 'Ready',
+    FilamentStatus.deployed => 'Deployed',
+    FilamentStatus.drying => 'Drying',
+    FilamentStatus.queuedForDrying => 'Wet',
+  };
+
+  IconData _filamentStatusIcon(FilamentStatus status) => switch (status) {
+    FilamentStatus.ready => Icons.check_rounded,
+    FilamentStatus.deployed => Icons.lock_outline_rounded,
+    FilamentStatus.drying => Icons.water_drop_outlined,
+    FilamentStatus.queuedForDrying => Icons.water_drop_rounded,
+  };
 
   Future<void> _addItem({
     String initialBarcode = '',
@@ -13802,7 +13920,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       _deferredAutoSync?.cancel();
       _deferredAutoSync = Timer(
         const Duration(milliseconds: 750),
-        () => unawaited(_syncAutomatically()),
+        () => unawaited(_syncAutomatically(force: force)),
       );
       return;
     }
@@ -13824,6 +13942,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         config.workspaceId == null) {
       return;
     }
+    if (!force && !config.autoSyncEnabled) return;
     var retryAfterRecovery = false;
     var syncSucceeded = false;
     // This revision belongs to the state at the start of this sync pass. Any
@@ -17294,7 +17413,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 itemCount: auditLog.length,
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, index) {
-                  final entry = auditLog[index];
+                  final entry = auditLog[auditLog.length - index - 1];
                   return ListTile(
                     leading: const Icon(Icons.history_rounded),
                     title: Text(

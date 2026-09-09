@@ -38,6 +38,8 @@ void main() {
       lastSyncedAt: DateTime.utc(2026, 8, 28),
       lastSyncedStateJson: '{"inventory":[]}',
       remotePurgeAfterDays: 14,
+      autoSyncEnabled: false,
+      syncIntervalSeconds: 300,
     );
 
     final restored = SupabaseConfig.fromJson(configured.toJson());
@@ -49,6 +51,8 @@ void main() {
     expect(restored.lastSyncedAt, DateTime.utc(2026, 8, 28));
     expect(restored.lastSyncedStateJson, '{"inventory":[]}');
     expect(restored.remotePurgeAfterDays, 14);
+    expect(restored.autoSyncEnabled, isFalse);
+    expect(restored.syncIntervalSeconds, 300);
   });
 
   test('device management hierarchy and session errors are role-aware', () {

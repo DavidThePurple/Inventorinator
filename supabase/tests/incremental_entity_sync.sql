@@ -196,6 +196,20 @@ select public.apply_inventorinator_entity_changes(
   ]'::jsonb
 );
 
+select public.apply_inventorinator_entity_changes(
+  '60000000-0000-0000-0000-000000000001', 'owner-device',
+  '[{"entityType":"spoolUsage","entityId":"USAGE-1","fields":{"id":"USAGE-1","spoolId":"INV-B","usedGrams":10}}]'::jsonb
+);
+do $$ begin
+  if not exists (
+    select 1 from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'spoolUsage' and entity_id = 'USAGE-1'
+  ) then
+    raise exception 'spool usage was not accepted by incremental sync';
+  end if;
+end $$;
+
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000062', false);
 select public.apply_inventorinator_entity_changes(
   '60000000-0000-0000-0000-000000000001', 'editor-device',

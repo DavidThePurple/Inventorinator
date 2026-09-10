@@ -1,0 +1,107 @@
+begin;
+
+insert into auth.users(id) values ('00000000-0000-0000-0000-000000000001');
+insert into public.inventorinator_workspaces(id, created_by)
+values (
+  '10000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000001'
+);
+insert into public.inventorinator_workspace_members(workspace_id, user_id, role)
+values (
+  '10000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000001',
+  'builder'
+);
+insert into public.workshop_states(workspace_id, state_json)
+values (
+  '10000000-0000-0000-0000-000000000001',
+  '{
+    "inventory": [{
+      "id": "INV-1", "name": "M3 screw", "quantity": 1,
+      "catalogProductId": "P-1"
+    }],
+    "builds": [{
+      "id": "B-1", "ownerUserId": "99999999-9999-9999-9999-999999999999",
+      "shared": true,
+      "lines": [{
+        "id": "L-1", "productId": "P-1", "name": "M3 screw",
+        "requiredQuantity": 1, "usedQuantity": 0,
+        "consumedInventoryIds": []
+      }]
+    }]
+  }'::jsonb
+);
+
+insert into public.inventorinator_role_templates(id,workspace_id,name,permissions)
+values('25000000-0000-0000-0000-000000000090','10000000-0000-0000-0000-000000000001','Custom operator',array['inventory.read','builds.operate']);
+update public.inventorinator_workspace_members set role_template_id='25000000-0000-0000-0000-000000000090'
+where workspace_id='10000000-0000-0000-0000-000000000001';
+
+select set_config(
+  'request.jwt.claim.sub',
+  '00000000-0000-0000-0000-000000000001',
+  false
+);
+
+do $$
+begin
+  begin
+    perform public.apply_inventorinator_entity_changes(
+      '10000000-0000-0000-0000-000000000001',
+      'test-device',
+      '[{
+        "entityType": "inventory", "entityId": "INV-1",
+        "fields": {"quantity": 9}
+      }]'::jsonb
+    );
+    raise exception 'tampered quantity was accepted';
+  exception when others then
+    if sqlerrm = 'tampered quantity was accepted' then raise; end if;
+  end;
+end;
+$$;
+
+select public.apply_inventorinator_entity_changes(
+  '10000000-0000-0000-0000-000000000001',
+  'test-device',
+  '[
+    {
+      "entityType": "inventory", "entityId": "INV-1",
+      "fields": {"quantity": 0}
+    },
+    {
+      "entityType": "builds", "entityId": "B-1",
+      "fields": {
+        "lines": [{
+          "id": "L-1", "productId": "P-1", "name": "M3 screw",
+          "requiredQuantity": 1, "usedQuantity": 1,
+          "consumedInventoryIds": ["INV-1"]
+        }]
+      }
+    }
+  ]'::jsonb
+);
+
+do $$
+declare
+  inventory_quantity numeric;
+  used_quantity numeric;
+begin
+  select
+    (select (payload->>'quantity')::numeric
+       from public.inventorinator_entities
+      where workspace_id = '10000000-0000-0000-0000-000000000001'
+        and entity_type = 'inventory' and entity_id = 'INV-1' and not deleted),
+    (select (payload #>> '{lines,0,usedQuantity}')::numeric
+       from public.inventorinator_entities
+      where workspace_id = '10000000-0000-0000-0000-000000000001'
+        and entity_type = 'builds' and entity_id = 'B-1' and not deleted)
+  into inventory_quantity, used_quantity
+  ;
+  if inventory_quantity <> 0 or used_quantity <> 1 then
+    raise exception 'legitimate Build use was not persisted';
+  end if;
+end;
+$$;
+
+rollback;

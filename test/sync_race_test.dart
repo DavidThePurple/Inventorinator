@@ -138,8 +138,8 @@ void main() {
         stillPending.map((entry) => entry.change),
       );
       expect(merged.changes.single.fields['filamentStatus'], 'deployed');
-      expect(merged.conflicts, hasLength(1));
-      expect(merged.conflicts.single.field, 'filamentStatus');
+      // An echo of the acknowledged create is the baseline, not a conflict.
+      expect(merged.conflicts, isEmpty);
       database.applyRemoteWorkshopChanges(merged.changes);
 
       // The newest visible value never rolled back, on disk or in memory.

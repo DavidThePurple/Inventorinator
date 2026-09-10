@@ -1,19 +1,28 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'local_database.dart';
 import 'device_name_dialog.dart';
 import 'qr_scanner.dart';
 import 'supabase_sync.dart';
+import 'role_builder_dialog.dart';
+import 'workspace_role_template.dart';
+import 'local_role_drafts.dart';
+import 'digikey_settings.dart';
+import 'mouser_settings.dart';
+import 'mouser_credentials.dart';
+import 'service_status.dart';
+import 'digikey_credentials.dart';
 import 'workshop_merge.dart';
 import 'workshop_delta.dart';
+import 'sync_conflicts.dart';
 
 enum _SyncChoice { device, cloud }
 
@@ -36,8 +45,10 @@ class CloudSyncDialog extends StatefulWidget {
     this.onCloudChanges,
     this.onRemoteAccessRevoked,
     this.initialPairingCode,
+    this.httpClient,
   });
   final LocalDatabase database;
+  final http.Client? httpClient;
   final String? deviceId;
   final String localStateJson;
   final ValueChanged<String> onCloudState;
@@ -80,6 +91,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   String get roleLabel {
     if (isWorkspaceOwner) return 'Owner';
     final role = normalizeWorkspaceRole(config.workspaceRole) ?? '';
+    if (config.workspaceRole?.startsWith('custom:') == true) return WorkspaceRole.fromServer(config.workspaceRole).name;
     if (role.isEmpty) return 'Unknown';
     return '${role[0].toUpperCase()}${role.substring(1)}';
   }
@@ -158,6 +170,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     config = value;
     widget.database.saveSyncConfig(jsonEncode(value.toJson()));
     _rememberWorkspace(value);
+    ServiceStatus.refresh();
   }
 
   List<SupabaseConfig> _loadKnownWorkspaces() {
@@ -315,7 +328,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _requireServer(next);
     final service = SupabaseSyncService(next);
     final session = await service.signInAnonymously();
-    await service.requireCurrentSchema(session);
+    await service.requireInventorySchema(session);
     final recovery = await service.createWorkspaceWithRecovery(session);
     widget.database.saveWorkspaceRecoveryKey(
       recovery.workspaceId,
@@ -389,7 +402,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _requireServer(next);
     final service = SupabaseSyncService(next);
     final session = await service.signInAnonymously();
-    await service.requireCurrentSchema(session);
+    await service.requireInventorySchema(session);
     final registrationName = await _deviceNameForRegistration();
     final replacement = await service.recoverWorkspace(
       session,
@@ -476,7 +489,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _requireServer(next);
     final service = SupabaseSyncService(next);
     final session = await service.signInAnonymously();
-    await service.requireCurrentSchema(session);
+    await service.requireInventorySchema(session);
     final registrationName = await _deviceNameForRegistration();
     final stableDeviceId =
         widget.deviceId ??
@@ -538,42 +551,103 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     return 'Connected. This device now shares the same inventory.';
   }
 
-  Future<(SupabaseSyncService, SupabaseSession)> _session() async {
-    return widget.database.withSyncSessionLock(() async {
-      final saved = widget.database.loadSyncConfig();
-      final next = saved == null
-          ? _formConfig()
-          : SupabaseConfig.fromJson(jsonDecode(saved) as Map<String, dynamic>);
-      if (!next.isConfigured || !next.hasSession || next.workspaceId == null) {
-        throw const SupabaseSyncException(
-          'Connect this device before syncing.',
+  Future<void> _syncDigiKeyCredentials() async {
+    final scope = digiKeyScope(config.url, config.workspaceId);
+    final store = DigiKeyCredentialStore(widget.database, scope);
+    final snapshot = store.read();
+    final (service, session) = await _session();
+    if (digiKeyScope(service.config.url, service.config.workspaceId) != scope) {
+      throw StateError('Workspace changed');
+    }
+    if (snapshot?.pending == true) {
+      await service.setDigiKeyCredentials(session, snapshot!.credentials);
+      store.acknowledge(snapshot.revision);
+    } else {
+      final remote = await service.getDigiKeyCredentials(session);
+      store.restore(remote, snapshot?.revision);
+    }
+  }
+
+  Future<void> _syncMouserCredentials() async {
+    final scope = mouserScope(config.url, config.workspaceId);
+    final store = MouserCredentialStore(widget.database, scope);
+    final snapshot = store.read();
+    final (service, session) = await _session();
+    if (mouserScope(service.config.url, service.config.workspaceId) != scope) {
+      throw StateError('Workspace changed');
+    }
+    if (snapshot?.pending == true) {
+      await service.setMouserCredentials(session, snapshot!.credentials);
+      store.acknowledge(snapshot.revision);
+    } else {
+      final remote = await service.getMouserCredentials(session);
+      store.restore(remote, snapshot?.revision);
+    }
+  }
+
+  Future<(SupabaseSyncService, SupabaseSession)> _session({
+    bool reportStatus = true,
+  }) async {
+    final statusKey =
+        'Supabase:${digiKeyScope(config.url, config.workspaceId)}';
+    if (reportStatus) ServiceStatus.set(statusKey, ConnectionStateLed.checking);
+    try {
+      final result = await widget.database.withSyncSessionLock(() async {
+        final saved = widget.database.loadSyncConfig();
+        final next = saved == null
+            ? _formConfig()
+            : SupabaseConfig.fromJson(
+                jsonDecode(saved) as Map<String, dynamic>,
+              );
+        if (!next.isConfigured ||
+            !next.hasSession ||
+            next.workspaceId == null) {
+          throw const SupabaseSyncException(
+            'Connect this device before syncing.',
+          );
+        }
+        final (refreshed, session) = await _refreshOrRecoverOwner(next);
+        if (identical(refreshed, next)) {
+          config = refreshed;
+        } else {
+          // Refresh tokens rotate. Save the replacement while the shared session
+          // lock is held so automatic sync cannot reuse the old token.
+          _save(refreshed);
+        }
+        final service = SupabaseSyncService(
+          refreshed,
+          client: widget.httpClient,
         );
+        ServiceStatus.setSchemaVersion(
+          statusKey, await service.requireInventorySchema(session),
+        );
+        // A membership check is required before any remote read. RLS correctly
+        // hides removed members, but an empty response would otherwise look like
+        // a successful "already up to date" sync.
+        final role = await service.currentRole(session);
+        final purgeDays = await service.remotePurgeAfterDays(session);
+        final roleConfig = refreshed.copyWith(
+          workspaceRole: role,
+          remotePurgeAfterDays: purgeDays,
+        );
+        if (roleConfig.workspaceRole != refreshed.workspaceRole ||
+            roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays) {
+          _save(roleConfig);
+        }
+        config = roleConfig;
+        return (
+          SupabaseSyncService(roleConfig, client: widget.httpClient),
+          session,
+        );
+      });
+      if (reportStatus) {
+        ServiceStatus.set(statusKey, ConnectionStateLed.connected);
       }
-      final (refreshed, session) = await _refreshOrRecoverOwner(next);
-      if (identical(refreshed, next)) {
-        config = refreshed;
-      } else {
-        // Refresh tokens rotate. Save the replacement while the shared session
-        // lock is held so automatic sync cannot reuse the old token.
-        _save(refreshed);
-      }
-      final service = SupabaseSyncService(refreshed);
-      // A membership check is required before any remote read. RLS correctly
-      // hides removed members, but an empty response would otherwise look like
-      // a successful "already up to date" sync.
-      final role = await service.currentRole(session);
-      final purgeDays = await service.remotePurgeAfterDays(session);
-      final roleConfig = refreshed.copyWith(
-        workspaceRole: role,
-        remotePurgeAfterDays: purgeDays,
-      );
-      if (roleConfig.workspaceRole != refreshed.workspaceRole ||
-          roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays) {
-        _save(roleConfig);
-      }
-      config = roleConfig;
-      return (SupabaseSyncService(roleConfig), session);
-    });
+      return result;
+    } catch (_) {
+      if (reportStatus) ServiceStatus.set(statusKey, ConnectionStateLed.failed);
+      rethrow;
+    }
   }
 
   Future<(SupabaseConfig, SupabaseSession)> _refreshOrRecoverOwner(
@@ -582,7 +656,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final cached = source.cachedSession;
     if (cached != null) return (source, cached);
     try {
-      final session = await SupabaseSyncService(source).refresh();
+      final session = await SupabaseSyncService(
+        source,
+        client: widget.httpClient,
+      ).refresh();
       return (
         source.copyWith(
           userId: session.userId,
@@ -604,7 +681,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       }
       final service = SupabaseSyncService(source);
       final replacementSession = await service.signInAnonymously();
-      await service.requireCurrentSchema(replacementSession);
+      await service.requireInventorySchema(replacementSession);
       final replacement = await service.recoverWorkspace(
         replacementSession,
         workspaceId: workspaceId,
@@ -715,6 +792,54 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     }
   }
 
+  Future<void> _manageLocalRoleDrafts() async {
+    if (config.workspaceId != null &&
+        normalizeWorkspaceRole(config.workspaceRole) != 'owner') {
+      return;
+    }
+    final store = LocalRoleDrafts(
+      widget.database,
+      scope: '${config.url}|${config.workspaceId ?? 'local'}',
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RoleBuilderDialog(
+        localOnly: true,
+        load: () async => store.load(),
+        save: (template) async => store.save(template),
+        delete: (id) async => store.delete(id),
+      ),
+    );
+  }
+
+  Future<void> _manageRoleTemplates() async {
+    final (service, session) = await _session();
+    final role = await service.currentRole(session);
+    if (role != 'owner') {
+      throw const SupabaseSyncException(
+        'Only the owner can manage role templates.',
+      );
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RoleBuilderDialog(
+        load: () async {
+          final (service, session) = await _session();
+          return service.listRoleTemplates(session);
+        },
+        save: (template) async {
+          final (service, session) = await _session();
+          await service.saveRoleTemplate(session, template);
+        },
+        delete: (id) async {
+          final (service, session) = await _session();
+          await service.deleteRoleTemplate(session, id);
+        },
+      ),
+    );
+  }
+
   Future<void> _manageDevices() async {
     final (service, session) = await _session();
     await service.registerDevice(session, _deviceName);
@@ -726,6 +851,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       await service.listDevices(session),
       session.userId,
     );
+    final templates = config.workspaceRole == 'owner' && await service.schemaVersion(session) >= 25 ? await service.listRoleTemplates(session) : <WorkspaceRoleTemplate>[];
     var accessMessage = '';
     if (!mounted) return;
     await showDialog<void>(
@@ -800,14 +926,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                             !isMe &&
                             device.role != 'owner' &&
                             (isOwner ||
-                                isAdmin ||
+                                isAdmin && !device.role.startsWith('template:') ||
                                 isManager &&
                                     (device.role == 'editor' ||
                                         device.role == 'builder' ||
                                         device.role == 'member'));
                         final assignableRoles = isManager
                             ? const ['editor', 'builder']
-                            : const ['admin', 'manager', 'editor', 'builder'];
+                            : ['admin', 'manager', 'editor', 'builder', if (isOwner) ...templates.map((t) => 'template:${t.id}')];
                         return ListTile(
                           leading: Icon(
                             device.role == 'owner'
@@ -843,7 +969,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                                         (role) => DropdownMenuItem(
                                           value: role,
                                           child: Text(
-                                            '${role[0].toUpperCase()}${role.substring(1)}',
+                                            role.startsWith('template:') ? templates.firstWhere((t) => 'template:${t.id}' == role).name : '${role[0].toUpperCase()}${role.substring(1)}',
                                           ),
                                         ),
                                       )
@@ -868,7 +994,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                                   },
                                 )
                               else if (device.role != 'owner')
-                                Text(device.role.toUpperCase()),
+                                Text(device.role.startsWith('template:') ? 'CUSTOM ROLE' : device.role.toUpperCase()),
                               if (isOwner && editable)
                                 PopupMenuButton<bool>(
                                   tooltip: 'Device access',
@@ -961,6 +1087,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     bool replaceLocal = false,
   }) async {
     final workspaceId = config.workspaceId!;
+    final conflicts = SyncConflictStore(widget.database, '${config.url}|$workspaceId');
+    await widget.database.waitForPendingWrites();
+    if (replaceLocal) conflicts.save([]);
     var cursor = replaceLocal ? 0 : widget.database.loadSyncCursor(workspaceId);
     final incoming = await service.downloadChanges(
       session,
@@ -972,42 +1101,28 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       );
       widget.onCloudChanges?.call(applied);
     } else if (incoming.changes.isNotEmpty) {
-      final localByKey = {
-        for (final entry in widget.database.loadPendingWorkshopChanges())
-          '${entry.change.entityType}\u0000${entry.change.entityId}':
-              entry.change,
-      };
-      final merged = incoming.changes.map((change) {
-        final local =
-            localByKey['${change.entityType}\u0000${change.entityId}'];
-        if (local == null) return change;
-        if (local.deleted) return local;
-        return WorkshopEntityChange(
-          entityType: change.entityType,
-          entityId: change.entityId,
-          fields: {...change.fields, ...local.fields},
-          revision: change.revision,
-        );
-      }).toList();
+      final result = mergeRemoteChangesWithPending(incoming.changes,
+        widget.database.loadPendingWorkshopChanges().map((e) => e.change));
+      conflicts.record(result.conflicts);
+      final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);
       widget.onCloudChanges?.call(merged);
     }
     cursor = incoming.revision;
     widget.database.saveSyncCursor(workspaceId, cursor);
 
-    var pending = widget.database.loadPendingWorkshopChanges();
+    final effectiveRole = WorkspaceRole.fromServer(config.workspaceRole);
+    var pending = conflicts.readyForUpload(widget.database.loadPendingWorkshopChanges(),
+      atomicBuilds: effectiveRole.canOperateBuilds && !effectiveRole.canEditInventory);
     if (pending.isNotEmpty) {
       final deviceId = widget.database.loadStringPreference(
         'device_id',
         fallback: '',
       );
-      for (
-        var offset = 0;
-        offset < pending.length;
-        offset += _syncUploadBatchSize
-      ) {
-        final end = math.min(offset + _syncUploadBatchSize, pending.length);
-        final batch = pending.sublist(offset, end);
+      final permissions = WorkspaceRole.fromServer(config.workspaceRole);
+      for (final batch in workshopUploadBatches(pending, (entry) => entry.change,
+        atomicBuilds: permissions.canOperateBuilds && !permissions.canEditInventory,
+        batchSize: _syncUploadBatchSize)) {
         await service.uploadChanges(
           session,
           batch.map((entry) => entry.change),
@@ -1024,23 +1139,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       afterRevision: cursor,
     );
     if (confirmed.changes.isNotEmpty) {
-      final localByKey = {
-        for (final entry in widget.database.loadPendingWorkshopChanges())
-          '${entry.change.entityType}\u0000${entry.change.entityId}':
-              entry.change,
-      };
-      final merged = confirmed.changes.map((change) {
-        final local =
-            localByKey['${change.entityType}\u0000${change.entityId}'];
-        if (local == null) return change;
-        if (local.deleted) return local;
-        return WorkshopEntityChange(
-          entityType: change.entityType,
-          entityId: change.entityId,
-          fields: {...change.fields, ...local.fields},
-          revision: change.revision,
-        );
-      }).toList();
+      final result = mergeRemoteChangesWithPending(confirmed.changes,
+        widget.database.loadPendingWorkshopChanges().map((e) => e.change));
+      conflicts.record(result.conflicts);
+      final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);
       widget.onCloudChanges?.call(merged);
     }
@@ -1057,7 +1159,21 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   }
 
   Future<String> _sync() async {
-    final (service, session) = await _session();
+    String statusKey() =>
+        'Supabase:${digiKeyScope(config.url, config.workspaceId)}';
+    ServiceStatus.set(statusKey(), ConnectionStateLed.checking);
+    try {
+      final result = await _syncInventory();
+      ServiceStatus.set(statusKey(), ConnectionStateLed.connected);
+      return result;
+    } catch (_) {
+      ServiceStatus.set(statusKey(), ConnectionStateLed.failed);
+      rethrow;
+    }
+  }
+
+  Future<String> _syncInventory() async {
+    final (service, session) = await _session(reportStatus: false);
     if (widget.onCloudChanges != null) {
       return _syncEntities(service, session);
     }
@@ -1175,7 +1291,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     // can fail and strand an otherwise valid remembered workspace.
     _rememberWorkspace(restored);
     var service = SupabaseSyncService(restored);
-    await service.requireCurrentSchema(session);
+    await service.requireInventorySchema(session);
     final role = await service.currentRole(session);
     final purgeDays = await service.remotePurgeAfterDays(session);
     restored = restored.copyWith(
@@ -1258,6 +1374,18 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           SizedBox(width: buttonWidth, height: 104, child: child);
 
       final actions = <Widget>[];
+      if (config.workspaceId == null ||
+          normalizeWorkspaceRole(config.workspaceRole) == 'owner') {
+        actions.add(
+          action(
+            OutlinedButton(
+              key: const Key('local-role-builder'),
+              onPressed: _manageLocalRoleDrafts,
+              child: tile(Icons.tune_rounded, 'Role builder (local)'),
+            ),
+          ),
+        );
+      }
       if (joining) {
         actions.addAll([
           action(
@@ -1332,6 +1460,22 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
             ]);
           }
           if (isWorkspaceOwner) {
+            if (normalizeWorkspaceRole(config.workspaceRole) == 'owner') {
+              actions.add(
+                action(
+                  OutlinedButton(
+                    key: const Key('role-builder'),
+                    onPressed: busy
+                        ? null
+                        : () => _run(() async {
+                            await _manageRoleTemplates();
+                            return '';
+                          }),
+                    child: tile(Icons.tune_rounded, 'Role builder'),
+                  ),
+                ),
+              );
+            }
             actions.add(
               action(
                 OutlinedButton(
@@ -1386,7 +1530,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       children: [
         const Icon(Icons.cloud_sync_outlined),
         const SizedBox(width: 10),
-        const Expanded(child: Text('Remote Sync')),
+        const Expanded(child: Text('Remote Settings')),
         IconButton(
           key: const Key('close-remote-sync'),
           tooltip: 'Close',
@@ -1535,6 +1679,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
               tilePadding: EdgeInsets.zero,
               title: const Text('Supabase Settings'),
               children: [
+                if (config.isConfigured)
+                  ServiceConnectionMessage(
+                    statusKey:
+                        'Supabase:${digiKeyScope(config.url, config.workspaceId)}',
+                  ),
                 if (connected) ...[
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
@@ -1654,12 +1803,38 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                     labelText: 'Publishable key',
                   ),
                 ),
+                if (message.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: SelectableText(
+                      message,
+                      key: const Key('supabase-status-message'),
+                    ),
+                  ),
               ],
             ),
-            if (message.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              SelectableText(message),
-            ],
+            DigiKeySettingsPanel(
+              key: ValueKey(digiKeyScope(config.url, config.workspaceId)),
+              store: DigiKeyCredentialStore(
+                widget.database,
+                digiKeyScope(config.url, config.workspaceId),
+              ),
+              syncRemote: isWorkspaceOwner && config.workspaceId != null
+                  ? _syncDigiKeyCredentials
+                  : null,
+            ),
+            MouserSettingsPanel(
+              key: ValueKey(
+                'Mouser:${mouserScope(config.url, config.workspaceId)}',
+              ),
+              store: MouserCredentialStore(
+                widget.database,
+                mouserScope(config.url, config.workspaceId),
+              ),
+              syncRemote: isWorkspaceOwner && config.workspaceId != null
+                  ? _syncMouserCredentials
+                  : null,
+            ),
             _dialogActions(),
           ],
         ),

@@ -69,9 +69,7 @@ class LocalDatabase {
   /// The existing synchronous methods remain available for import/migration
   /// code and tests. Interactive edits use this queue so a burst of changes
   /// does not perform one SQLite transaction per tap or keystroke.
-  Future<void> queueWorkshopChanges(
-    Iterable<WorkshopEntityChange> changes,
-  ) {
+  Future<void> queueWorkshopChanges(Iterable<WorkshopEntityChange> changes) {
     if (_closed) return Future<void>.value();
     for (final change in changes) {
       final key = '${change.entityType}\u0000${change.entityId}';
@@ -173,6 +171,15 @@ class LocalDatabase {
   }
 
   void _createSchema() {
+    final normalization = RegExp(r'[^a-z0-9]');
+    _database.createFunction(
+      functionName: 'inventory_normalize',
+      argumentCount: const AllowedArgumentCount(1),
+      deterministic: true,
+      function: (args) => (args.single as String? ?? '')
+          .toLowerCase()
+          .replaceAll(normalization, ''),
+    );
     _database.execute('''
       CREATE TABLE IF NOT EXISTS app_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -213,6 +220,9 @@ class LocalDatabase {
       ) STRICT
     ''');
     final outboxColumns = _database.select('PRAGMA table_info(sync_outbox)');
+    if (!outboxColumns.any((row) => row['name'] == 'base_json')) {
+      _database.execute("ALTER TABLE sync_outbox ADD COLUMN base_json TEXT NOT NULL DEFAULT '{}'");
+    }
     if (!outboxColumns.any((row) => row['name'] == 'local_revision')) {
       _database.execute(
         'ALTER TABLE sync_outbox ADD COLUMN local_revision INTEGER NOT NULL DEFAULT 0',
@@ -229,9 +239,13 @@ class LocalDatabase {
         next_revision INTEGER NOT NULL
       ) STRICT
     ''');
-    final maxRevision = _database
-        .select('SELECT coalesce(max(local_revision), 0) AS value FROM sync_outbox')
-        .first['value'] as int;
+    final maxRevision =
+        _database
+                .select(
+                  'SELECT coalesce(max(local_revision), 0) AS value FROM sync_outbox',
+                )
+                .first['value']
+            as int;
     _database.execute(
       '''INSERT INTO sync_local_revisions (id, next_revision) VALUES (1, ?)
          ON CONFLICT(id) DO NOTHING''',
@@ -245,6 +259,48 @@ class LocalDatabase {
         PRIMARY KEY(entity_type, entity_id)
       ) STRICT
     ''');
+    _database.execute(
+      "CREATE TABLE IF NOT EXISTS inventory_metadata (entity_type TEXT NOT NULL DEFAULT 'inventory', entity_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)",
+    );
+    _database.execute(
+      r"""CREATE TRIGGER IF NOT EXISTS inventory_metadata_insert AFTER INSERT ON entity_state
+      WHEN new.entity_type = 'inventory' BEGIN
+      INSERT INTO inventory_metadata(entity_id, payload_json)
+      VALUES(new.entity_id, json_remove(new.payload_json, '$.thumbnail', '$.image', '$.labelImage')) ON CONFLICT(entity_id) DO UPDATE SET payload_json = excluded.payload_json; END""",
+    );
+    _database.execute(
+      r"""CREATE TRIGGER IF NOT EXISTS inventory_metadata_update AFTER UPDATE ON entity_state
+      WHEN new.entity_type = 'inventory' BEGIN
+      INSERT INTO inventory_metadata(entity_id, payload_json)
+      VALUES(new.entity_id, json_remove(new.payload_json, '$.thumbnail', '$.image', '$.labelImage')) ON CONFLICT(entity_id) DO UPDATE SET payload_json = excluded.payload_json; END""",
+    );
+    _database.execute(
+      "CREATE TRIGGER IF NOT EXISTS inventory_metadata_delete AFTER DELETE ON entity_state WHEN old.entity_type = 'inventory' BEGIN DELETE FROM inventory_metadata WHERE entity_id = old.entity_id; END",
+    );
+    _database.execute(
+      r"""INSERT OR IGNORE INTO inventory_metadata(entity_id, payload_json)
+      SELECT entity_id, json_remove(payload_json, '$.thumbnail', '$.image', '$.labelImage') FROM entity_state WHERE entity_type = 'inventory'""",
+    );
+    _database.execute(
+      r"""CREATE INDEX IF NOT EXISTS inventory_metadata_added ON inventory_metadata(
+      coalesce(json_extract(payload_json, '$.archived'), 0), julianday(json_extract(payload_json, '$.added')), entity_id)""",
+    );
+    _database.execute(
+      r"""CREATE INDEX IF NOT EXISTS inventory_metadata_quantity ON inventory_metadata(
+      coalesce(json_extract(payload_json, '$.archived'), 0), coalesce(json_extract(payload_json, '$.quantity'), 1), entity_id)""",
+    );
+    _database.execute(
+      r"""CREATE INDEX IF NOT EXISTS inventory_page_added ON entity_state(
+      coalesce(json_extract(payload_json, '$.archived'), 0),
+      julianday(json_extract(payload_json, '$.added')), entity_id)
+      WHERE entity_type = 'inventory'""",
+    );
+    _database.execute(
+      r"""CREATE INDEX IF NOT EXISTS inventory_page_quantity ON entity_state(
+      coalesce(json_extract(payload_json, '$.archived'), 0),
+      coalesce(json_extract(payload_json, '$.quantity'), 1), entity_id)
+      WHERE entity_type = 'inventory'""",
+    );
     _database.execute('''
       CREATE TABLE IF NOT EXISTS sync_cursors (
         workspace_id TEXT PRIMARY KEY,
@@ -295,6 +351,19 @@ class LocalDatabase {
       ''',
       [key, value],
     );
+  }
+
+  void saveStringPreferences(Map<String, String> values) {
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final entry in values.entries) {
+        saveStringPreference(entry.key, entry.value);
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   String? loadApiCache(String key) {
@@ -352,11 +421,14 @@ class LocalDatabase {
     );
   }
 
-  String? loadState({bool includeFullImages = true}) {
+  String? loadState({
+    bool includeFullImages = true,
+    bool includeInventory = true,
+  }) {
     final entities = _database.select(
-      'SELECT entity_type, entity_id, payload_json FROM entity_state',
+      "SELECT entity_type, entity_id, payload_json FROM entity_state ${includeInventory ? '' : "WHERE entity_type != 'inventory'"}",
     );
-    if (entities.isNotEmpty) {
+    if (entities.isNotEmpty || !includeInventory && inventoryCount() > 0) {
       var state = jsonEncode({
         for (final type in workshopEntityCollections) type: <Object?>[],
       });
@@ -388,6 +460,128 @@ class LocalDatabase {
       'SELECT state_json FROM app_state WHERE id = 1',
     );
     return rows.isEmpty ? null : rows.first['state_json'] as String;
+  }
+
+  List<Map<String, Object?>> inventoryMetricGroups(Set<String> untracked) =>
+      _database.select(
+        r"""
+        SELECT json_extract(payload_json, '$.type') AS type,
+          trim(coalesce(json_extract(payload_json, '$.materialName'), '')) AS material,
+          trim(coalesce(json_extract(payload_json, '$.brand'), '')) AS brand,
+          trim(coalesce(nullif(json_extract(payload_json, '$.itemColorName'), ''), json_extract(payload_json, '$.itemColorLabel'), '')) AS color,
+          trim(coalesce(json_extract(payload_json, '$.itemColorLabel'), '')) AS colorLabel,
+          count(*) AS records,
+          sum(coalesce(json_extract(payload_json, '$.quantity'), 1)) AS units,
+          sum(CASE WHEN json_extract(payload_json, '$.quantityAlertThreshold') IS NOT NULL AND
+            coalesce(json_extract(payload_json, '$.quantity'), 1) <= json_extract(payload_json, '$.quantityAlertThreshold') THEN 1 ELSE 0 END) AS lowStock
+        FROM inventory_metadata WHERE entity_type = 'inventory'
+          AND coalesce(json_extract(payload_json, '$.archived'), 0) = 0
+          AND (CASE WHEN json_extract(payload_json, '$.type') = 'custom'
+            THEN 'custom:' || json_extract(payload_json, '$.customTypeId')
+            ELSE 'item:' || json_extract(payload_json, '$.type') END) NOT IN (SELECT value FROM json_each(?))
+        GROUP BY type, material, brand, color, colorLabel
+      """,
+        [jsonEncode(untracked.toList())],
+      );
+
+  double availableInventoryQuantity(String productId, String name) =>
+      (_database
+                  .select(
+                    r"""SELECT coalesce(sum(json_extract(payload_json, '$.quantity')), 0) AS value
+        FROM inventory_metadata WHERE entity_type = 'inventory'
+        AND coalesce(json_extract(payload_json, '$.archived'), 0) = 0
+        AND json_extract(payload_json, '$.quantity') > 0
+        AND (entity_id = ? OR json_extract(payload_json, '$.catalogProductId') = ?
+          OR inventory_normalize(json_extract(payload_json, '$.name')) = inventory_normalize(?))""",
+                    [productId, productId, name],
+                  )
+                  .first['value']
+              as num)
+          .toDouble();
+
+  String inventoryStockKey(String productId, String name) {
+    final rows = _database.select(
+      r"""SELECT entity_id, json_extract(payload_json, '$.catalogProductId') AS product
+      FROM inventory_metadata WHERE entity_type = 'inventory'
+      AND (entity_id = ? OR json_extract(payload_json, '$.catalogProductId') = ?
+        OR inventory_normalize(json_extract(payload_json, '$.name')) = inventory_normalize(?))
+      ORDER BY CASE WHEN entity_id = ? OR json_extract(payload_json, '$.catalogProductId') = ? THEN 0 ELSE 1 END, rowid LIMIT 1""",
+      [productId, productId, name, productId, productId],
+    );
+    if (rows.isEmpty) {
+      return productId.isEmpty
+          ? 'name:${name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')}'
+          : 'product:$productId';
+    }
+    final product = rows.first['product'] as String?;
+    return product?.isNotEmpty == true
+        ? 'product:$product'
+        : "inventory:${rows.first['entity_id']}";
+  }
+
+  int inventoryCount({
+    String where = '1',
+    List<Object?> parameters = const [],
+  }) =>
+      _database
+              .select(
+                "SELECT count(*) AS n FROM inventory_metadata WHERE entity_type = 'inventory' AND ($where)",
+                parameters,
+              )
+              .first['n']
+          as int;
+
+  List<String> inventoryIds() => _database
+      .select(
+        "SELECT entity_id FROM inventory_metadata WHERE entity_type = 'inventory' ORDER BY rowid",
+      )
+      .map((r) => r['entity_id'] as String)
+      .toList();
+
+  Map<String, dynamic>? inventoryPayload(String id, {bool thumbnail = false}) {
+    final table = thumbnail ? 'entity_state' : 'inventory_metadata';
+    final rows = _database.select(
+      "SELECT payload_json AS payload FROM $table WHERE entity_type = 'inventory' AND entity_id = ?",
+      [id],
+    );
+    return rows.isEmpty
+        ? null
+        : jsonDecode(rows.first['payload'] as String) as Map<String, dynamic>;
+  }
+
+  List<Map<String, dynamic>> inventoryPage({
+    required String where,
+    required List<Object?> parameters,
+    required String orderBy,
+    required int limit,
+    required int offset,
+  }) {
+    if (limit <= 0 || offset < 0) return [];
+    return _database
+        .select(
+          "SELECT (SELECT payload_json FROM entity_state e WHERE e.entity_type = 'inventory' AND e.entity_id = m.entity_id) AS page_payload FROM inventory_metadata m WHERE entity_type = 'inventory' AND ($where) ORDER BY $orderBy LIMIT ? OFFSET ?",
+          [...parameters, limit, offset],
+        )
+        .map(
+          (r) =>
+              jsonDecode(r['page_payload'] as String) as Map<String, dynamic>,
+        )
+        .toList();
+  }
+
+  void configureInventoryFunctions({
+    required String Function(String) searchText,
+    required int Function(String, String) compare,
+  }) {
+    _database.createFunction(
+      functionName: 'inventory_search',
+      argumentCount: const AllowedArgumentCount(1),
+      function: (args) => searchText(args.single as String),
+    );
+    _database.createCollation(
+      name: 'inventory_order',
+      function: (a, b) => compare(a ?? '{}', b ?? '{}'),
+    );
   }
 
   InventoryImageData loadInventoryImages(String entityId) {
@@ -513,6 +707,7 @@ class LocalDatabase {
     try {
       for (final change in changes) {
         final localRevision = _nextLocalRevision();
+        final baseline = _conflictBaseline(change);
         _applyEntityStateChange(change);
         final existing = _database.select(
           '''
@@ -553,6 +748,7 @@ class LocalDatabase {
             localRevision,
           ],
         );
+        _database.execute('UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?', [jsonEncode(baseline), change.entityType, change.entityId]);
       }
       _database.execute('COMMIT');
     } catch (_) {
@@ -569,6 +765,7 @@ class LocalDatabase {
     try {
       for (final change in pending) {
         final localRevision = _nextLocalRevision();
+        final baseline = _conflictBaseline(change);
         _applyEntityStateChange(change);
         final existing = _database.select(
           '''SELECT fields_json, deleted FROM sync_outbox
@@ -608,12 +805,27 @@ class LocalDatabase {
             localRevision,
           ],
         );
+        _database.execute('UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?', [jsonEncode(baseline), change.entityType, change.entityId]);
       }
       _database.execute('COMMIT');
     } catch (_) {
       _database.execute('ROLLBACK');
       rethrow;
     }
+  }
+
+  Map<String, dynamic> _conflictBaseline(WorkshopEntityChange change) {
+    final rows = _database.select('SELECT base_json FROM sync_outbox WHERE entity_type = ? AND entity_id = ?', [change.entityType, change.entityId]);
+    final base = rows.isEmpty ? <String, dynamic>{} : Map<String, dynamic>.from(jsonDecode(rows.first['base_json'] as String) as Map);
+    final previous = readEntityPayload(change.entityType, change.entityId) ?? {};
+    if (change.deleted) { base.putIfAbsent('(deleted)', () => previous); }
+    for (final field in change.fields.keys) { base.putIfAbsent(field, () => previous[field]); }
+    return base;
+  }
+
+  Map<String, dynamic>? readEntityPayload(String type, String id) {
+    final rows = _database.select('SELECT payload_json FROM entity_state WHERE entity_type = ? AND entity_id = ?', [type, id]);
+    return rows.isEmpty ? null : Map<String, dynamic>.from(jsonDecode(rows.first['payload_json'] as String) as Map);
   }
 
   void saveEntityPayloadAndQueue(
@@ -827,7 +1039,7 @@ class LocalDatabase {
   void _migrateInventoryImages() {
     final rows = _database.select(
       '''SELECT entity_id, payload_json FROM entity_state
-         WHERE entity_type = 'inventory' ''',
+         WHERE entity_type = 'inventory' AND (json_type(payload_json, '\$.image') IS NOT NULL OR json_type(payload_json, '\$.labelImage') IS NOT NULL) ''',
     );
     for (final row in rows) {
       final payload = Map<String, dynamic>.from(
@@ -862,6 +1074,7 @@ class LocalDatabase {
               jsonDecode(row['fields_json'] as String) as Map,
             ),
             deleted: row['deleted'] == 1,
+            baseFields: Map<String, dynamic>.from(jsonDecode(row['base_json'] as String) as Map),
           ),
         ),
       )
@@ -876,6 +1089,16 @@ class LocalDatabase {
     try {
       for (final pending in changes) {
         statement.execute([pending.outboxId, pending.localRevision]);
+        // A newer local revision still queued after this acknowledgement uses
+        // the just-sent values as its remote baseline.
+        final remaining = _database.select('SELECT base_json FROM sync_outbox WHERE id = ?', [pending.outboxId]);
+        if (remaining.isNotEmpty) {
+          final base = Map<String, dynamic>.from(jsonDecode(remaining.first['base_json'] as String) as Map);
+          for (final field in pending.change.fields.keys) {
+            if (base.containsKey(field)) base[field] = pending.change.fields[field];
+          }
+          _database.execute('UPDATE sync_outbox SET base_json = ? WHERE id = ?', [jsonEncode(base), pending.outboxId]);
+        }
       }
     } finally {
       statement.close();

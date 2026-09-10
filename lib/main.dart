@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'disk_inventory_list.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -19,6 +20,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'local_database.dart';
+import 'item_drafts.dart';
 import 'device_name_dialog.dart';
 import 'filament_colors.dart';
 import 'kit_package.dart';
@@ -28,10 +30,73 @@ import 'cloud_sync_dialog.dart';
 import 'supabase_sync.dart';
 import 'sync_onboarding_dialog.dart';
 import 'workshop_delta.dart';
+import 'digikey.dart';
+import 'west3d.dart';
+import 'supplier_search_menu.dart';
+import 'supplier_images.dart';
+import 'adafruit.dart';
+import 'adafruit_search_dialog.dart';
+import 'west3d_search_dialog.dart';
+import 'mouser.dart' hide safeProductLink;
+import 'mouser_credentials.dart';
+import 'mouser_settings.dart';
+import 'mouser_search_dialog.dart';
+import 'digikey_settings.dart';
+import 'digikey_credentials.dart';
+import 'service_status.dart';
+import 'sync_conflicts.dart';
+import 'workshop_reports.dart';
+import 'digikey_search_dialog.dart';
 
 // A single explicit very-dark violet canvas across every platform. Keeping the
 // green channel lowest prevents the background from drifting teal/green.
 const Color _appCanvasColor = Color(0xff120d1c);
+
+class _DraftActionIcon extends StatelessWidget {
+  const _DraftActionIcon({this.edit = false});
+  final bool edit;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 18,
+    child: CustomPaint(painter: _DraftActionPainter(
+      color: IconTheme.of(context).color ?? Theme.of(context).colorScheme.onSurface,
+      edit: edit,
+    )),
+  );
+}
+
+class _DraftActionPainter extends CustomPainter {
+  const _DraftActionPainter({required this.color, required this.edit});
+  final Color color;
+  final bool edit;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24, size.height / 24);
+    final pen = Paint()..color = color..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8..strokeCap = StrokeCap.round..strokeJoin = StrokeJoin.round;
+    if (!edit) {
+      canvas.drawPath(Path()..moveTo(5, 3)..lineTo(3, 3)..lineTo(3, 20)..lineTo(16, 20), pen);
+    }
+    canvas.drawPath(Path()..moveTo(8, 2)..lineTo(16, 2)..lineTo(21, 7)
+      ..lineTo(21, edit ? 10 : 17)..lineTo(8, 17)..close(), pen);
+    canvas.drawPath(Path()..moveTo(16, 2)..lineTo(16, 7)..lineTo(21, 7), pen);
+    canvas.drawLine(const Offset(11, 10), const Offset(17, 10), pen);
+    if (edit) {
+      canvas.drawPath(Path()..moveTo(12, 22)..lineTo(13, 18)..lineTo(20, 11)
+        ..lineTo(23, 14)..lineTo(16, 21)..close(), pen);
+    } else {
+      canvas.drawLine(const Offset(11, 13), const Offset(17, 13), pen);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_DraftActionPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.edit != edit;
+}
 
 class _ShoppingCartIcon extends StatelessWidget {
   const _ShoppingCartIcon({super.key}) : remove = false;
@@ -898,7 +963,7 @@ Future<void> main() async {
   runApp(
     InventorinatorApp(
       database: database,
-      persistedState: database.loadState(includeFullImages: false),
+      persistedState: database.loadState(includeFullImages: false, includeInventory: false),
     ),
   );
 }
@@ -1406,6 +1471,7 @@ enum InventorySort {
   cost,
   dryingTime,
   moistureRemaining,
+  usageTracked,
 }
 
 bool defaultInventorySortAscending(InventorySort value) => switch (value) {
@@ -1415,6 +1481,7 @@ bool defaultInventorySortAscending(InventorySort value) => switch (value) {
   InventorySort.cost => false,
   InventorySort.dryingTime => false,
   InventorySort.moistureRemaining => true,
+  InventorySort.usageTracked => false,
 };
 
 enum CatalogViewFilter { kits, builds, machines, printers, tools }
@@ -4827,15 +4894,7 @@ Map<String, dynamic> encodeWorkshopEntityPayload(
   );
 }
 
-WorkshopState? decodeWorkshopState(String? source) {
-  if (source == null || source.isEmpty) return null;
-  try {
-    final root = jsonDecode(source) as Map<String, dynamic>;
-    final schemaVersion = root['schemaVersion'] as int? ?? 1;
-    final inventory = (root['inventory'] as List)
-        .cast<Map<String, dynamic>>()
-        .map(
-          (item) => InventoryItem(
+InventoryItem _inventoryItemFromJson(Map<String, dynamic> item, {int schemaVersion = 8}) => InventoryItem(
             id: item['id'] as String,
             name: item['name'] as String,
             type: _migratedInventoryType(
@@ -4954,7 +5013,17 @@ WorkshopState? decodeWorkshopState(String? source) {
                 item['masterSpoolMaterialId'] as String? ?? '',
             masterSpoolMaterialName:
                 item['masterSpoolMaterialName'] as String? ?? '',
-          ),
+          );
+
+WorkshopState? decodeWorkshopState(String? source) {
+  if (source == null || source.isEmpty) return null;
+  try {
+    final root = jsonDecode(source) as Map<String, dynamic>;
+    final schemaVersion = root['schemaVersion'] as int? ?? 1;
+    final inventory = (root['inventory'] as List)
+        .cast<Map<String, dynamic>>()
+        .map(
+          (item) => _inventoryItemFromJson(item, schemaVersion: schemaVersion),
         )
         .toList();
     final customItemTypes =
@@ -6448,6 +6517,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Set<String> selectedMachineIds = {};
   InventorySort sort = InventorySort.type;
   bool sortAscending = true;
+  Set<String> _similarItemIds = <String>{};
+  String? _similarSourceName;
+  int _similarFilterRevision = 0;
   static const _pageSizes = [12, 25, 100, 250, 1000];
   static const _minimumCardSizePercent = 75.0;
   static const _maximumCardSizePercent = 150.0;
@@ -6588,9 +6660,22 @@ class _InventoryHomeState extends State<InventoryHome> {
     final restored = decodeWorkshopState(widget.persistedState);
     final firstLaunch =
         widget.database != null && widget.persistedState == null;
-    inventory =
-        restored?.inventory ??
-        (firstLaunch ? <InventoryItem>[] : [...sampleInventory]);
+    if (widget.database case final database?) {
+      if (database.inventoryCount() == 0 && restored?.inventory.isNotEmpty == true) {
+        database.saveState(widget.persistedState!);
+      }
+      inventory = DiskInventoryList<InventoryItem>(ids: database.inventoryIds(),
+        idOf: (item) => item.id,
+        read: (id) => _decodeInventoryPayload(database.inventoryPayload(id)!));
+      database.configureInventoryFunctions(
+        searchText: (payload) => _searchableInventoryText(_decodeInventoryPayload(jsonDecode(payload) as Map<String,dynamic>)),
+        compare: (a, b) => compareInventoryItems(
+          _decodeInventoryPayload(jsonDecode(a) as Map<String,dynamic>),
+          _decodeInventoryPayload(jsonDecode(b) as Map<String,dynamic>),
+          sort: sort, ascending: sortAscending, now: DateTime.now(), spoolTypes: spoolTypes, usage: spoolUsage));
+    } else {
+      inventory = restored?.inventory ?? [...sampleInventory];
+    }
     final initializedDryingTimers = _initializeDryingTimers();
     vendors = restored?.vendors ?? [...starterVendors];
     brands = restored?.brands ?? [...starterBrands];
@@ -6628,9 +6713,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     locations = restored?.locations ?? [];
     shoppingList = restored?.shoppingList ?? [];
     final initializedLocations = _initializeLegacyLocations();
-    for (final item in inventory) {
-      _inventoryItemNotifiers[item.id] = ValueNotifier(item);
-    }
     auditLog = restored?.auditLog ?? [];
     additionHistory =
         restored?.additionHistory ??
@@ -7706,6 +7788,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       value.toLowerCase().replaceAll(_searchNormalizationPattern, '');
 
   void _invalidateSearchCaches() {
+    _stockQuantityCache.clear();
+    _stockKeyCache.clear();
     _searchDataRevision++;
     _inventorySearchTextCache.clear();
     _catalogSearchTextCache.clear();
@@ -8027,7 +8111,127 @@ class _InventoryHomeState extends State<InventoryHome> {
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
+  @visibleForTesting
+  int get retainedInventoryItemCount => <String>{
+    ..._inventoryItemNotifiers.keys,
+    ...?_visibleItemsCache?.map((item) => item.id),
+    ...?_persistedEntityReferences['inventory']?.keys,
+    ...?_diskInventory?.pending.keys,
+  }.length;
+
+  InventoryItem _decodeInventoryPayload(Map<String,dynamic> payload) =>
+      _inventoryItemFromJson(payload);
+
+  DiskInventoryList<InventoryItem>? get _diskInventory =>
+      inventory is DiskInventoryList<InventoryItem> ? inventory as DiskInventoryList<InventoryItem> : null;
+
+  bool _flushDiskInventory() {
+    final disk = _diskInventory;
+    if (disk == null) return false;
+    final database = widget.database!;
+    final changes = <WorkshopEntityChange>[];
+    for (final id in disk.removed) {
+      changes.add(WorkshopEntityChange(entityType: 'inventory', entityId: id, fields: const {}, deleted: true));
+    }
+    for (final entry in disk.pending.entries) {
+      final before = database.inventoryPayload(entry.key, thumbnail: true);
+      final previous = before == null ? null : _decodeInventoryPayload(before);
+      final fields = _changedInventoryFields(previous, entry.value);
+      // Metadata-only reads must not remove a thumbnail they did not fetch.
+      if (entry.value.thumbnailBytes == null && before?['thumbnail'] != null) fields.remove('thumbnail');
+      if (fields.isNotEmpty) changes.add(WorkshopEntityChange(entityType: 'inventory', entityId: entry.key, fields: fields));
+    }
+    if (changes.isNotEmpty) database.applyAndQueueWorkshopChanges(changes);
+    disk.pending.clear(); disk.removed.clear();
+    return changes.isNotEmpty;
+  }
+
+  String _searchableInventoryText(InventoryItem item) => _normalized(
+              '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
+              '${item.purposeTags.join(' ')} '
+              '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
+              '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
+              '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
+              '${item.itemColorLabel} ${item.itemColorName} '
+              '${_spoolSizeLabel(item)} ${item.amsCompatible ? 'AMS compatible' : ''} '
+              '${item.refill ? 'refill reload master spool ${item.masterSpool}' : 'factory spool'} '
+              '${item.spoolOuterDiameterMm ?? ''} ${item.spoolWidthMm ?? ''} ${item.spoolHoleDiameterMm ?? ''} '
+              '${machines.where((machine) => item.compatibleMachineIds.contains(machine.id)).map((machine) => '${machine.name} ${machine.model} ${_machineTypePath(machine.typeId)}').join(' ')}',
+            );
+
+  (String, List<Object?>) _inventorySqlFilter() {
+    final clauses = <String>["coalesce(json_extract(payload_json, '\$.archived'), 0) = ?"];
+    final args = <Object?>[archivedOnly ? 1 : 0];
+    void eq(String field, Object value) {
+      clauses.add("json_extract(payload_json, '\$.$field') = ?"); args.add(value);
+    }
+    if (hideZeroQuantityItems) clauses.add("coalesce(json_extract(payload_json, '\$.quantity'), 1) > 0");
+    if (type != null) eq('type', type!.name);
+    if (customTypeFilterId != null) eq('customTypeId', customTypeFilterId!);
+    if (_similarItemIds.isNotEmpty) {
+      clauses.add('entity_id IN (SELECT value FROM json_each(?))'); args.add(jsonEncode(_similarItemIds.toList()));
+    }
+    if (itemColorFilter != null) {
+      clauses.add("trim(coalesce(nullif(json_extract(payload_json, '\$.itemColorName'), ''), json_extract(payload_json, '\$.itemColorLabel'), '')) = ?");
+      args.add(itemColorFilter == _unspecifiedItemColorKey ? '' : itemColorFilter);
+    }
+    for (final entry in [('materialName', filamentMaterialFilter, _unspecifiedMaterialKey), ('brand', filamentBrandFilter, _unspecifiedBrandKey)]) {
+      if (entry.$2 == null) continue;
+      eq('type', 'filament');
+      clauses.add("trim(coalesce(json_extract(payload_json, '\$.${entry.$1}'), '')) = ?");
+      args.add(entry.$2 == entry.$3 ? '' : entry.$2);
+    }
+    if (filamentPurposeTagFilter != null) {
+      eq('type', 'filament');
+      clauses.add("EXISTS (SELECT 1 FROM json_each(payload_json, '\$.purposeTags') WHERE lower(trim(value)) = ?)");
+      args.add(filamentPurposeTagFilter!.trim().toLowerCase());
+    }
+    if (_normalized(query).isNotEmpty) {
+      clauses.add("instr(inventory_search(json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage')), ?) > 0");
+      args.add(_normalized(query));
+    }
+    return (clauses.join(' AND '), args);
+  }
+
+  String get _inventorySqlOrder {
+    final field = switch (sort) {
+      InventorySort.quantity => "coalesce(json_extract(payload_json, '\$.quantity'), 1)",
+      InventorySort.cost => "json_extract(payload_json, '\$.cost')",
+      InventorySort.addedDate => "julianday(json_extract(payload_json, '\$.added'))",
+      InventorySort.dryingTime => "coalesce(json_extract(payload_json, '\$.dryingMinutes'), -1)",
+      _ => null,
+    };
+    if (field != null) return "$field ${sortAscending ? 'ASC' : 'DESC'}, entity_id ASC";
+    return "json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage') COLLATE inventory_order";
+  }
+
+  List<InventoryItem> _readInventoryPage(int offset, int limit) {
+    final filter = _inventorySqlFilter();
+    final key = (_searchDataRevision, filter.$1, jsonEncode(filter.$2), sort, sortAscending, offset, limit);
+    if (_visibleItemsCacheKey == key) return _visibleItemsCache!;
+    final items = widget.database!.inventoryPage(where: filter.$1, parameters: filter.$2,
+      orderBy: _inventorySqlOrder, limit: limit, offset: offset).map(_decodeInventoryPayload).toList();
+    final keep = items.map((e) => e.id).toSet();
+    final old = _inventoryItemNotifiers.values.toList();
+    _inventoryItemNotifiers.clear();
+    final previous = _visibleItemsCache;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final notifier in old) {
+        final bytes = notifier.value.thumbnailBytes;
+        if (bytes != null) MemoryImage(bytes).evict();
+        notifier.dispose();
+      }
+      for (final item in previous ?? <InventoryItem>[]) {
+        if (!keep.contains(item.id) && item.thumbnailBytes != null) MemoryImage(item.thumbnailBytes!).evict();
+      }
+    });
+    _persistedEntityReferences['inventory']?.removeWhere((id, _) => !keep.contains(id));
+    _visibleItemsCacheKey = key;
+    return _visibleItemsCache = items;
+  }
+
   List<InventoryItem> get visibleItems {
+    if (_diskInventory != null) return _visibleItemsCache ?? _readInventoryPage(0, _pageSizes[pageSizeIndex]);
     final cacheKey = (
       _searchDataRevision,
       query,
@@ -8041,6 +8245,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       filamentPurposeTagFilter,
       sort,
       sortAscending,
+      _similarFilterRevision,
     );
     if (_visibleItemsCacheKey == cacheKey) return _visibleItemsCache!;
     final needle = _normalized(query);
@@ -8048,6 +8253,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final result = inventory.where((item) {
       if (item.archived != archivedOnly ||
           hideZeroQuantityItems && item.quantity <= 0 ||
+          _similarItemIds.isNotEmpty && !_similarItemIds.contains(item.id) ||
           type != null && item.type != type ||
           customTypeFilterId != null &&
               item.customTypeId != customTypeFilterId ||
@@ -8099,6 +8305,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         sort: sort,
         ascending: sortAscending,
         now: now,
+        spoolTypes: spoolTypes,
+        usage: spoolUsage,
       ),
     );
     _visibleItemsCacheKey = cacheKey;
@@ -8130,6 +8338,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     final filamentColors = <String, double>{};
     final filamentColorLabels = <String, String>{};
     final filamentBrands = <String, double>{};
+    if (_diskInventory != null) {
+      for (final row in widget.database!.inventoryMetricGroups(metricsUntrackedTypeKeys)) {
+        itemRecords += row['records'] as int;
+        totalUnits += (row['units'] as num).toDouble();
+        lowStockRecords += row['lowStock'] as int;
+        if (row['type'] != 'filament') continue;
+        final units = (row['units'] as num).toDouble();
+        filamentSpools += units;
+        final material = row['material'] == '' ? _unspecifiedMaterialKey : row['material'] as String;
+        final brand = row['brand'] == '' ? _unspecifiedBrandKey : row['brand'] as String;
+        final color = row['color'] == '' ? _unspecifiedItemColorKey : row['color'] as String;
+        final label = row['colorLabel'] as String;
+        filamentMaterials[material] = (filamentMaterials[material] ?? 0) + units;
+        filamentBrands[brand] = (filamentBrands[brand] ?? 0) + units;
+        filamentColors[color] = (filamentColors[color] ?? 0) + units;
+        filamentColorLabels[color] = color == _unspecifiedItemColorKey ? 'Unspecified color'
+          : label.isEmpty ? color : label.toUpperCase() == color.toUpperCase() ? label : '$label · $color';
+      }
+    } else {
     for (final item in inventory) {
       if (item.archived || !_isMetricsTracked(item)) continue;
       itemRecords++;
@@ -8154,6 +8381,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           item.quantity <= item.quantityAlertThreshold!) {
         lowStockRecords++;
       }
+    }
     }
     return _InventoryMetrics(
       itemRecords: itemRecords,
@@ -8393,7 +8621,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   @override
   Widget build(BuildContext context) {
     final showingCatalog = catalogFilter != null;
-    final allItems = showingCatalog ? const <InventoryItem>[] : visibleItems;
+    if (showingCatalog && _diskInventory != null) _readInventoryPage(0, 0);
+    final allItems = showingCatalog || _diskInventory != null ? const <InventoryItem>[] : visibleItems;
     final allCatalogRecords = showingCatalog
         ? visibleCatalogRecords
         : const <Object>[];
@@ -8410,12 +8639,18 @@ class _InventoryHomeState extends State<InventoryHome> {
         : showingEverything
         ? <Object>[...visibleEverythingCatalogRecords, ...allItems]
         : allItems.cast<Object>();
-    final resultCount = allRecords.length;
+    final sqlFilter = _inventorySqlFilter();
+    final diskCount = !showingCatalog && _diskInventory != null
+        ? widget.database!.inventoryCount(where: sqlFilter.$1, parameters: sqlFilter.$2) : 0;
+    final resultCount = allRecords.length + diskCount;
     final pageSize = _pageSizes[pageSizeIndex];
     final pageCount = resultCount == 0 ? 1 : (resultCount / pageSize).ceil();
     final page = currentPage.clamp(0, pageCount - 1);
     final start = page * pageSize;
     final records = allRecords.skip(start).take(pageSize).toList();
+    if (!showingCatalog && _diskInventory != null) {
+      records.addAll(_readInventoryPage((start - allRecords.length).clamp(0, resultCount), pageSize - records.length));
+    }
     return _CustomIconAnimationScope(
       mode: customIconAnimationMode,
       child: TickerMode(
@@ -8681,7 +8916,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _publishInventoryItem(InventoryItem item) {
-    final index = inventory.indexWhere((candidate) => candidate.id == item.id);
+    final index = _diskInventory?.indexOfId(item.id) ?? inventory.indexWhere((candidate) => candidate.id == item.id);
     if (index < 0) return;
     inventory[index] = item;
     final notifier = _inventoryItemNotifiers.putIfAbsent(
@@ -8707,6 +8942,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _synchronizeInventoryNotifiers() {
+    if (_diskInventory != null) return;
     final activeIds = inventory.map((item) => item.id).toSet();
     for (final staleId
         in _inventoryItemNotifiers.keys
@@ -9477,6 +9713,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     final item = await showDialog<InventoryItem>(
       context: context,
       builder: (_) => AddItemDialog(
+        existingDigiKeyPartNumbers: {
+          for (final item in inventory)
+            if (item.customFieldValues['supplier.digikey.partNumber'] != null)
+              item.customFieldValues['supplier.digikey.partNumber']!,
+        },
+        existingMouserPartNumbers: {
+          for (final item in inventory)
+            if (item.customFieldValues['supplier.mouser.partNumber'] != null)
+              item.customFieldValues['supplier.mouser.partNumber']!,
+        },
         vendors: vendors,
         brands: brands,
         products: products,
@@ -10092,10 +10338,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       if (item.imageBytes == null && item.labelImageBytes == null) continue;
       final lightweight = _withoutFullInventoryImages(item);
       _publishInventoryItem(lightweight);
-      _persistedEntityReferences.putIfAbsent(
-        'inventory',
-        () => {},
-      )[lightweight.id] = lightweight;
+      if (_diskInventory != null) { _diskInventory!.acknowledge(lightweight.id); }
+      else { _persistedEntityReferences.putIfAbsent('inventory', () => {})[lightweight.id] = lightweight; }
     }
   }
 
@@ -10146,6 +10390,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           onStorageLocationTap: storageLocation == null
               ? null
               : () => _openLocation(storageLocation),
+          onFindSimilar: _findSimilarItems,
         ),
       ),
       transitionBuilder: (context, animation, _, child) {
@@ -10165,6 +10410,152 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
       },
     );
+  }
+
+  Set<String> _similarityTokens(String value) => value
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((token) => token.length > 1)
+      .toSet();
+
+  double _tokenOverlap(Set<String> left, Set<String> right) {
+    if (left.isEmpty || right.isEmpty) return 0;
+    return left.intersection(right).length /
+        math.max(left.length, right.length);
+  }
+
+  double _inventorySimilarityScore(
+    InventoryItem target,
+    InventoryItem candidate,
+  ) {
+    var score = 0.0;
+    if (target.type == candidate.type) score += 3;
+    if (_normalized(target.materialName).isNotEmpty &&
+        _normalized(target.materialName) ==
+            _normalized(candidate.materialName)) {
+      score += 2.5;
+    }
+    if (_normalized(target.brand).isNotEmpty &&
+        _normalized(target.brand) == _normalized(candidate.brand)) {
+      score += 2;
+    }
+    if (_normalized(target.vendor).isNotEmpty &&
+        _normalized(target.vendor) == _normalized(candidate.vendor)) {
+      score += 1;
+    }
+    final targetNameTokens = _similarityTokens(target.name);
+    final candidateNameTokens = _similarityTokens(candidate.name);
+    score += 4 * _tokenOverlap(targetNameTokens, candidateNameTokens);
+    final targetColorTokens = _similarityTokens(
+      '${target.itemColorLabel} ${target.itemColorName}',
+    );
+    final candidateColorTokens = _similarityTokens(
+      '${candidate.itemColorLabel} ${candidate.itemColorName}',
+    );
+    score += 3 * _tokenOverlap(targetColorTokens, candidateColorTokens);
+    final targetDetailTokens = _similarityTokens(
+      '${target.compatibility.join(' ')} ${target.purposeTags.join(' ')} '
+      '${target.spoolMaterialName} ${target.masterSpoolMaterialName} '
+      '${target.styleEntries.map((entry) => '${entry.style} ${entry.gradientName} ${entry.colorNames.join(' ')}').join(' ')}',
+    );
+    final candidateDetailTokens = _similarityTokens(
+      '${candidate.compatibility.join(' ')} ${candidate.purposeTags.join(' ')} '
+      '${candidate.spoolMaterialName} ${candidate.masterSpoolMaterialName} '
+      '${candidate.styleEntries.map((entry) => '${entry.style} ${entry.gradientName} ${entry.colorNames.join(' ')}').join(' ')}',
+    );
+    score += 2 * _tokenOverlap(targetDetailTokens, candidateDetailTokens);
+    for (final targetToken in targetNameTokens) {
+      for (final candidateToken in candidateNameTokens) {
+        final longest = math.max(targetToken.length, candidateToken.length);
+        if (longest < 3) continue;
+        final distance = _levenshteinDistance(targetToken, candidateToken);
+        if (1 - (distance / longest) >= .72) {
+          score += .75;
+          break;
+        }
+      }
+    }
+    return score;
+  }
+
+  Future<void> _findSimilarItems(InventoryItem target) async {
+    final ranked =
+        inventory
+            .where(
+              (candidate) =>
+                  candidate.id != target.id &&
+                  candidate.archived == target.archived,
+            )
+            .map(
+              (candidate) => (
+                item: candidate,
+                score: _inventorySimilarityScore(target, candidate),
+              ),
+            )
+            .where((candidate) => candidate.score > 0)
+            .toList()
+          ..sort((left, right) {
+            final byScore = right.score.compareTo(left.score);
+            if (byScore != 0) return byScore;
+            return left.item.name.compareTo(right.item.name);
+          });
+    final matches = ranked.take(50).map((entry) => entry.item.id).toSet();
+    if (matches.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No similar inventory items found.')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _similarItemIds = matches;
+      _similarSourceName = target.name;
+      _similarFilterRevision++;
+      catalogFilter = null;
+      query = '';
+      inventorySearchController.clear();
+      archivedOnly = target.archived;
+      type = null;
+      customTypeFilterId = null;
+      itemColorFilter = null;
+      filamentMaterialFilter = null;
+      filamentBrandFilter = null;
+      filamentPurposeTagFilter = null;
+      currentPage = 0;
+    });
+  }
+
+  void _handleInventorySearchChanged(String value) {
+    setState(() {
+      query = value;
+      currentPage = 0;
+      if (_similarItemIds.isNotEmpty) {
+        _similarItemIds = <String>{};
+        _similarSourceName = null;
+        _similarFilterRevision++;
+      }
+    });
+  }
+
+  void _focusInventoryItemInMainView(InventoryItem item) {
+    final searchValue = item.name.trim().isNotEmpty
+        ? item.name.trim()
+        : item.barcode.trim();
+    setState(() {
+      catalogFilter = null;
+      query = searchValue;
+      archivedOnly = item.archived;
+      currentPage = 0;
+      _similarItemIds = <String>{};
+      _similarSourceName = null;
+      _similarFilterRevision++;
+      inventorySearchController.value = TextEditingValue(
+        text: searchValue,
+        selection: TextSelection.collapsed(offset: searchValue.length),
+      );
+    });
   }
 
   Future<void> _splitOneIntoNewStack(InventoryItem source) async {
@@ -10382,6 +10773,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             (_lowStockAnimationVersions[newItem.id] ?? 0) + 1;
       }
     });
+    if (_diskInventory != null && widget.database != null) {
+      _saveInventoryEntity(widget.database!, newItem, previous: oldItem);
+      _diskInventory!.acknowledge(newItem.id);
+    }
     _persist();
     _discardLoadedFullImages([newItem]);
     _checkMoistureThresholdAnimations();
@@ -11440,7 +11835,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       kits.where((kit) => kit.id == line.productId).firstOrNull?.name ??
       'Missing item';
 
-  double _availableInventoryQuantity(String productId, String name) => inventory
+  final Map<(String, String), double> _stockQuantityCache = {};
+  final Map<(String, String), String> _stockKeyCache = {};
+
+  double _availableInventoryQuantity(String productId, String name) => _diskInventory != null
+      ? _stockQuantityCache.putIfAbsent((productId, name), () => widget.database!.availableInventoryQuantity(productId, name))
+      : inventory
       .where(
         (item) =>
             !item.archived &&
@@ -11452,6 +11852,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       .fold(0, (total, item) => total + item.quantity);
 
   String _stockKey(String productId, String name) {
+    if (_diskInventory != null) return _stockKeyCache.putIfAbsent((productId, name), () => widget.database!.inventoryStockKey(productId, name));
     final normalizedName = _normalized(name);
     final match =
         inventory
@@ -12190,6 +12591,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openAnimationControls() => showDialog<void>(
     context: context,
     builder: (_) => PersonalizationSettingsDialog(
+      database: widget.database,
       animationDurationPercent: animationDurationPercent,
       animationRecurrenceSeconds: animationRecurrenceSeconds,
       photoCardsEnabled: photoCardsEnabled,
@@ -12891,9 +13293,20 @@ class _InventoryHomeState extends State<InventoryHome> {
     final database = widget.database;
     var wroteChange = false;
     if (database != null) {
-      if (_incrementalPersistenceReady) {
+      if (!_incrementalPersistenceReady && _diskInventory != null) {
+        _flushDiskInventory();
+        database.applyAndQueueWorkshopChanges([
+          for (final collection in _entityCollections().entries)
+            for (final record in collection.value)
+              WorkshopEntityChange(entityType: collection.key, entityId: _entityId(record),
+                fields: encodeWorkshopEntityPayload(collection.key, record)),
+          WorkshopEntityChange(entityType: workshopMetadataEntityType, entityId: workshopMetadataEntityId, fields: _workshopMetadata()),
+        ]);
+        wroteChange = true;
+      } else if (_incrementalPersistenceReady) {
         wroteChange = _persistChangedEntities(database);
       } else {
+        _flushDiskInventory();
         final previous = database.loadState();
         final current = _currentStateJson();
         final changes = diffWorkshopStates(previous, current);
@@ -12923,7 +13336,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Map<String, List<Object>> _entityCollections() => {
-    'inventory': inventory,
+    if (_diskInventory == null) 'inventory': inventory,
     'customItemTypes': customItemTypes,
     'machineTypes': machineTypes,
     'machines': machines,
@@ -12972,6 +13385,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   };
 
   void _capturePersistedEntityReferences() {
+    _flushDiskInventory();
     _persistedEntityReferences
       ..clear()
       ..addEntries(
@@ -12987,7 +13401,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   bool _persistChangedEntities(LocalDatabase database) {
-    var wroteChange = false;
+    var wroteChange = _flushDiskInventory();
     for (final collection in _entityCollections().entries) {
       final previous = _persistedEntityReferences[collection.key] ?? const {};
       final current = <String, Object>{
@@ -13115,6 +13529,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _persistInventoryItem(InventoryItem item) {
+    if (_diskInventory != null) {
+      _flushDiskInventory();
+      _invalidateSearchCaches();
+      if (!_applyingCloudState) { _localStateRevision++; _scheduleAutomaticSync(); }
+      return;
+    }
     _reconcileReadInventoryAlerts();
     _invalidateSearchCaches();
     final database = widget.database;
@@ -13135,7 +13555,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _backfillInventoryThumbnails() async {
-    if (_thumbnailBackfillRunning || widget.database == null) return;
+    if (_diskInventory != null || _thumbnailBackfillRunning || widget.database == null) return;
     _thumbnailBackfillRunning = true;
     var changed = false;
     try {
@@ -13219,7 +13639,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   String _currentStateJson() => encodeWorkshopState(
-    inventory: inventory,
+    inventory: _diskInventory == null ? inventory : [
+      for (final item in inventory) _decodeInventoryPayload({
+        ...?widget.database!.inventoryPayload(item.id, thumbnail: true),
+        ..._inventoryItemJson(item, includeBinary: false),
+      }),
+    ],
     vendors: vendors,
     brands: brands,
     spoolTypes: spoolTypes,
@@ -13284,13 +13709,14 @@ class _InventoryHomeState extends State<InventoryHome> {
   // mergeRemoteChangesWithPending) -- this just puts the collision on
   // record instead of resolving it silently.
   void _recordSyncConflicts(List<WorkshopFieldConflict> conflicts) {
+    _conflictStore?.record(conflicts);
     for (final conflict in conflicts) {
       _recordAudit(
         'sync_conflict_kept_local',
         conflict.entityType,
         conflict.entityId,
         {
-          conflict.field: 'kept local value pending sync; another device changed this field too',
+          conflict.field: 'held for review; another device changed this field too',
         },
       );
     }
@@ -13503,6 +13929,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
         return;
       }
+      if (change.entityType == 'inventory' && _diskInventory != null) {
+        _diskInventory!.acknowledge(change.entityId);
+        return;
+      }
       final references = _persistedEntityReferences.putIfAbsent(
         change.entityType,
         () => {},
@@ -13567,11 +13997,15 @@ class _InventoryHomeState extends State<InventoryHome> {
 
       if (change.entityType == 'inventory') {
         inventoryChanged = true;
-        final index = inventory.indexWhere(
+        if (_diskInventory != null) rebuildRoot = true;
+        final index = _diskInventory?.indexOfId(change.entityId) ?? inventory.indexWhere(
           (item) => item.id == change.entityId,
         );
         if (change.deleted) {
-          if (index >= 0) inventory.removeAt(index);
+          if (index >= 0) {
+            if (_diskInventory != null) { _diskInventory!.removeId(change.entityId); }
+            else { inventory.removeAt(index); }
+          }
           _inventoryItemNotifiers.remove(change.entityId)?.dispose();
           rebuildRoot = true;
           rememberAppliedChange(change);
@@ -13953,6 +14387,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     // local edit after this point needs another pass, even if it lands while
     // we are waiting to apply or confirm remote changes.
     final syncingRevision = _localStateRevision;
+    final statusKey = 'Supabase:${digiKeyScope(config.url, config.workspaceId)}';
+    ServiceStatus.set(statusKey, ConnectionStateLed.checking);
     _syncing = true;
     _syncActivity.value = true;
     _syncRequestedWhileBusy = false;
@@ -13990,7 +14426,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         config,
         client: widget.supabaseHttpClient,
       );
-      await service.requireCurrentSchema(session);
+      ServiceStatus.setSchemaVersion(
+        statusKey, await service.requireInventorySchema(session),
+      );
       try {
         final role = await service.currentRole(session);
         final remotePurgeDays = await service.remotePurgeAfterDays(session);
@@ -14077,15 +14515,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       // versioned acknowledgement leaves any still-newer edit in the outbox.
       await database.waitForPendingWrites();
       var pending = database.loadPendingWorkshopChanges();
+      pending = _conflictStore?.readyForUpload(pending,
+        atomicBuilds: currentRole.canOperateBuilds && !currentRole.canEditInventory) ?? pending;
       if (pending.isNotEmpty) {
         var auditAcknowledged = false;
-        for (
-          var offset = 0;
-          offset < pending.length;
-          offset += _syncUploadBatchSize
-        ) {
-          final end = math.min(offset + _syncUploadBatchSize, pending.length);
-          final batch = pending.sublist(offset, end);
+        for (final batch in workshopUploadBatches(pending, (entry) => entry.change,
+          atomicBuilds: currentRole.canOperateBuilds && !currentRole.canEditInventory,
+          batchSize: _syncUploadBatchSize)) {
           await service.uploadChanges(
             session,
             batch.map((entry) => entry.change),
@@ -14144,13 +14580,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           _autoSyncPausedForAuthentication = true;
           _syncPoll?.cancel();
           debugPrint(
-            'Automatic sync paused until Remote Sync is reopened: $error',
+            'Automatic sync paused until Remote Settings is reopened: $error',
           );
           if (mounted && canManageWorkspaceDevices(config.workspaceRole)) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Remote session expired. Open Remote Sync to reconnect.',
+                  'Remote session expired. Open Remote Settings to reconnect.',
                 ),
                 duration: Duration(seconds: 8),
               ),
@@ -14163,6 +14599,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     } catch (error) {
       debugPrint('Automatic sync failed: $error');
     } finally {
+      ServiceStatus.set(
+        statusKey,
+        syncSucceeded ? ConnectionStateLed.connected : ConnectionStateLed.failed,
+      );
       _syncing = false;
       final newerStateNeedsSync =
           syncSucceeded && _localStateRevision != _lastSyncedLocalRevision;
@@ -14821,10 +15261,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       controller: inventorySearchController,
       focusNode: inventorySearchFocusNode,
       enabled: searchGlowEnabled,
-      onChanged: (value) => setState(() {
-        query = value;
-        currentPage = 0;
-      }),
+      onChanged: _handleInventorySearchChanged,
       hintText: compact
           ? 'Search inventory…'
           : 'Search items, types, compatibility…  Try “E3DV6”',
@@ -14850,6 +15287,44 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
         );
       },
+    );
+  }
+
+  Widget _similarFilterBanner() {
+    if (_similarItemIds.isEmpty) return const SizedBox.shrink();
+    return Container(
+      key: const Key('similar-items-filter'),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: .12),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: .42),
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.manage_search_rounded,
+            size: 18,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Similar to ${_similarSourceName ?? 'selected item'} · ${_similarItemIds.length} matches',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          TextButton(
+            key: const Key('clear-similar-items-filter'),
+            onPressed: () => _handleInventorySearchChanged(''),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -14882,6 +15357,10 @@ class _InventoryHomeState extends State<InventoryHome> {
               const SizedBox(height: 14),
             ],
             _collapsingMainSearchField(compact: compact),
+            if (_similarItemIds.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _similarFilterBanner(),
+            ],
             const SizedBox(height: 14),
             if (catalogFilter == null &&
                 (availableItemColorFilters.isNotEmpty ||
@@ -15013,19 +15492,38 @@ class _InventoryHomeState extends State<InventoryHome> {
     },
   );
 
-  Widget _titleHeader() => LayoutBuilder(
-    builder: (context, constraints) {
-      final narrow = constraints.maxWidth < 600;
-      return Padding(
-        padding: EdgeInsets.fromLTRB(narrow ? 12 : 20, 16, narrow ? 12 : 20, 4),
-        child: Center(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: _headerIdentity(compactLogo: narrow),
-          ),
-        ),
-      );
-    },
+  Widget _titleHeader() => ValueListenableBuilder<int>(
+    valueListenable: ServiceStatus.changes,
+    builder: (context, _, child) => LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 600;
+        final database = widget.database;
+        final raw = database?.loadSyncConfig();
+        final config = raw == null ? null : SupabaseConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final scope = digiKeyScope(config?.url ?? '', config?.workspaceId);
+        final digikey = database == null ? null : DigiKeyCredentialStore(database, scope).read();
+        final mouser = database == null ? null : MouserCredentialStore(database, scope).read();
+        final indicators = <Widget>[
+          if (mouser?.credentials.configured == true)
+            ServiceStatusLed(name: 'Mouser', statusKey: 'Mouser:$scope'),
+          if (config?.isConfigured == true)
+            ServiceStatusLed(name: 'Supabase', statusKey: 'Supabase:$scope'),
+          if (digikey?.credentials.configured == true)
+            ServiceStatusLed(name: 'DigiKey', statusKey: 'DigiKey:$scope'),
+        ];
+        return Padding(
+          padding: EdgeInsets.fromLTRB(narrow ? 12 : 20, 16, narrow ? 12 : 20, 4),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: _headerIdentity(compactLogo: narrow))),
+            if (indicators.isNotEmpty) ...[
+              const SizedBox(width: 16),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
+                children: [for (final indicator in indicators) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: indicator)]),
+            ],
+          ]),
+        );
+      },
+    ),
   );
 
   Widget _floatingHeaderActionBar() => ValueListenableBuilder<bool>(
@@ -15152,10 +15650,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   focusNode: floatingSearchFocusNode,
                   compact: true,
                   enabled: searchGlowEnabled,
-                  onChanged: (value) => setState(() {
-                    query = value;
-                    currentPage = 0;
-                  }),
+                  onChanged: _handleInventorySearchChanged,
                   hintText: 'Search…',
                 ),
               ),
@@ -15180,10 +15675,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 focusNode: floatingSearchFocusNode,
                 compact: true,
                 enabled: searchGlowEnabled,
-                onChanged: (value) => setState(() {
-                  query = value;
-                  currentPage = 0;
-                }),
+                onChanged: _handleInventorySearchChanged,
                 hintText: 'Search inventory…',
               ),
             ),
@@ -15258,6 +15750,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       // This is the remaining usable moisture-life window before a spool is
       // considered too wet to print; keep the persisted enum name stable.
       InventorySort.moistureRemaining => 'Life remaining',
+      InventorySort.usageTracked => 'Usage tracked',
     };
     IconData icon(InventorySort value) => switch (value) {
       InventorySort.type => Icons.category_outlined,
@@ -15266,6 +15759,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       InventorySort.cost => Icons.attach_money_rounded,
       InventorySort.dryingTime => Icons.local_fire_department_outlined,
       InventorySort.moistureRemaining => Icons.water_drop_outlined,
+      InventorySort.usageTracked => Icons.data_usage_rounded,
     };
     final dropdown = PopupMenuButton<InventorySort>(
       key: const Key('sort-menu'),
@@ -16024,6 +16518,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                               ),
                               onTap: () {
                                 Navigator.pop(dialogContext);
+                                _focusInventoryItemInMainView(item);
                                 _openDetails(item);
                               },
                             );
@@ -16965,10 +17460,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                         focusNode: bottomSearchFocusNode,
                         compact: true,
                         enabled: searchGlowEnabled,
-                        onChanged: (value) => setState(() {
-                          query = value;
-                          currentPage = 0;
-                        }),
+                        onChanged: _handleInventorySearchChanged,
                         hintText: 'Search inventory…',
                       ),
                     ),
@@ -17320,7 +17812,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               valueListenable: _syncActivity,
               builder: (context, syncing, _) => _configBlockButton(
                 key: const Key('cloud-sync'),
-                tooltip: syncing ? 'Syncing changes…' : 'Remote Sync',
+                tooltip: syncing ? 'Syncing changes…' : 'Remote Settings',
                 onPressed: widget.database == null ? null : _openCloudSync,
                 icon: Icons.cloud_sync_outlined,
                 iconWidget: syncing
@@ -17351,9 +17843,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             _configBlockDivider(),
             _configBlockButton(
               key: const Key('audit-log'),
-              tooltip: 'Change log',
+              tooltip: 'Reports and change log',
               onPressed: _openAuditLog,
               icon: Icons.history_rounded,
+              iconWidget: Badge.count(count: _conflictStore?.load().length ?? 0, isLabelVisible: (_conflictStore?.load().isNotEmpty ?? false), child: const Icon(Icons.history_rounded)),
             ),
             _configBlockDivider(),
             _configBlockButton(
@@ -17404,6 +17897,83 @@ class _InventoryHomeState extends State<InventoryHome> {
     child: ColoredBox(color: Theme.of(context).colorScheme.outlineVariant),
   );
 
+  Future<void> _openReports() async {
+    await widget.database?.waitForPendingWrites();
+    if (!mounted) return;
+    // Explicit report snapshots use image-free records, never full-size photos.
+    final stock = inventory.map((item) => ReportRow([
+      item.name, item.type.name, item.materialName, item.brand, item.vendor,
+      item.storageLocation, item.quantity.toString(), item.cost.toStringAsFixed(2),
+      item.archived ? 'Archived' : 'Active',
+      item.quantityAlertThreshold != null && item.quantity <= item.quantityAlertThreshold! ? 'Low stock' : '',
+      item.added.toLocal().toString().split(' ').first,
+    ], date: item.added)).toList();
+    final reports = <WorkshopReport>[
+      WorkshopReport('Inventory', ['Item', 'Type', 'Material', 'Brand', 'Vendor', 'Location', 'Quantity', 'Recorded cost', 'State', 'Alert', 'Added'], stock,
+        dated: true, note: 'Current inventory snapshot. Date filter uses added date; costs are recorded values, not supplier quotes.'),
+      WorkshopReport('Spool consumption', ['Spool ID', 'Date', 'Used g', 'Waste g', 'Outcome', 'Project', 'Build', 'Reason', 'Notes'],
+        spoolUsage.map((e) => ReportRow([e.spoolId, e.recordedAt.toLocal().toString(), e.gramsUsed.toString(), e.gramsWaste.toString(), e.outcome.name, e.project, e.buildId ?? '', e.wasteReason, e.notes],
+          date: e.recordedAt, values: {'Used g': e.gramsUsed, 'Waste g': e.gramsWaste})).toList(), dated: true),
+      WorkshopReport('Recorded movements', ['Date', 'Actor', 'Operation', 'Record type', 'Record ID', 'Changes'],
+        auditLog.map((e) => ReportRow([e.timestamp.toLocal().toString(), e.actor, e.action, e.entityType, e.entityId, e.changes.entries.map((c) => '${c.key}: ${c.value}').join('; ')], date: e.timestamp)).toList(),
+        dated: true, note: 'Retained change log only (up to 2,000 entries). This is not a reconstruction of historical stock levels.'),
+      WorkshopReport('Shopping list', ['Done', 'Item', 'Needed', 'Ordered', 'Received', 'Still needed', 'Status', 'Source'],
+        shoppingList.map((e) => ReportRow(['☐', e.name, e.quantityNeeded.toString(), e.quantityOrdered.toString(), e.quantityReceived.toString(), math.max(0, e.quantityNeeded - e.quantityReceived).toString(), e.status.name, e.sourceUrl])).toList()),
+      for (final kit in kits) WorkshopReport('Kit: ${kit.name}', ['Done', 'Part', 'Required', 'Available', 'Shortage'],
+        _flattenKitRequirements(kit).values.map((r) {
+          final available = math.max(0.0, _availableInventoryQuantity(r.productId, r.name) - _reservedInventoryQuantity(r.productId, r.name));
+          return ReportRow(['☐', r.name, r.quantity.toString(), available.toString(), math.max(0, r.quantity - available).toString()]);
+        }).toList(), note: 'One kit; nested kits expanded. ${_kitBuildability(kit).buildCount} builds available. Existing reservations excluded.'),
+    ];
+    await showWorkshopReports(context, reports);
+  }
+
+  SyncConflictStore? get _conflictStore {
+    final database = widget.database;
+    if (database == null) return null;
+    final source = database.loadSyncConfig();
+    if (source == null) return null;
+    final config = SupabaseConfig.fromJson(jsonDecode(source));
+    if (config.workspaceId == null) return null;
+    return SyncConflictStore(database, '${config.url}|${config.workspaceId}');
+  }
+
+  Future<void> _openSyncConflicts() async {
+    final store = _conflictStore;
+    if (store == null) return;
+    await showDialog<void>(context: context, builder: (_) => SyncConflictDialog(store: store,
+      resolve: (row, remote) async {
+        if (_syncing) throw StateError('Sync is finishing. Retry in a moment.');
+        final database = widget.database!;
+        await database.waitForPendingWrites();
+        if (_syncing) throw StateError('Sync is finishing. Retry in a moment.');
+        final current = database.readEntityPayload(row['entityType'], row['entityId']);
+        if (remote) {
+          final field = row['field'] as String;
+          if (!currentRole.canEditInventory) throw StateError('Your role cannot replace local data.');
+          if (field == '(remote deleted)') {
+            if (!currentRole.canHardDeleteItems) throw StateError('Delete permission is required.');
+          } else if (field == '(deleted)') {
+            if (current != null || !currentRole.canCreateInventory) throw StateError('The record changed or restore permission is missing.');
+          } else if (current == null || jsonEncode(current[field]) != jsonEncode(row['local'])) {
+            throw StateError('This field has newer local edits. Keep current local or reopen after reviewing the item.');
+          }
+          final change = WorkshopEntityChange(entityType: row['entityType'], entityId: row['entityId'],
+            deleted: field == '(remote deleted)',
+            fields: field == '(remote deleted)' ? {} : field == '(deleted)'
+              ? Map<String, dynamic>.from(row['remote'] as Map) : {field: row['remote']});
+          database.applyAndQueueWorkshopChanges([change]);
+          _applyRemoteEntityChanges([WorkshopEntityChange(entityType: change.entityType, entityId: change.entityId,
+            deleted: change.deleted, fields: database.readEntityPayload(change.entityType, change.entityId) ?? {})]);
+        }
+        final rows = store.load()..removeWhere((r) => jsonEncode(r) == jsonEncode(row));
+        store.save(rows);
+        _recordAudit('sync_conflict_resolved', row['entityType'], row['entityId'], {row['field']: remote ? 'Selected remote value' : 'Kept current local value'});
+        if (mounted) setState(() {});
+        _scheduleAutomaticSync();
+      }));
+  }
+
   Future<void> _openAuditLog() => showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -17432,6 +18002,9 @@ class _InventoryHomeState extends State<InventoryHome> {
               ),
       ),
       actions: [
+        if (_conflictStore != null)
+          TextButton.icon(onPressed: () { Navigator.pop(dialogContext); _openSyncConflicts(); }, icon: const Icon(Icons.sync_problem), label: Text('Sync conflicts (${_conflictStore!.load().length})')),
+        FilledButton.icon(key: const Key('workshop-reports'), onPressed: () { Navigator.pop(dialogContext); _openReports(); }, icon: const Icon(Icons.assessment_outlined), label: const Text('Reports / printable lists')),
         TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(),
           child: const Text('Close'),
@@ -17825,6 +18398,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
+            if (metricsPanelExpanded) ...[
             _metricsTypeTracker(palette),
             const SizedBox(height: 12),
             Wrap(
@@ -17843,6 +18417,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             ],
             const SizedBox(height: 16),
             _metricsCharts(palette),
+            ],
           ],
         ),
       ),
@@ -24167,6 +24742,7 @@ class _RapidizerDialogState extends State<RapidizerDialog> {
 class PersonalizationSettingsDialog extends StatefulWidget {
   const PersonalizationSettingsDialog({
     super.key,
+    this.database,
     required this.animationDurationPercent,
     required this.animationRecurrenceSeconds,
     required this.photoCardsEnabled,
@@ -24262,6 +24838,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<double> onMainScrollbarWidthChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
+  final LocalDatabase? database;
   @override
   State<PersonalizationSettingsDialog> createState() =>
       _PersonalizationSettingsDialogState();
@@ -24335,6 +24912,16 @@ class _PersonalizationSettingsDialogState
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (widget.database != null)
+              SwitchListTile(
+                key: const Key('resume-latest-item-draft'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Resume latest item draft'),
+                subtitle: const Text('Automatically reopen your latest unfinished item.'),
+                value: widget.database!.loadBoolPreference(resumeLatestItemDraftPreference, fallback: true),
+                onChanged: (value) => setState(() => widget.database!.saveBoolPreference(resumeLatestItemDraftPreference, value)),
+              ),
+
             const Text(
               'Appearance',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
@@ -25735,7 +26322,23 @@ class AddItemDialog extends StatefulWidget {
     this.initialFilamentColor,
     this.database,
     this.filamentColorsClient,
+    this.digikeySearch,
+    this.mouserSearch,
+    this.west3dClient,
+    this.ldoClient,
+    this.storefrontClients = const {},
+    this.adafruitClient,
+    this.existingMouserPartNumbers = const {},
+    this.existingDigiKeyPartNumbers = const {},
   });
+  final Future<DigiKeyPage> Function(String, int)? digikeySearch;
+  final Set<String> existingDigiKeyPartNumbers;
+  final Set<String> existingMouserPartNumbers;
+  final Future<MouserPage> Function(String, int)? mouserSearch;
+  final West3DClient? west3dClient;
+  final West3DClient? ldoClient;
+  final Map<Storefront, West3DClient> storefrontClients;
+  final AdafruitClient? adafruitClient;
   final InventoryItem? initialItem;
   final List<VendorRecord> vendors;
   final List<BrandRecord> brands;
@@ -25759,11 +26362,11 @@ class AddItemDialog extends StatefulWidget {
   State<AddItemDialog> createState() => _AddItemDialogState();
 }
 
-class _AddItemDialogState extends State<AddItemDialog> {
+class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserver {
   static const _maximumProductPageBytes = 8 * 1024 * 1024;
   static const _maximumProductImageBytes = 12 * 1024 * 1024;
   static const _maximumProductImageRequests = 2;
-  final formKey = GlobalKey<FormState>();
+  var formKey = GlobalKey<FormState>();
   late final TextEditingController nameController;
   late final TextEditingController compatibilityController;
   late final TextEditingController purposeTagsController;
@@ -25824,8 +26427,172 @@ class _AddItemDialogState extends State<AddItemDialog> {
   String? spoolMaterialId;
   String? masterSpoolMaterialId;
   final Map<String, TextEditingController> customFieldControllers = {};
+  Map<String, String> _supplierMetadata = {};
   late final FilamentColorsClient _filamentColorsClient;
   late final bool _ownsFilamentColorsClient;
+
+  ItemDraftStore? _draftStore;
+  String? _draftId;
+  Timer? _draftTimer;
+  bool _draftReady = false, _draftCommitted = false, _restoringDraft = false;
+  String _lastDraftPayload = '';
+  late Map<String,dynamic> _emptyDraft;
+  Map<String, TextEditingController> get _draftControllers => {
+    'nameController': nameController,
+    'compatibilityController': compatibilityController,
+    'purposeTagsController': purposeTagsController,
+    'costController': costController,
+    'quantityController': quantityController,
+    'quantityAlertThresholdController': quantityAlertThresholdController,
+    'dryingController': dryingController,
+    'dryingTemperatureController': dryingTemperatureController,
+    'moistureLifespanController': moistureLifespanController,
+    'moistureAlertThresholdController': moistureAlertThresholdController,
+    'vendorController': vendorController,
+    'brandController': brandController,
+    'storageLocationController': storageLocationController,
+    'deploymentLocationController': deploymentLocationController,
+    'printingController': printingController,
+    'dryingInstructionsController': dryingInstructionsController,
+    'storageController': storageController,
+    'barcodeController': barcodeController,
+    'productUrlController': productUrlController,
+    'customSearchController': customSearchController,
+    'filamentWeightController': filamentWeightController,
+    'spoolTareWeightController': spoolTareWeightController,
+    'spoolOuterDiameterController': spoolOuterDiameterController,
+    'spoolWidthController': spoolWidthController,
+    'spoolHoleDiameterController': spoolHoleDiameterController,
+    'masterSpoolController': masterSpoolController,
+    'itemColorController': itemColorController,
+    'itemColorLabelController': itemColorLabelController,
+  };
+  Map<String,dynamic> _captureDraft() => {
+    'fields': {for (final e in _draftControllers.entries) e.key: e.value.text},
+    'storageLocationId': storageLocationId,
+    'type': type.name,
+    'deployed': deployed,
+    'drying': drying,
+    'moistureAlertEnabled': moistureAlertEnabled,
+    'moistureTimeUnit': moistureTimeUnit.name,
+    'vendorId': vendorId,
+    'brandId': brandId,
+    'productId': productId,
+    'spoolTypeId': spoolTypeId,
+    'filamentWeightManuallyEdited': filamentWeightManuallyEdited,
+    'amsCompatible': amsCompatible,
+    'refill': refill,
+    'searchProvider': searchProvider.name,
+    'customTypeId': customTypeId,
+    'materialId': materialId,
+    'spoolMaterialId': spoolMaterialId,
+    'masterSpoolMaterialId': masterSpoolMaterialId,
+    '_supplierTypeNeedsReview': _supplierTypeNeedsReview,
+    '_typeChosenByUser': _typeChosenByUser,
+    'customFields': {for (final e in customFieldControllers.entries) e.key: e.value.text},
+    'supplier': _supplierMetadata,
+    'machines': compatibleMachineIds.toList(),
+    'styles': styleEntryDrafts.map((e) => e.toJson()).toList(),
+    'image': _bytesToJson(itemImage), 'thumbnail': _bytesToJson(itemThumbnail),
+    'labelImage': _bytesToJson(labelImage), 'barcodeImage': _bytesToJson(barcodeImage),
+  };
+  void _queueDraft() {
+    if (!_draftReady || _draftCommitted || _restoringDraft || _draftStore == null) return;
+    _draftTimer?.cancel();
+    _draftTimer = Timer(const Duration(milliseconds: 300), _flushDraft);
+  }
+  void _flushDraft() {
+    _draftTimer?.cancel();
+    if (!_draftReady || _draftCommitted || _restoringDraft || widget.database?.isClosed != false) return;
+    final data = _captureDraft();
+    final payload = jsonEncode(data);
+    if (payload == _lastDraftPayload) return;
+    _draftId = _draftStore!.save(_draftId, data, itemId: widget.initialItem?.id, title: nameController.text);
+    _lastDraftPayload = payload;
+  }
+  void _saveDraftAndClose() {
+    // Explicit draft saving accepts incomplete and invalid field values.
+    _lastDraftPayload = '';
+    _flushDraft();
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _queueDraft();
+  }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _flushDraft();
+  }
+  void _restoreDraft(Map<String,dynamic> data) {
+    _restoringDraft = true;
+    try {
+      final values = Map<String,dynamic>.from(data['fields'] as Map);
+      for (final e in _draftControllers.entries) { e.value.text = values[e.key] as String? ?? ''; }
+      storageLocationId = data['storageLocationId'] as String?;
+      type = InventoryType.values.byName(data['type'] as String);
+      deployed = data['deployed'] == true;
+      drying = data['drying'] == true;
+      moistureAlertEnabled = data['moistureAlertEnabled'] == true;
+      moistureTimeUnit = MoistureTimeUnit.values.byName(data['moistureTimeUnit'] as String);
+      vendorId = data['vendorId'] as String?;
+      brandId = data['brandId'] as String?;
+      productId = data['productId'] as String?;
+      spoolTypeId = data['spoolTypeId'] as String;
+      filamentWeightManuallyEdited = data['filamentWeightManuallyEdited'] == true;
+      amsCompatible = data['amsCompatible'] == true;
+      refill = data['refill'] == true;
+      searchProvider = ProductSearchProvider.values.byName(data['searchProvider'] as String);
+      customTypeId = data['customTypeId'] as String?;
+      materialId = data['materialId'] as String?;
+      spoolMaterialId = data['spoolMaterialId'] as String?;
+      masterSpoolMaterialId = data['masterSpoolMaterialId'] as String?;
+      _supplierTypeNeedsReview = data['_supplierTypeNeedsReview'] == true;
+      _typeChosenByUser = data['_typeChosenByUser'] == true;
+      _supplierMetadata = Map<String,String>.from(data['supplier'] as Map);
+      compatibleMachineIds..clear()..addAll((data['machines'] as List).cast<String>());
+      styleEntryDrafts = (data['styles'] as List).map((e) => FilamentStyleEntry.fromJson(Map<String,dynamic>.from(e as Map))).toList();
+      itemImage = _bytesFromJson(data['image']); itemThumbnail = _bytesFromJson(data['thumbnail']);
+      labelImage = _bytesFromJson(data['labelImage']); barcodeImage = _bytesFromJson(data['barcodeImage']);
+      _configureCustomFields(Map<String,String>.from(data['customFields'] as Map));
+      formKey = GlobalKey<FormState>();
+      saveError = null;
+      _lastDraftPayload = jsonEncode(_captureDraft());
+    } finally { _restoringDraft = false; }
+  }
+  Future<void> _chooseDraft() async {
+    _flushDraft();
+    final choice = await showDialog<String>(context: context, builder: (context) => StatefulBuilder(
+      builder: (context, refresh) {
+        final drafts = _draftStore!.list(itemId: widget.initialItem?.id);
+        return AlertDialog(
+          title: const Text('Item drafts'),
+          content: SizedBox(width: 420, height: 320, child: drafts.isEmpty
+            ? const Center(child: Text('No saved drafts'))
+            : ListView.builder(itemCount: drafts.length, itemBuilder: (context, index) {
+                final draft = drafts[index];
+                return ListTile(title: Text(draft['title'] as String),
+                  subtitle: Text(DateTime.parse(draft['updated'] as String).toLocal().toString().split('.').first),
+                  onTap: () => Navigator.pop(context, draft['id'] as String),
+                  trailing: IconButton(tooltip: 'Delete draft', icon: const Icon(Icons.delete_outline),
+                    onPressed: () => refresh(() {
+                      _draftStore!.delete(draft['id'] as String);
+                      if (_draftId == draft['id']) { _draftId = null; }
+                    })),
+                );
+              })),
+          actions: [TextButton(onPressed: () => Navigator.pop(context, '__new__'), child: const Text('Start new')),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+        );
+      },
+    ));
+    if (!mounted || choice == null) return;
+    final data = choice == '__new__' ? _emptyDraft : _draftStore!.load(choice);
+    if (data == null) return;
+    setState(() { _draftId = choice == '__new__' ? null : choice; _restoreDraft(data); });
+  }
 
   @override
   void initState() {
@@ -25838,6 +26605,10 @@ class _AddItemDialogState extends State<AddItemDialog> {
           cacheWrite: widget.database?.saveApiCache,
         );
     final item = widget.initialItem ?? widget.productTemplate;
+    _supplierMetadata = {
+      for (final entry in (item?.customFieldValues ?? <String, String>{}).entries)
+        if (entry.key.startsWith('supplier.')) entry.key: entry.value,
+    };
     final label = widget.labelDraft;
     moistureTimeUnit = item?.moistureTimeUnit ?? MoistureTimeUnit.days;
     nameController = TextEditingController(
@@ -26030,10 +26801,38 @@ class _AddItemDialogState extends State<AddItemDialog> {
     if (widget.initialFilamentColor case final swatch?) {
       _applyFilamentColor(swatch, notify: false);
     }
+    if (widget.database != null) {
+      final raw = widget.database!.loadSyncConfig();
+      final config = raw == null ? <String,dynamic>{} : jsonDecode(raw) as Map<String,dynamic>;
+      _draftStore = ItemDraftStore(widget.database!, digiKeyScope(config['url'] as String? ?? '', config['workspaceId'] as String?));
+      _emptyDraft = jsonDecode(jsonEncode(_captureDraft())) as Map<String,dynamic>;
+      _lastDraftPayload = jsonEncode(_emptyDraft);
+      final hasSeed = widget.productTemplate != null || widget.labelDraft != null || widget.initialFilamentColor != null || widget.initialBarcode.isNotEmpty;
+      if (!hasSeed && widget.database!.loadBoolPreference(resumeLatestItemDraftPreference, fallback: true)) {
+        final latest = _draftStore!.list(itemId: widget.initialItem?.id).firstOrNull;
+        if (latest != null) {
+          _draftId = latest['id'] as String;
+          final data = _draftStore!.load(_draftId!);
+          if (data != null) _restoreDraft(data);
+        }
+      }
+      for (final controller in [..._draftControllers.values, ...customFieldControllers.values]) {
+        controller.removeListener(_queueDraft);
+        controller.addListener(_queueDraft);
+      }
+      _draftReady = true;
+      WidgetsBinding.instance.addObserver(this);
+      if (hasSeed) { _lastDraftPayload = ''; _queueDraft(); }
+    }
   }
 
   @override
   void dispose() {
+    _flushDraft();
+    _draftTimer?.cancel();
+    _draftReady = false;
+    WidgetsBinding.instance.removeObserver(this);
+
     nameController.dispose();
     compatibilityController.dispose();
     purposeTagsController.dispose();
@@ -26416,6 +27215,147 @@ class _AddItemDialogState extends State<AddItemDialog> {
     setState(() => itemColorController.text = selected);
   }
 
+  bool _supplierTypeNeedsReview = false;
+  bool _typeChosenByUser = false;
+  void _matchSupplierType(String category) {
+    final normalized = category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+    bool exact(String name) => name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim() == normalized;
+    final custom = widget.customItemTypes.where((entry) => exact(entry.name)).toList();
+    final builtIn = InventoryType.values.where((entry) => entry != InventoryType.custom && entry != InventoryType.other && exact(_displayTypeLabel(entry))).toList();
+    _supplierTypeNeedsReview = false;
+    if (_typeChosenByUser) return;
+    if (normalized.isNotEmpty && custom.length == 1) {
+      type = InventoryType.custom;
+      customTypeId = custom.single.id;
+    } else if (normalized.isNotEmpty && builtIn.length == 1) {
+      type = builtIn.single;
+      customTypeId = null;
+    } else {
+      type = InventoryType.other;
+      customTypeId = null;
+      _supplierTypeNeedsReview = true;
+    }
+    _configureCustomFields();
+  }
+
+  Future<void> _searchDigiKey() async {
+    if (widget.database != null) DigiKeySettings.load(widget.database!);
+    final part = await showDialog<DigiKeyPart>(
+      context: context,
+      builder: (_) => DigiKeySearchDialog(searchOverride: widget.digikeySearch),
+    );
+    if (part == null || !mounted) return;
+    setState(() {
+      nameController.text = part.itemName;
+      brandController.text = part.manufacturer;
+      vendorController.text = 'DigiKey';
+      productUrlController.text = part.productUrl;
+      quantityController.text = '0';
+      costController.text = '0';
+      barcodeController.clear();
+      _matchSupplierType(part.category);
+      productId = null;
+      brandId = null;
+      vendorId = null;
+      _supplierMetadata = part.inventoryMetadata;
+      final photo = SupplierImageCache.shared.peek(part.imageUrl);
+      if (itemImage == null && itemThumbnail == null && photo != null) {
+        itemImage = photo.bytes;
+        itemThumbnail = photo.thumbnail;
+      }
+    });
+  }
+
+  Future<void> _searchWest3D() => _searchStorefront(Storefront.west3d);
+
+  Future<void> _searchLdo() => _searchStorefront(Storefront.ldo);
+
+  Future<void> _searchStorefront(Storefront store) async {
+    final part = await showDialog<West3DPart>(context: context,
+      builder: (_) => West3DSearchDialog(store: store, client: widget.storefrontClients[store] ?? (store == Storefront.west3d ? widget.west3dClient : store == Storefront.ldo ? widget.ldoClient : null)));
+    if (part == null || !mounted) return;
+    setState(() {
+      nameController.text = part.itemName;
+      brandController.text = part.product.vendor;
+      vendorController.text = store.label;
+      productUrlController.text = part.productUrl;
+      quantityController.text = '0';
+      costController.text = '0';
+      barcodeController.clear();
+      _matchSupplierType(part.product.category);
+      productId = null;
+      brandId = null;
+      vendorId = null;
+      _supplierMetadata = part.inventoryMetadata;
+      final photo = SupplierImageCache.shared.peek(part.imageUrl);
+      if (itemImage == null && itemThumbnail == null && photo != null) {
+        itemImage = photo.bytes;
+        itemThumbnail = photo.thumbnail;
+      }
+    });
+  }
+
+  Future<void> _searchAdafruit() async {
+    final client = widget.adafruitClient ?? AdafruitClient.shared;
+    final db = widget.database;
+    client.persistCooldown = null;
+    if (db != null) {
+      client.restoreCooldown(DateTime.tryParse(db.loadStringPreference(
+        'adafruit_next_request', fallback: '')));
+      client.persistCooldown = (next) => db.saveStringPreference('adafruit_next_request', next.toIso8601String());
+    }
+    final part = await showDialog<AdafruitPart>(context: context,
+      builder: (_) => AdafruitSearchDialog(client: client, catalogPath: db == null ? null : '${File(db.path).parent.path}/adafruit-catalog.sqlite3'));
+    if (part == null || !mounted) return;
+    setState(() {
+      nameController.text = part.itemName;
+      brandController.text = part.manufacturer;
+      vendorController.text = 'Adafruit';
+      productUrlController.text = part.productUrl;
+      quantityController.text = '0';
+      costController.text = '0';
+      barcodeController.clear();
+      _matchSupplierType('');
+      productId = null;
+      brandId = null;
+      vendorId = null;
+      _supplierMetadata = part.inventoryMetadata;
+      final photo = SupplierImageCache.shared.peek(part.imageUrl);
+      if (itemImage == null && itemThumbnail == null && photo != null) {
+        itemImage = photo.bytes;
+        itemThumbnail = photo.thumbnail;
+      }
+    });
+  }
+
+  Future<void> _searchMouser() async {
+    if (widget.database != null) MouserSettings.load(widget.database!);
+    final part = await showDialog<MouserPart>(
+      context: context,
+      builder: (_) => MouserSearchDialog(searchOverride: widget.mouserSearch),
+    );
+    if (part == null || !mounted) return;
+    setState(() {
+      nameController.text = part.itemName;
+      brandController.text = part.manufacturer;
+      vendorController.text = 'Mouser';
+      productUrlController.text = part.productUrl;
+      quantityController.text = '0';
+      costController.text = '0';
+      barcodeController.clear();
+      _matchSupplierType(part.category);
+      productId = null;
+      brandId = null;
+      vendorId = null;
+      _supplierMetadata = part.inventoryMetadata;
+      final photo = SupplierImageCache.shared.peek(part.imageUrl);
+      if (itemImage == null && itemThumbnail == null && photo != null) {
+        itemImage = photo.bytes;
+        itemThumbnail = photo.thumbnail;
+      }
+    });
+  }
+
   Future<void> _searchFilamentColors() async {
     final material =
         _selectedMaterial?.name ??
@@ -26548,6 +27488,12 @@ class _AddItemDialogState extends State<AddItemDialog> {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
     final selectedItemColor = _itemColorSwatch(itemColorController.text);
+    final headerActionStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(48, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      visualDensity: VisualDensity.standard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
     return Dialog(
       insetPadding: EdgeInsets.all(compact ? 8 : 20),
       child: ConstrainedBox(
@@ -26568,51 +27514,32 @@ class _AddItemDialogState extends State<AddItemDialog> {
                   ),
                   child: Row(
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.initialItem == null
-                                  ? 'Add an item'
-                                  : 'Edit item',
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const Text(
-                              'Give the workshop something new to track.',
-                              style: TextStyle(color: Color(0xff929aac)),
-                            ),
-                            if (saveError != null)
-                              Text(
-                                saveError!,
-                                key: const Key('item-save-error'),
-                                style: const TextStyle(
-                                  color: Color(0xffffcf4d),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      FilledButton.icon(
-                        key: const Key('save-item'),
-                        onPressed: _save,
-                        icon: const Icon(Icons.save_rounded),
-                        label: const Text('Save'),
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        tooltip: 'Close',
+                      Expanded(child: Text(
+                        widget.initialItem == null ? 'Add an item' : 'Edit item',
+                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                      )),
+                      const SizedBox(width: 12),
+                      Tooltip(message: 'Close', child: OutlinedButton(
+                        style: headerActionStyle,
                         onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close_rounded),
-                      ),
+                        child: const Icon(Icons.close_rounded, semanticLabel: 'Close'),
+                      )),
                     ],
                   ),
                 ),
                 const Divider(height: 1),
+                if (widget.initialItem == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: SupplierSearchMenu(
+                      onDigiKey: _searchDigiKey,
+                      onMouser: _searchMouser,
+                      onWest3D: _searchWest3D,
+                      onLdo: _searchLdo,
+                      onAdafruit: _searchAdafruit,
+                      onStorefront: _searchStorefront,
+                    ),
+                  ),
                 Expanded(
                   child: SingleChildScrollView(
                     key: const Key('add-item-form-scroll'),
@@ -26621,6 +27548,29 @@ class _AddItemDialogState extends State<AddItemDialog> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        if (_supplierMetadata['supplier.digikey.partNumber'] != null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              'DigiKey: ${_supplierMetadata['supplier.digikey.partNumber']} · '
+                              '${_supplierMetadata['supplier.digikey.packaging']}\n'
+
+                              '${widget.existingDigiKeyPartNumbers.contains(_supplierMetadata['supplier.digikey.partNumber']) ? '\nThis DigiKey part is already in your inventory. Saving adds a separate record.' : ''}',
+                            ),
+                          ),
+                        if (_supplierMetadata['supplier.west3d.variantId'] != null)
+                          Padding(padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text('West3D: ${_supplierMetadata['supplier.west3d.partNumber']} · ${_supplierMetadata['supplier.west3d.variant']}')),
+                        if (_supplierMetadata['supplier.mouser.partNumber'] != null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              'Mouser: ${_supplierMetadata['supplier.mouser.partNumber']} · '
+                              '${_supplierMetadata['supplier.mouser.packaging']}\n'
+
+                              '${widget.existingMouserPartNumbers.contains(_supplierMetadata['supplier.mouser.partNumber']) ? '\nThis Mouser part is already in your inventory. Saving adds a separate record.' : ''}',
+                            ),
+                          ),
                         TextFormField(
                           key: const Key('item-name'),
                           controller: nameController,
@@ -26789,7 +27739,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
                           DropdownButtonFormField<String>(
                             key: const Key('item-type'),
                             isExpanded: true,
-                            initialValue: _selectedTypeChoice,
+                            initialValue: _supplierTypeNeedsReview ? null : _selectedTypeChoice,
+                            hint: const Text('Choose type'),
+                            validator: (value) => value == null ? 'Choose an item type' : null,
                             decoration: const InputDecoration(
                               labelText: 'Type',
                             ),
@@ -27819,6 +28771,54 @@ class _AddItemDialogState extends State<AddItemDialog> {
                     ),
                   ),
                 ),
+                SafeArea(
+                  top: false,
+                  minimum: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  child: Material(
+                    key: const Key('item-save-bar'),
+                    elevation: 8,
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        if (saveError != null)
+                          Padding(padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(saveError!, key: const Key('item-save-error'),
+                              style: const TextStyle(color: Color(0xffffcf4d)))),
+                        if (_draftStore != null)
+                          Align(alignment: Alignment.centerLeft, child: TextButton.icon(
+                            key: const Key('item-drafts'), onPressed: _chooseDraft,
+                            icon: const _DraftActionIcon(), label: const Text('Drafts'),
+                          )),
+                        LayoutBuilder(builder: (context, constraints) {
+                          final save = OutlinedButton.icon(
+                            key: const Key('save-item'), onPressed: _save,
+                            style: headerActionStyle,
+                            icon: const Icon(Icons.save_rounded), label: const Text('Save'),
+                          );
+                          if (_draftStore == null) {
+                            return SizedBox(width: double.infinity, child: save);
+                          }
+                          final draft = OutlinedButton.icon(
+                            key: const Key('save-item-draft'),
+                            onPressed: _saveDraftAndClose,
+                            style: headerActionStyle,
+                            icon: const _DraftActionIcon(edit: true),
+                            label: const Text('Save Draft'),
+                          );
+                          if (constraints.maxWidth < 340 ||
+                              MediaQuery.textScalerOf(context).scale(14) > 21) {
+                            return Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [draft, const SizedBox(height: 8), save]);
+                          }
+                          return Row(children: [Expanded(child: draft),
+                            const SizedBox(width: 8), Expanded(child: save)]);
+                        }),
+                      ]),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -27849,7 +28849,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
   void _save() {
     if (!formKey.currentState!.validate()) {
       setState(() {
-        saveError = 'Some fields need attention. Check the form below.';
+        saveError = 'Some fields need attention. Check the form above.';
       });
       return;
     }
@@ -27865,9 +28865,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
         .where((value) => value.isNotEmpty)
         .toSet()
         .toList();
-    Navigator.pop(
-      context,
-      InventoryItem(
+    final savedItem = InventoryItem(
         id: widget.initialItem?.id ?? _newInventoryId(),
         name: nameController.text.trim(),
         type: type,
@@ -27970,12 +28968,12 @@ class _AddItemDialogState extends State<AddItemDialog> {
         customTypeName: type == InventoryType.custom
             ? _selectedCustomType?.name ?? ''
             : '',
-        customFieldValues: type == InventoryType.custom
-            ? {
-                for (final entry in customFieldControllers.entries)
-                  entry.key: entry.value.text.trim(),
-              }
-            : const {},
+        customFieldValues: {
+          if (type == InventoryType.custom)
+            for (final entry in customFieldControllers.entries)
+              entry.key: entry.value.text.trim(),
+          ..._supplierMetadata,
+        },
         materialId: materialId ?? '',
         materialName: _selectedMaterial?.name ?? '',
         spoolMaterialId: type == InventoryType.filament
@@ -27994,8 +28992,11 @@ class _AddItemDialogState extends State<AddItemDialog> {
                   )?.name ??
                   ''
             : '',
-      ),
-    );
+      );
+    _draftCommitted = true;
+    _draftTimer?.cancel();
+    if (_draftId != null) _draftStore?.delete(_draftId!);
+    Navigator.pop(context, savedItem);
   }
 
   Future<void> _processLabelImage() async {
@@ -28525,6 +29526,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
       customFieldControllers[field] = TextEditingController(
         text: values[field] ?? '',
       );
+      if (_draftStore != null) customFieldControllers[field]!.addListener(_queueDraft);
     }
   }
 
@@ -28566,6 +29568,8 @@ class _AddItemDialogState extends State<AddItemDialog> {
   }
 
   void _setTypeChoice(String choice) {
+    _typeChosenByUser = true;
+    _supplierTypeNeedsReview = false;
     final customId = choice.startsWith('custom:')
         ? choice.substring('custom:'.length)
         : null;
@@ -28584,9 +29588,9 @@ class _AddItemDialogState extends State<AddItemDialog> {
       productId = null;
       if (_selectedBrand?.categories.contains(next) != true) {
         brandId = null;
-        brandController.clear();
+        if (_supplierMetadata.isEmpty) brandController.clear();
         vendorId = null;
-        vendorController.clear();
+        if (_supplierMetadata.isEmpty) vendorController.clear();
       }
     });
   }
@@ -29428,6 +30432,7 @@ class ItemDetailsPanel extends StatefulWidget {
     this.canMarkDepleted = true,
     this.showStatus = true,
     this.onStorageLocationTap,
+    this.onFindSimilar,
   });
   final InventoryItem item;
   final ValueChanged<InventoryItem> onChanged;
@@ -29450,6 +30455,7 @@ class ItemDetailsPanel extends StatefulWidget {
   final bool canMarkDepleted;
   final bool showStatus;
   final Future<void> Function()? onStorageLocationTap;
+  final Future<void> Function(InventoryItem item)? onFindSimilar;
 
   @override
   State<ItemDetailsPanel> createState() => _ItemDetailsPanelState();
@@ -30510,6 +31516,18 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                           ],
                         ),
                       SizedBox(height: item.imageBytes == null ? 10 : 24),
+                      if (widget.onFindSimilar != null) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            key: const Key('find-similar-items'),
+                            onPressed: () => _closeThen(widget.onFindSimilar!),
+                            icon: const Icon(Icons.manage_search_rounded),
+                            label: const Text('Find similar'),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ],
                       if (widget.showStatus || _isLowStock(item))
                         _sidebarStatusSelector(),
                       if (item.imageBytes == null) ...[
@@ -31128,6 +32146,8 @@ int compareInventoryItems(
   required InventorySort sort,
   required bool ascending,
   DateTime? now,
+  Iterable<SpoolTypeRecord> spoolTypes = const [],
+  Iterable<SpoolUsageRecord> usage = const [],
 }) {
   final primary = switch (sort) {
     InventorySort.type => left.typeLabel.compareTo(right.typeLabel),
@@ -31142,10 +32162,22 @@ int compareInventoryItems(
       right,
       now: now,
     ),
+    InventorySort.usageTracked =>
+      (_usageTracked(left, spoolTypes, usage) ? 1 : 0).compareTo(
+        _usageTracked(right, spoolTypes, usage) ? 1 : 0,
+      ),
   };
   if (primary != 0) return ascending ? primary : -primary;
   return left.id.compareTo(right.id);
 }
+
+bool _usageTracked(
+  InventoryItem item,
+  Iterable<SpoolTypeRecord> spoolTypes,
+  Iterable<SpoolUsageRecord> usage,
+) =>
+    item.type == InventoryType.filament &&
+    _filamentRemainingGrams(item, spoolTypes, usage: usage) != null;
 
 String _moistureRemainingLabel(InventoryItem item, {DateTime? now}) {
   final remaining = _moistureRemaining(item, now: now);

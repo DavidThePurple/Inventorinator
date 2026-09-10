@@ -241,6 +241,13 @@ void main() {
 
     expect(find.byKey(const Key('manage-devices')), findsOneWidget);
     expect(find.text('Roles & devices'), findsOneWidget);
+    expect(find.byKey(const Key('local-role-builder')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('local-role-builder')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('local-role-builder')));
+    await tester.pumpAndSettle();
+    expect(find.text('Role builder · local drafts'), findsOneWidget);
+    expect(find.byKey(const Key('new-role-template')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     database.close();
@@ -287,6 +294,8 @@ void main() {
     expect(find.byKey(const Key('manage-devices')), findsOneWidget);
     expect(find.byKey(const Key('pair-device')), findsOneWidget);
     expect(find.byKey(const Key('replace-recovery-key')), findsNothing);
+    expect(find.byKey(const Key('role-builder')), findsNothing);
+    expect(find.byKey(const Key('local-role-builder')), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
     database.close();
@@ -1770,6 +1779,8 @@ Bed Temperature: 80°C
       await tester.tap(find.text('Filament').last);
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('add-filament-style')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('filament-style-0')));
@@ -1828,6 +1839,8 @@ Bed Temperature: 80°C
       );
 
       // A second style can be added and configured independently.
+      await tester.ensureVisible(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('add-filament-style')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('add-filament-style')), findsNothing);
@@ -1863,6 +1876,8 @@ Bed Temperature: 80°C
       await tester.tap(find.text('Filament').last);
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.byKey(const Key('add-filament-style')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('add-filament-style')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('filament-style-0')));
@@ -6086,7 +6101,9 @@ Bed Temperature: 80°C
       const Offset(0, -300),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('brand-picker-null')));
+    await tester.ensureVisible(find.byKey(const ValueKey('brand-picker-null')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('brand-picker-null')), matching: find.byType(IconButton)).last);
     await tester.pumpAndSettle();
     expect(find.text('E3D'), findsNothing);
     await tester.tap(find.text('Polymaker').last);
@@ -7083,7 +7100,9 @@ Bed Temperature: 80°C
       const Offset(0, -300),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('brand-picker-null')));
+    await tester.ensureVisible(find.byKey(const ValueKey('brand-picker-null')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('brand-picker-null')), matching: find.byType(IconButton)).last);
     await tester.pumpAndSettle();
     expect(find.text('Prusa Research'), findsOneWidget);
   });

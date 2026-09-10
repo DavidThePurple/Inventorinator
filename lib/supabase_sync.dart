@@ -4,12 +4,22 @@ import 'dart:isolate';
 import 'package:http/http.dart' as http;
 
 import 'workshop_delta.dart';
+import 'workspace_role_template.dart';
+import 'digikey_credentials.dart';
+import 'mouser_credentials.dart';
 
-const requiredInventorinatorSchemaVersion = 21;
+// v22-v24 add optional services without changing the v21 inventory protocol.
+const minimumInventorySchemaVersion = 21;
+const latestInventorinatorSchemaVersion = 25;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
 bool canManageWorkspaceDevices(String? role) {
+  if (role?.startsWith('custom:') == true) {
+    return WorkspaceRole.fromServer(role).permissions
+            ?.contains('devices.manage') ??
+        false;
+  }
   final normalized = normalizeWorkspaceRole(role);
   return normalized == 'owner' ||
       normalized == 'admin' ||
@@ -28,32 +38,61 @@ String visibleSyncErrorForRole(Object error, String? role) {
   return error.toString();
 }
 
-enum WorkspaceRole {
-  admin,
-  manager,
-  editor,
-  builder;
+class WorkspaceRole {
+  const WorkspaceRole._(this.name, [this.permissions]);
+  static const admin = WorkspaceRole._('admin');
+  static const manager = WorkspaceRole._('manager');
+  static const editor = WorkspaceRole._('editor');
+  static const builder = WorkspaceRole._('builder');
+  final String name;
+  final Set<String>? permissions;
+  static WorkspaceRole fromServer(String? value) {
+    if (value?.startsWith('custom:') == true) {
+      try {
+        final data = jsonDecode(value!.substring(7)) as Map<String, dynamic>;
+        return WorkspaceRole._(
+          data['name'] as String,
+          (data['permissions'] as List).cast<String>().toSet(),
+        );
+      } catch (_) {
+        return const WorkspaceRole._('Unavailable role', {});
+      }
+    }
+    return switch (normalizeWorkspaceRole(value)) {
+      'owner' || 'admin' => admin,
+      'manager' => manager,
+      'editor' => editor,
+      _ => builder,
+    };
+  }
 
-  static WorkspaceRole fromServer(String? value) =>
-      switch (normalizeWorkspaceRole(value)) {
-        'owner' || 'admin' => WorkspaceRole.admin,
-        'manager' => WorkspaceRole.manager,
-        'editor' => WorkspaceRole.editor,
-        _ => WorkspaceRole.builder,
-      };
-
-  bool get canDeleteDatabase => this == WorkspaceRole.admin;
-  bool get canHardDeleteItems => this == WorkspaceRole.admin;
+  bool allows(String id, bool builtin) => permissions?.contains(id) ?? builtin;
+  bool get canDeleteDatabase => allows('database.delete', this == admin);
+  bool get canHardDeleteItems => allows('inventory.delete', this == admin);
   bool get canCreateInventory =>
-      this == WorkspaceRole.admin || this == WorkspaceRole.manager;
-  bool get canEditInventory => this != WorkspaceRole.builder;
+      allows('inventory.create', this == admin || this == manager);
+  bool get canEditInventory => allows('inventory.edit', this != builder);
   bool get canArchiveInventory =>
-      this == WorkspaceRole.admin || this == WorkspaceRole.manager;
+      allows('inventory.archive', this == admin || this == manager);
   bool get canManageCatalog =>
-      this == WorkspaceRole.admin || this == WorkspaceRole.manager;
-  bool get canCreateBuilds => this != WorkspaceRole.builder;
-  bool get canShareBuilds => this != WorkspaceRole.builder;
-  bool get canOperateBuilds => true;
+      allows('catalog.manage', this == admin || this == manager);
+  bool get canCreateBuilds => allows('builds.create', this != builder);
+  bool get canShareBuilds => allows('builds.share', this != builder);
+  bool get canOperateBuilds => allows('builds.operate', true);
+  @override
+  bool operator ==(Object other) =>
+      other is WorkspaceRole &&
+      other.name == name &&
+      (other.permissions == null && permissions == null ||
+          other.permissions != null &&
+              permissions != null &&
+              other.permissions!.length == permissions!.length &&
+              other.permissions!.containsAll(permissions!));
+  @override
+  int get hashCode => Object.hash(
+    name,
+    permissions == null ? 0 : Object.hashAllUnordered(permissions!),
+  );
 }
 
 class SupabaseConfig {
@@ -254,6 +293,10 @@ class WorkspaceDevice {
   final String role;
   final DateTime joinedAt;
   final DateTime lastSeenAt;
+}
+
+class SupabaseFeatureUnavailable extends SupabaseSyncException {
+  const SupabaseFeatureUnavailable(super.message);
 }
 
 class SupabaseSyncException implements Exception {
@@ -464,12 +507,12 @@ class SupabaseSyncService {
     return (rows.single as Map<String, dynamic>)['version'] as int;
   }
 
-  Future<int> requireCurrentSchema(SupabaseSession session) async {
+  Future<int> requireInventorySchema(SupabaseSession session) async {
     final version = await schemaVersion(session);
-    if (version < requiredInventorinatorSchemaVersion) {
+    if (version < minimumInventorySchemaVersion) {
       throw SupabaseSyncException(
         'This server uses Inventorinator schema v$version; '
-        'v$requiredInventorinatorSchemaVersion is required. '
+        'v$minimumInventorySchemaVersion is required for inventory sync. '
         'Update and restart the Inventorinator server connector.',
       );
     }
@@ -663,8 +706,104 @@ class SupabaseSyncService {
       // versions instead of the newer explicit access-denied exception.
       throw const SupabaseSyncException('Workspace access denied');
     }
+    // Only Builder memberships can carry custom definitions. Old servers keep
+    // their built-in behavior; a failed modern lookup never widens access.
+    if (role == 'builder' && await schemaVersion(session) >= 25) {
+      final effective = await _rpc(
+        session,
+        'get_inventorinator_effective_role',
+        {'target_workspace': config.workspaceId},
+      );
+      if (effective is Map && effective['templateId'] != null) {
+        return 'custom:${jsonEncode(effective)}';
+      }
+    }
     return role;
   }
+
+  Future<List<WorkspaceRoleTemplate>> listRoleTemplates(
+    SupabaseSession session,
+  ) async {
+    final result = await _rpc(session, 'list_inventorinator_role_templates', {
+      'target_workspace': config.workspaceId,
+    });
+    return (result as List)
+        .map(
+          (row) => WorkspaceRoleTemplate.fromJson(
+            Map<String, dynamic>.from(row as Map),
+          ),
+        )
+        .toList();
+  }
+
+  Future<String> saveRoleTemplate(
+    SupabaseSession session,
+    WorkspaceRoleTemplate template,
+  ) async {
+    final error = template.validationError;
+    if (error != null) throw SupabaseSyncException(error);
+    final result = await _rpc(session, 'save_inventorinator_role_template', {
+      'target_workspace': config.workspaceId,
+      'target_id': template.id,
+      'target_name': template.name,
+      'target_description': template.description,
+      'target_permissions': template.permissionIds,
+    });
+    return result as String;
+  }
+
+  Future<void> deleteRoleTemplate(SupabaseSession session, String id) => _rpc(
+    session,
+    'delete_inventorinator_role_template',
+    {'target_workspace': config.workspaceId, 'target_id': id},
+  );
+
+  Future<DigiKeyCredentials> getDigiKeyCredentials(
+    SupabaseSession session,
+  ) async {
+    final result = await _rpc(
+      session,
+      'get_inventorinator_digikey_credentials',
+      {'target_workspace': config.workspaceId},
+    );
+    return result == null
+        ? const DigiKeyCredentials()
+        : DigiKeyCredentials.fromJson(Map<String, dynamic>.from(result as Map));
+  }
+
+  Future<void> setDigiKeyCredentials(
+    SupabaseSession session,
+    DigiKeyCredentials credentials,
+  ) => _rpc(session, 'set_inventorinator_digikey_credentials', {
+    'target_workspace': config.workspaceId,
+    'target_client_id': credentials.configured ? credentials.clientId : null,
+    'target_client_secret': credentials.configured
+        ? credentials.clientSecret
+        : null,
+    'target_sandbox': credentials.sandbox,
+  });
+
+  Future<MouserCredentials> getMouserCredentials(
+    SupabaseSession session,
+  ) async {
+    final result = await _rpc(
+      session,
+      'get_inventorinator_mouser_credentials',
+      {'target_workspace': config.workspaceId},
+    );
+    return result == null
+        ? const MouserCredentials()
+        : MouserCredentials.fromJson(Map<String, dynamic>.from(result as Map));
+  }
+
+  Future<void> setMouserCredentials(
+    SupabaseSession session,
+    MouserCredentials credentials,
+  ) => _rpc(session, 'set_inventorinator_mouser_credentials', {
+    'target_workspace': config.workspaceId,
+
+    'target_api_key': credentials.configured ? credentials.apiKey : null,
+  });
 
   Future<int> remotePurgeAfterDays(SupabaseSession session) async {
     final result = await _rpc(session, 'get_inventorinator_remote_purge_days', {
@@ -707,11 +846,17 @@ class SupabaseSyncService {
     SupabaseSession session,
     String userId,
     String role,
-  ) => _rpc(session, 'set_inventorinator_device_role', {
-    'target_workspace': config.workspaceId,
-    'target_user': userId,
-    'target_role': role,
-  });
+  ) => role.startsWith('template:')
+      ? _rpc(session, 'assign_inventorinator_custom_role', {
+          'target_workspace': config.workspaceId,
+          'target_user': userId,
+          'target_template': role.substring(9),
+        })
+      : _rpc(session, 'set_inventorinator_device_role', {
+          'target_workspace': config.workspaceId,
+          'target_user': userId,
+          'target_role': role,
+        });
 
   Future<void> removeDevice(
     SupabaseSession session,
@@ -728,6 +873,29 @@ class SupabaseSyncService {
     String function,
     Map<String, Object?> parameters,
   ) async {
+    final requirement = switch (function) {
+      'assign_inventorinator_custom_role' => (25, 'Custom role assignment'),
+      'list_inventorinator_role_templates' ||
+      'save_inventorinator_role_template' ||
+      'delete_inventorinator_role_template' => (22, 'Remote role templates'),
+      'get_inventorinator_digikey_credentials' ||
+      'set_inventorinator_digikey_credentials' => (
+        23,
+        'DigiKey credential sync',
+      ),
+      'get_inventorinator_mouser_credentials' ||
+      'set_inventorinator_mouser_credentials' => (24, 'Mouser credential sync'),
+      _ => null,
+    };
+    if (requirement != null) {
+      final version = await schemaVersion(session);
+      if (version < requirement.$1) {
+        throw SupabaseFeatureUnavailable(
+          '${requirement.$2} needs server v${requirement.$1} '
+          '(installed: v$version). Local changes are retained; update the server and retry.',
+        );
+      }
+    }
     final response = await _request(
       _client.post(
         _uri('/rest/v1/rpc/$function'),

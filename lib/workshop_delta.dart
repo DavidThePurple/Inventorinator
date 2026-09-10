@@ -29,6 +29,7 @@ class WorkshopEntityChange {
     required this.fields,
     this.deleted = false,
     this.revision,
+    this.baseFields,
   });
 
   final String entityType;
@@ -36,6 +37,7 @@ class WorkshopEntityChange {
   final Map<String, dynamic> fields;
   final bool deleted;
   final int? revision;
+  final Map<String, dynamic>? baseFields;
 
   Map<String, dynamic> toJson() => {
     'entityType': entityType,
@@ -43,6 +45,7 @@ class WorkshopEntityChange {
     'fields': fields,
     'deleted': deleted,
     if (revision != null) 'revision': revision,
+    if (baseFields != null) 'baseFields': baseFields,
   };
 
   factory WorkshopEntityChange.fromJson(Map<String, dynamic> json) =>
@@ -99,7 +102,8 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
     if (local.deleted) {
-      if (remote.fields.isNotEmpty) {
+      if (remote.fields.isNotEmpty &&
+          !_sameJson(local.baseFields?['(deleted)'], remote.fields)) {
         conflicts.add(
           WorkshopFieldConflict(
             entityType: remote.entityType,
@@ -112,9 +116,23 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       }
       return local;
     }
+    if (remote.deleted) {
+      conflicts.add(
+        WorkshopFieldConflict(
+          entityType: remote.entityType,
+          entityId: remote.entityId,
+          field: '(remote deleted)',
+          localValue: local.fields,
+          remoteValue: null,
+        ),
+      );
+      return local;
+    }
     for (final key in local.fields.keys) {
       if (remote.fields.containsKey(key) &&
-          !_sameJson(remote.fields[key], local.fields[key])) {
+          !_sameJson(remote.fields[key], local.fields[key]) &&
+          !(local.baseFields?.containsKey(key) == true &&
+              _sameJson(remote.fields[key], local.baseFields![key]))) {
         conflicts.add(
           WorkshopFieldConflict(
             entityType: remote.entityType,
@@ -265,4 +283,30 @@ String applyWorkshopEntityChanges(
     root[change.entityType] = rows;
   }
   return jsonEncode(root);
+}
+
+/// Stock decrements and build progress must reach the server atomically for
+/// operators whose quantity changes are checked against build allocations.
+List<List<T>> workshopUploadBatches<T>(
+  List<T> pending,
+  WorkshopEntityChange Function(T) changeOf, {
+  bool atomicBuilds = false,
+  int batchSize = 1,
+}) {
+  final result = <List<T>>[];
+  final dependent = <T>[];
+  final ordinary = <T>[];
+  for (final item in pending) {
+    final type = changeOf(item).entityType;
+    if (atomicBuilds && (type == 'inventory' || type == 'builds')) {
+      dependent.add(item);
+    } else {
+      ordinary.add(item);
+    }
+  }
+  if (dependent.isNotEmpty) result.add(dependent);
+  for (var i = 0; i < ordinary.length; i += batchSize) {
+    result.add(ordinary.sublist(i, (i + batchSize).clamp(0, ordinary.length)));
+  }
+  return result;
 }

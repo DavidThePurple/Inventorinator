@@ -52,6 +52,16 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/builder_quantity_integrity.sql
       - name: Verify role and owner boundaries
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/role_boundaries.sql
+      - name: Verify owner-only role templates
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/role_templates.sql
+      - name: Custom role boundaries
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/custom_roles.sql
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/custom_role_build_integrity.sql
+      - name: Test DigiKey credential permissions
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/digikey_credentials.sql
+      - name: Test Mouser credential permissions
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/mouser_credentials.sql
       - name: Verify owner recovery
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
       - name: Verify incremental record sync

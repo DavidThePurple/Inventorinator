@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.1.1-alpha+10
+version: 0.1.1-alpha.2+11
 
 environment:
   sdk: ^3.13.1
@@ -50,6 +50,8 @@ dependencies:
   camera: ^0.12.0+2
   camera_windows: ^0.2.6+5
   google_mlkit_text_recognition: ^0.17.1
+  pdf: ^3.13.0
+  printing: ^5.15.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -76,11 +78,41 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/fonts/DejaVuSans.ttf
     - assets/audio/transhuman_sync.wav
     - assets/audio/drying_complete.wav
     - assets/audio/moisture_alert.wav
     - assets/images/inventorinator-raygun-v2.png
     - assets/images/filamentcolors-logo.png
+    - assets/images/digikey-logo.jpg
+    - assets/images/digikey-logo-transparent.png
+    - assets/images/mouser-logo.png
+    - assets/images/west3d-logo.png
+    - assets/images/ldo-logo.png
+    - assets/images/biqu-logo.png
+    - assets/images/e3d-logo.png
+    - assets/images/polymaker-logo.png
+    - assets/images/printedsolid-logo.png
+    - assets/images/printedsolid-logo-transparent.png
+    - assets/images/slice-logo.png
+    - assets/images/slice-logo-transparent.png
+    - assets/images/fabreeko-logo.png
+    - assets/images/pihut-logo.png
+    - assets/images/pihut-logo-transparent.png
+    - assets/images/fillamentum-logo.png
+    - assets/images/sovol-logo.png
+    - assets/images/siraya-logo.png
+    - assets/images/microswiss-logo.png
+    - assets/images/atomic-logo.png
+    - assets/images/matter3d-logo.png
+    - assets/images/mandala-logo.png
+    - assets/images/ember-logo.png
+    - assets/images/protopasta-logo.png
+    - assets/images/fysetc-logo.png
+    - assets/images/petgusa-logo.png
+    - assets/images/sainsmart-logo.png
+    - assets/images/sainsmart-logo-transparent.png
+    - assets/images/printingcanada-logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -112,3 +144,23 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+    - assets/images/m5stack-logo.png
+    - assets/images/rakwireless-logo.png
+    - assets/images/dfh-logo.png
+    - assets/images/overture-logo.png
+    - assets/images/pimoroni-logo.png
+    - assets/images/arduino-logo.png
+    - assets/images/inventables-logo.png
+    - assets/images/pushplastic-logo.png
+    - assets/images/voxelpla-logo.png
+    - assets/images/fuel3d-logo.png
+    - assets/images/americanfilament-logo.png
+    - assets/images/sequre-logo.png
+    - assets/images/alpenglow-logo.png
+    - assets/images/bantam-logo.png
+    - assets/images/dremc-logo.png
+    - assets/images/cookiecad-logo.png
+    - assets/images/revopoint-logo.png
+    - assets/images/tinycircuits-logo.png
+    - assets/images/hackerboxes-logo.png
+    - assets/images/elektor-logo.png

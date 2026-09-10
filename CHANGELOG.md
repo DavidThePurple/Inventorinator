@@ -2,6 +2,47 @@
 
 All notable changes to Inventorinator will be recorded here.
 
+## [0.1.1-alpha.2] - Unreleased
+
+### Fixed
+
+- Inventory paging now filters, sorts, counts, and selects pages in SQLite. Item and thumbnail caches are limited to the active page; offline inventory and images remain on disk.
+
+- Supplier imports use descriptive item names and existing category matches, ask for unmatched types, and preserve supplier details when changing type. Supplier search actions are grouped above the form with a responsive header.
+
+### Added
+
+- BIQU/BIGTREETECH, E3D, Polymaker, Printed Solid, and Slice Engineering search/import through the shared storefront client, with official logos, variant selection, supplier-specific metadata, and cached photos.
+
+- Adafruit keyword/part-number search using a persistent SQLite catalog, one-request refresh, offline searching, and 12-result database-backed pages.
+
+- LDO storefront search/variant import and Adafruit product-ID/link lookup, with cached results and a persistent local cooldown indicator respecting Adafruit request limits.
+
+- Supplier product previews and offline image import for DigiKey, Mouser, and West3D, with bounded, deduplicated CDN downloads and existing-photo preservation.
+
+- Compact Search suppliers dropdown with supplier logos; researched product API candidates are tracked in `docs/supplier-integrations.md`.
+
+- West3D product search and variant import without API credentials, using on-demand storefront requests.
+
+- Persistent local item drafts with a draft picker, deletion, and a Personalization option to resume the latest unfinished item.
+
+- Mouser Search API integration with product import, persistent local and owner-only remote credentials, and connection indicators (schema 24).
+
+- Configured services show connection LEDs beside the logo; connection details stay inside their Remote Settings pullouts.
+
+- DigiKey credentials now persist locally with owner-only remote storage and offline pending updates (schema 23).
+
+- Remote Settings replaces the Remote Sync page title and includes a DigiKey
+  settings pullout below Supabase Settings, shared by later search windows.
+- DigiKey keyword search, packaging selection and reviewed inventory creation;
+  requires a user-supplied subscribed DigiKey developer application.
+- Local role drafts are accessible without Supabase and persist on this device.
+
+- Owner-only role builder with named templates, operation descriptions,
+  quick presets, duplication, editing and deletion.
+- Schema 22 stores role templates with owner-only server authorization.
+  Templates are unassigned drafts: existing device roles remain authoritative.
+
 ## [0.1.1-alpha] - Unreleased
 
 ### Added

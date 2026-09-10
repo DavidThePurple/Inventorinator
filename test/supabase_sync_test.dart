@@ -437,13 +437,65 @@ void main() {
     expect(version, 1);
   });
 
+  for (final version in [21, 22, 23, 24, 25]) {
+    test('inventory sync accepts compatible schema v$version', () async {
+      final service = SupabaseSyncService(
+        config,
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode([
+              {'version': version},
+            ]),
+            200,
+          ),
+        ),
+      );
+      expect(
+        await service.requireInventorySchema(
+          const SupabaseSession(
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            userId: 'user',
+          ),
+        ),
+        version,
+      );
+    });
+  }
+
+  for (final feature in ['roles', 'digikey', 'mouser']) {
+    test('v21 blocks only unsupported $feature RPCs', () async {
+      var requests = 0;
+      final service = SupabaseSyncService(
+        config,
+        client: MockClient((request) async {
+          requests++;
+          expect(request.url.path, endsWith('inventorinator_schema'));
+          return http.Response('[{"version":21}]', 200);
+        }),
+      );
+      const session = SupabaseSession(
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        userId: 'user',
+      );
+      final operation = switch (feature) {
+        'roles' => service.listRoleTemplates(session),
+        'digikey' => service.getDigiKeyCredentials(session),
+        _ => service.getMouserCredentials(session),
+      };
+      await expectLater(operation, throwsA(isA<SupabaseFeatureUnavailable>()));
+      expect(requests, 1); // No unsupported RPC or write is sent.
+    });
+  }
+
   test('startup sync rejects an outdated server schema', () async {
     final service = SupabaseSyncService(
       config,
       client: MockClient(
         (_) async => http.Response(
           jsonEncode([
-            {'version': requiredInventorinatorSchemaVersion - 1},
+            {'version': minimumInventorySchemaVersion - 1},
           ]),
           200,
         ),
@@ -451,7 +503,7 @@ void main() {
     );
 
     await expectLater(
-      service.requireCurrentSchema(
+      service.requireInventorySchema(
         const SupabaseSession(
           accessToken: 'access',
           refreshToken: 'refresh',
@@ -462,7 +514,7 @@ void main() {
         isA<SupabaseSyncException>().having(
           (error) => error.message,
           'message',
-          contains('v$requiredInventorinatorSchemaVersion is required'),
+          contains('v$minimumInventorySchemaVersion is required'),
         ),
       ),
     );

@@ -240,6 +240,8 @@ storage so users have printable, portable shopping and kit lists first.
 
 ### Optional Nextcloud and WebDAV storage
 
+Status: things to try; optional integration exploration.
+
 - Add a generic attachment-storage interface; local files remain the default.
 - Offer Nextcloud as a WebDAV preset using a revocable app password.
 - Upload and retrieve STL attachments and portable database backups.
@@ -247,6 +249,304 @@ storage so users have printable, portable shopping and kit lists first.
   replace inventory synchronization, roles, audit history, or conflict rules.
 - Add offline transfer state, checksum verification, retry handling, and clear
   local-only/remote-available indicators before enabling shared attachments.
+
+### Optional Spoolman integration
+
+Status: things to try, following Nextcloud/WebDAV; not implemented.
+
+- Add a per-spool **Manage with Spoolman** toggle and a reference to the user's
+  Spoolman spool ID. Validate the ID against the configured instance.
+- Put Spoolman connection configuration in the **Remote** view, below the
+  **Supabase** pullout.
+- Link remote spool data and remaining material to the existing inventory item;
+  define which fields Spoolman manages and prevent double-counted consumption.
+- Preserve the last known values offline, show connection/refresh state, and
+  define unlinking and conflict behavior before allowing bidirectional edits.
+
+### Optional ntfy notifications
+
+Status: selected for the integration to-do list; not implemented.
+
+- Allow users to configure an ntfy server, topic, and authentication, including
+  self-hosted instances.
+- Offer per-event notifications for low stock, drying completion, moisture
+  alerts, and server/sync problems, with links back to relevant records.
+- Respect notification preferences and deduplicate repeated alerts. Define the
+  delivery component needed for notifications while Inventorinator is closed;
+  desktop-only event detection must not promise background server monitoring.
+
+### Optional Paperless-ngx document integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Configure a Paperless-ngx instance and link its document IDs to inventory
+  items, machines, and kits.
+- Find and open associated receipts, warranties, manuals, and datasheets from
+  the relevant Inventorinator record.
+- Evaluate document search, previews, and optional uploads through the API;
+  preserve access permissions and distinguish unavailable documents from
+  deleted links without deleting local inventory data.
+
+### Optional Immich photo records and image hosting
+
+Status: selected for the integration to-do list; not implemented.
+
+- Link Immich photos and albums to inventory items, kits, machines, and project
+  or maintenance logs for assembly references, condition records, and history.
+- Explore Immich as an optional image host to move base64 image payloads out
+  of Supabase records. Sync stable asset IDs, instance identity, and metadata
+  while retaining local thumbnails/caching for offline use.
+- Verify authenticated upload, retrieval, thumbnails, and permissions through
+  the Immich API; private photos must not require public sharing links.
+- Plan a resumable migration: confirm uploaded assets can be retrieved before
+  removing existing payloads, retain a recovery path, and avoid duplicate uploads.
+- Define missing-asset and deletion behavior without deleting unrelated Immich
+  photos, and keep a local image-storage option for users without Immich.
+
+### Optional Stirling PDF integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's local or self-hosted Stirling PDF instance through its API.
+- Assemble downloadable, printable project packets from kit lists, shopping
+  lists, instructions, and selected supporting PDFs; allow users to choose
+  document order and preview the result.
+- Keep the planned local PDF generation available independently of Stirling PDF.
+- Verify supported endpoints, authentication, and file-size limits against the
+  configured instance; preserve source documents if processing fails.
+- Use no AI features or cloud processing.
+- Reference: https://docs.stirlingpdf.com/API/
+
+### Optional OpenSCAD integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Run local OpenSCAD templates to generate bins, dividers, and embossed labels
+  from inventory names and storage dimensions.
+- Let users review template parameters and previews before exporting model
+  files; preserve the template and parameters used for reproducible regeneration.
+
+### Optional FreeCAD integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Explore a local FreeCAD companion macro/add-on linking assembly components
+  to Inventorinator records through stable part identifiers.
+- Generate a reviewable kit/parts list with quantities and shortages; preserve
+  source-document references and flag unmatched parts instead of guessing.
+
+### Optional OctoPrint integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's local or self-hosted OctoPrint instance, associate print
+  jobs with kits/projects, and show job progress and outcomes.
+- Prompt users to confirm usable completed parts before receiving them into
+  inventory; handle failed and cancelled jobs without adding finished stock.
+- Coordinate material accounting with Spoolman so consumption is recorded once.
+- Keep any future printer actions explicit and subject to connection permissions.
+
+### Local printing through CUPS / IPP
+
+Status: selected for the integration to-do list; not implemented.
+
+- Print kit sheets, shopping lists, and labels through compatible local/network
+  printers with saved printer, paper-size, orientation, and label preferences.
+- Use CUPS where available on Linux and Unix-like systems; CUPS also exists on
+  macOS. Design printing behind a platform-neutral interface, evaluating native
+  Windows/Android printing and IPP access to shared printers separately.
+- Verify printer capabilities, output sizing, queue/error feedback, and real
+  printed results on each supported platform rather than assuming parity.
+
+### Optional self-hosted Grafana dashboards
+
+Status: selected for the integration to-do list; not implemented.
+
+- Expose selected inventory metrics to a user's self-hosted Grafana OSS setup
+  for workshop dashboards and wall displays, without cloud or AI dependencies.
+- Explore stock levels, consumption, moisture history, and machine usage;
+  distinguish current values from historical measurements that must be recorded.
+- Define a read-only metrics interface/data source, permissions, and update
+  cadence without exposing credentials or giving dashboards inventory write access.
+
+### Optional Garage attachment storage
+
+Status: selected for the integration to-do list; not implemented.
+
+- Offer a user's self-hosted Garage instance as an optional attachment-storage
+  provider through its S3-compatible API, without requiring a cloud service.
+- Store models, photos, PDFs, and backup exports remotely while retaining stable
+  file references and metadata in Inventorinator and local caching for offline use.
+- Reuse the attachment-storage interface planned for Nextcloud/WebDAV; local
+  files remain available without an external storage provider.
+- Verify private authenticated access, supported API operations, checksums,
+  retries, and recoverable transfers before removing any existing local payloads.
+- Define ownership and deletion rules so removing a record cannot delete files
+  still referenced elsewhere; keep credentials out of portable exports.
+
+### Optional Dolibarr integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's self-hosted Dolibarr instance through its REST API.
+- Explore linking customer orders to kits/projects, identifying missing supplies,
+  tracking build progress, and associating builds with purchasing and invoices.
+- Define stable remote IDs, field ownership, units, and conflict handling before
+  enabling writes; avoid duplicate orders, invoices, or stock adjustments.
+- Keep business-document actions explicit and reviewable, preserve local
+  inventory use without Dolibarr, and verify the configured instance's API
+  capabilities and permissions before implementation.
+
+### Optional eLabFTW integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's self-hosted eLabFTW instance and link experiments and
+  material-test records to inventory items, batches, kits, and prototype revisions.
+- Explore filament tests, resin curing trials, paint mixtures, and other maker
+  experiments; preserve exact material identity and links to source results.
+- Verify API permissions and record mapping before enabling updates; distinguish
+  user test results from manufacturer claims or certified properties.
+
+### Optional scanservjs integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a local/self-hosted scanservjs server to acquire receipts,
+  instructions, and sketches from supported SANE scanners.
+- Preview scans before attaching them to inventory records, kits, or logs;
+  explore handoff to the planned Paperless-ngx integration.
+- Verify scanner selection, multipage capture, output formats, permissions,
+  and cancellation/error handling with real hardware. Use no AI processing.
+
+### Optional OpenEPaperLink integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's local OpenEPaperLink installation and map compatible
+  e-paper tags to inventory items or storage locations.
+- Display item names, quantities, locations, and QR codes using templates sized
+  for the selected tag hardware.
+- Verify supported hardware and update interfaces; show pending/failed updates
+  and last successful refresh so stale label contents are not treated as current.
+
+### Optional Documenso integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Explore a user's self-hosted Documenso instance for equipment handovers,
+  kit acceptance, and customer build approvals.
+- Associate signing documents and completion status with the relevant records;
+  retain references to completed documents without changing stock implicitly.
+- Verify self-hosted edition/API availability, authentication, and document
+  access. Keep recipient selection and sending explicit and reviewable, with
+  no cloud or AI dependency.
+
+### Optional Grocy integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Connect to a user's self-hosted Grocy instance for shared household/workshop
+  consumables and battery-charge records.
+- Define explicit item mappings, units, and which application owns each field
+  before enabling updates; prevent duplicate consumption or stock adjustments.
+- Keep the inventories independently usable and define offline, unlinking,
+  and conflict behavior before offering two-way synchronization.
+
+### Optional DigiKey integration
+
+Status: search/select/add groundwork implemented on alpha.2; live API verification pending.
+See `docs/digikey-integration.md`.
+
+- Use the official DigiKey API to look up components by part number and suggest
+  product descriptions, specifications, and purchasing information.
+- Provide an import preview before adding or updating inventory; preserve the
+  supplier part number, source URL, units, and packaging quantities.
+- Configure API access and verify current authentication, usage limits, and
+  distribution requirements before implementation. Keep credentials out of exports.
+- Reference: https://developer.digikey.com/products/product-information-v4/productsearch/productdetails?prod=true
+
+### Optional McMaster-Carr integration
+
+Status: selected for the integration to-do list; not implemented.
+
+- Provide **Import from McMaster**: enter a part number, retrieve available
+  product information, review the details, and add the inventory item.
+- Evaluate specifications, current pricing, images, datasheets, CAD references,
+  and discontinued/replacement information through the official Product
+  Information API. Preserve supplier identity, units, and packaging quantities.
+- Account for McMaster's customer approval, client certificate, authentication,
+  product-subscription limits, and endpoint rate limits.
+- Clarify access and distribution arrangements for a publicly available app
+  with eprocurement@mcmaster.com before implementation; support each user's
+  approved connection without bundling credentials or certificates.
+- Reference: https://www.mcmaster.com/help/api/
+
+### Stream Deck controls and expanded Desklets
+
+Status: to do; extend the existing desktop companions.
+
+- Add Stream Deck/StreamController actions for common Inventorinator workflows,
+  such as opening inventory, finding an item, and recording stock changes.
+- Expand the existing Inventorinator overview and moisture Desklets and consider
+  shared server-status information with Service Pulse. Review their current
+  capabilities before choosing the additional controls and summaries.
+- Respect the active inventory and user permissions, and verify actual button
+  actions and loaded Desklet behavior on the desktop.
+
+### Integrated Kanban with a self-hostable task service
+
+Status: to try; evaluate Vikunja first and comparable self-hostable apps if needed.
+
+- Provide a Kanban board inside Inventorinator that syncs with the chosen service.
+- Link tasks to kits, inventory items, shopping needs, or workshop projects.
+- Evaluate API support for boards, columns, cards, ordering, and task updates;
+  define stable remote IDs, offline behavior, conflict handling, and deletion
+  semantics before enabling two-way synchronization.
+
+### Top-level server status indicator
+
+Status: to do.
+
+- Show a compact server status indicator at the top of Inventorinator.
+- Identify the configured server/service and distinguish connected, checking,
+  unreachable, authentication failure, and local-only/unconfigured states.
+- Let users inspect connection details and last successful sync; a reachable
+  server must not imply that all pending inventory changes have synced.
+
+### Expanded in-app guides
+
+Status: to do; build on the existing onboarding and Help entry points.
+
+- Add contextual, replayable guides for kits, shopping lists, Remote setup,
+  integrations, importing/exporting, and printable lists.
+- Keep guides concise, skippable, and useful on desktop and Android.
+
+### Spreadsheet import/export and portable JSON
+
+Status: to do; review existing data-transfer features before extending them.
+
+- Support spreadsheet import/export, including CSV and XLSX, and portable JSON
+  export for inventory and relevant kit/shopping-list data.
+- Provide column mapping, a preview, validation, and explicit duplicate handling
+  before applying imports; preserve quantities, units, IDs, and relationships.
+- Use a versioned JSON format and verify export/re-import fidelity through the
+  supported import path. Keep connection secrets out of portable exports.
+- Make the active inventory and export scope clear and keep local export
+  available without a connected server.
+- Pair these exports with the print-ready PDF kit and shopping lists above,
+  including an easily discoverable download/save action for paper printing.
+
+### Kit deletion returns items to inventory
+
+Status: correctness verification required; fix any failures found.
+
+- Ensure deleting a kit returns its held/reserved items to the main inventory
+  and makes them visible and available again without deleting their records.
+- Preserve total stock: release allocations exactly once, without adding stock
+  for reference-only kit entries or recreating material already consumed.
+- Verify partial quantities, items shared across kits, repeated deletion,
+  persistence after restart, and Remote Sync/offline replay with regression tests.
 
 ## v2.0 (planned)
 

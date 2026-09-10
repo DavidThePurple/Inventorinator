@@ -12,10 +12,14 @@ extract full administrator access. Therefore:
 - the app checks the server schema version whenever it connects or starts sync;
 - the `inventorinator-connector` applies pending SQL migrations when its
   container starts;
-- an outdated server is rejected with its installed and required versions;
+- inventory sync accepts schema v21 or later; missing optional features show an amber warning;
+- remote role templates require v22, DigiKey credentials v23, and Mouser credentials v24;
+- servers older than v21 are rejected to preserve inventory protocol compatibility;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current schema: **v21**. Schema v12 replaces whole-inventory snapshot transfers
+Current schema: **v24**. Schema v24 adds owner-only Mouser credentials. Schema v23 adds owner-only DigiKey credentials. Schema v22 adds owner-only role templates; these
+are drafts and do not grant device permissions.
+ Schema v12 replaces whole-inventory snapshot transfers
 with per-record revisions, deletion markers, and client outboxes. Schema v13
 prevents stale snapshot clients from deleting locations they never loaded and
 recovers location tombstones caused by that bug. Schema v14 repairs
@@ -126,3 +130,5 @@ flutter run \
 
 Never place the dashboard password, database password, JWT secret, or
 Supabase service-role key in the Flutter app.
+
+See [v21 to v24 update instructions](../docs/server-update-v24.md) for backup, migration, connector rebuild, and verification steps.

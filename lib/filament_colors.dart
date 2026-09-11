@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'build_identity.dart';
+
 const filamentColorsAttributionUrl = 'https://filamentcolors.xyz/';
 
 class FilamentColorSwatch {
@@ -85,9 +87,9 @@ class FilamentColorsClient {
     http.Client? httpClient,
     this.cacheRead,
     this.cacheWrite,
-    this.cacheLifetime = const Duration(days: 7),
-    this.minimumRequestInterval = const Duration(seconds: 2),
-    this.maximumRequestsPerWindow = 10,
+    this.cacheLifetime = const Duration(days: 30),
+    this.minimumRequestInterval = const Duration(seconds: 3),
+    this.maximumRequestsPerWindow = 5,
     this.requestWindow = const Duration(minutes: 1),
     DateTime Function()? clock,
     FilamentColorsDelay? delay,
@@ -166,7 +168,8 @@ class FilamentColorsClient {
             uri,
             headers: const {
               'Accept': 'application/json',
-              'User-Agent': 'Inventorinator/1.0 (+https://github.com/DavidThePurple/Inventorinator)',
+              'User-Agent': inventorinatorUserAgent,
+              'Referer': '$inventorinatorProjectUrl/',
             },
           )
           .timeout(_requestTimeout);

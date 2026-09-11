@@ -995,7 +995,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                                 )
                               else if (device.role != 'owner')
                                 Text(device.role.startsWith('template:') ? 'CUSTOM ROLE' : device.role.toUpperCase()),
-                              if (isOwner && editable)
+                              if (canRemoveWorkspaceDevices(me?.role) && editable && !(isAdmin && device.role == 'admin'))
                                 PopupMenuButton<bool>(
                                   tooltip: 'Device access',
                                   onSelected: (lockOut) async {

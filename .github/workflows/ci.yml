@@ -107,7 +107,7 @@ jobs:
       - run: flutter test --coverage
       - name: Enforce the coverage floor
         run: ./tool/check_coverage.sh 60
-      - run: flutter build linux --release
+      - run: ./tool/build_with_metadata.sh linux --release
       - name: Verify bundled native libraries
         run: |
           if ldd build/linux/x64/release/bundle/Inventorinator | grep -q "not found"; then
@@ -180,7 +180,7 @@ jobs:
             "storeFile=../inventorinator-upload.jks" \
             > android/key.properties
       - run: flutter pub get
-      - run: flutter build apk --release --split-per-abi
+      - run: ./tool/build_with_metadata.sh apk --release --split-per-abi
       - name: Verify Android package contents
         run: |
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
@@ -229,7 +229,12 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build windows --release
+      - name: Build Windows with build identity
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $buildHash = $env:GITHUB_SHA.Substring(0, 12)
+          flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
       - name: Compute artifact name
         id: artifact
         shell: bash

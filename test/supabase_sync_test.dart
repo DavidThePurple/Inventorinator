@@ -62,7 +62,7 @@ void main() {
     expect(canManageWorkspaceDevices('editor'), isFalse);
     expect(canManageWorkspaceDevices('builder'), isFalse);
     expect(canRemoveWorkspaceDevices('owner'), isTrue);
-    expect(canRemoveWorkspaceDevices('admin'), isFalse);
+    expect(canRemoveWorkspaceDevices('admin'), isTrue);
 
     const expired = SupabaseSyncException(
       'Invalid Refresh Token: Already Used',

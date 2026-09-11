@@ -214,6 +214,8 @@ void main() {
       ),
     });
     expect(utf8.decode(bytes.take(4).toList()), '%PDF');
-    File('/tmp/inventorinator-report-validation.pdf').writeAsBytesSync(bytes);
+    File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}inventorinator-report-validation.pdf',
+    ).writeAsBytesSync(bytes);
   });
 }

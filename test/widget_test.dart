@@ -4975,6 +4975,7 @@ Bed Temperature: 80°C
     final bottomActionKeys = [
       'open-catalog',
       'open-stockroom',
+      'open-scratch-pad',
       'open-scanner',
       'add-item',
       'open-rapidizer',
@@ -5195,7 +5196,7 @@ Bed Temperature: 80°C
     }
     expect(
       find.descendant(of: actions, matching: find.byType(OutlinedButton)),
-      findsNWidgets(8),
+      findsNWidgets(9),
     );
     final stockroomButton = find.byKey(const Key('open-stockroom'));
     final stockroomIcon = find.descendant(
@@ -8692,9 +8693,12 @@ Bed Temperature: 80°C
   testWidgets('filament color search fills the color name and hex', (
     tester,
   ) async {
+    var requests = 0;
     final client = FilamentColorsClient(
       httpClient: MockClient(
-        (_) async => http.Response('''
+        (_) async {
+          requests++;
+          return http.Response('''
           {
             "results": [{
               "id": 1725,
@@ -8710,7 +8714,8 @@ Bed Temperature: 80°C
               "mfr_purchase_link": "https://example.com/galaxy-black"
             }]
           }
-        ''', 200),
+        ''', 200);
+        },
       ),
     );
     final item = sampleInventory.first.copyWith(
@@ -8747,6 +8752,9 @@ Bed Temperature: 80°C
           ?.text,
       'PLA',
     );
+    expect(requests, 0);
+    await tester.tap(find.byKey(const Key('run-filament-colors-search')));
+    await tester.pumpAndSettle();
     expect(
       find.descendant(
         of: find.byKey(const Key('filament-color-result-1725')),

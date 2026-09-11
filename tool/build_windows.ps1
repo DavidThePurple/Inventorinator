@@ -11,7 +11,9 @@ flutter doctor -v
 flutter pub get
 flutter analyze
 flutter test
-flutter build windows --release
+$version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
+$buildHash = (git rev-parse --short=12 HEAD).Trim()
+flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
 
 $bundle = Join-Path $PWD 'build\windows\x64\runner\Release'
 $archive = Join-Path $PWD 'build\Inventorinator-Windows-x64.zip'

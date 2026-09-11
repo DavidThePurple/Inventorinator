@@ -52,6 +52,7 @@ dependencies:
   google_mlkit_text_recognition: ^0.17.1
   pdf: ^3.13.0
   printing: ^5.15.0
+  markdown_editor_live: ^0.6.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -66,6 +67,8 @@ dev_dependencies:
 dependency_overrides:
   camera_windows:
     path: third_party/camera_windows
+  markdown_editor_live:
+    path: third_party/markdown_editor_live
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

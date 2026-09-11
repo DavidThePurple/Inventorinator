@@ -95,7 +95,7 @@ void main() {
       expect(
         ServiceStatus.read(key),
         succeeds
-            ? (version < 25
+            ? (version < 26
                   ? ConnectionStateLed.limited
                   : ConnectionStateLed.connected)
             : ConnectionStateLed.failed,

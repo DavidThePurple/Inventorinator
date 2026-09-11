@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:inventorinator/build_identity.dart';
 import 'package:inventorinator/filament_colors.dart';
 
 const _responseBody = '''
@@ -39,9 +40,11 @@ const _responseBody = '''
 void main() {
   test('FilamentColors client parses swatches and applies filters', () async {
     late Uri requested;
+    late Map<String, String> headers;
     final client = FilamentColorsClient(
       httpClient: MockClient((request) async {
         requested = request.url;
+        headers = request.headers;
         return http.Response(_responseBody, 200);
       }),
     );
@@ -61,6 +64,13 @@ void main() {
       'PETG',
     );
     expect(requested.queryParameters['q'], 'Galaxy');
+    expect(headers['accept'], 'application/json');
+    expect(headers['user-agent'], inventorinatorUserAgent);
+    expect(inventorinatorUserAgent, startsWith('Inventorinator/'));
+    expect(
+      headers['referer'],
+      'https://github.com/DavidThePurple/Inventorinator/',
+    );
     expect(results.single.name, 'Galaxy Black');
     expect(results.single.hex, '#17181A');
     expect(results.single.manufacturer, 'Polymaker');
@@ -167,7 +177,7 @@ void main() {
     await client.search(query: 'Galaxy');
     await client.search(query: 'Black');
 
-    expect(waits, [const Duration(seconds: 2)]);
+    expect(waits, [const Duration(seconds: 3)]);
   });
 
   test(

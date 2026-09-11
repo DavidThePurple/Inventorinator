@@ -47,6 +47,7 @@ import 'service_status.dart';
 import 'sync_conflicts.dart';
 import 'workshop_reports.dart';
 import 'digikey_search_dialog.dart';
+import 'scratch_pad.dart';
 
 // A single explicit very-dark violet canvas across every platform. Keeping the
 // green channel lowest prevents the background from drifting teal/green.
@@ -3909,7 +3910,7 @@ class FilamentColorsSearchDialog extends StatefulWidget {
     this.initialBrand = '',
     this.initialMaterial = '',
     this.initialQuery = '',
-    this.autoSearch = true,
+    this.autoSearch = false,
   });
 
   final FilamentColorsClient client;
@@ -14426,9 +14427,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         config,
         client: widget.supabaseHttpClient,
       );
-      ServiceStatus.setSchemaVersion(
-        statusKey, await service.requireInventorySchema(session),
-      );
+      final installedSchema = await service.requireInventorySchema(session);
+      ServiceStatus.setSchemaVersion(statusKey, installedSchema);
       try {
         final role = await service.currentRole(session);
         final remotePurgeDays = await service.remotePurgeAfterDays(session);
@@ -14481,6 +14481,28 @@ class _InventoryHomeState extends State<InventoryHome> {
         await service.registerDevice(session, deviceName);
       } catch (error) {
         debugPrint('Device registration failed; continuing sync: $error');
+      }
+
+      if (installedSchema >= 26) {
+        final workspaceId = config.workspaceId!;
+        final notesRaw = database.loadStringPreference(scratchPadNotesPreferenceKey, fallback: '[]');
+        final backupKey = 'scratch_pad_backup_$workspaceId';
+        final backupErrorKey = 'scratch_pad_backup_error_$workspaceId';
+        if (database.loadStringPreference(backupKey, fallback: '') != notesRaw) {
+          try {
+            await service.backupScratchPadNotes(session, decodeScratchPadNotes(notesRaw));
+            database.saveStringPreference(backupKey, notesRaw);
+            database.saveStringPreference(backupErrorKey, '');
+          } catch (error) {
+            database.saveStringPreference(backupErrorKey, 'Scratch Pad backup is waiting: $error');
+          }
+        }
+        if (canRemoveWorkspaceDevices(config.workspaceRole)) {
+          try {
+            final reviewNotes = await service.listRemovedDeviceNotes(session);
+            database.saveStringPreference('scratch_pad_review_$workspaceId', encodeScratchPadNotes(reviewNotes));
+          } catch (_) {}
+        }
       }
 
       var cursor = database.loadSyncCursor(config.workspaceId!);
@@ -17430,6 +17452,36 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
+  Future<void> _openScratchPad() async {
+    final database = widget.database;
+    if (database == null) return;
+    final notes = decodeScratchPadNotes(database.loadStringPreference(scratchPadNotesPreferenceKey, fallback: '[]'));
+    var reviewNotes = const <ScratchPadNote>[];
+    final source = database.loadSyncConfig();
+    if (source != null) {
+      try {
+        final config = SupabaseConfig.fromJson(jsonDecode(source) as Map<String, dynamic>);
+        if (config.workspaceId != null) {
+          reviewNotes = decodeScratchPadNotes(database.loadStringPreference('scratch_pad_review_${config.workspaceId}', fallback: '[]'));
+        }
+      } catch (_) {}
+    }
+    await showDialog<void>(context: context, builder: (_) => ScratchPadDialog(
+      notes: notes,
+      reviewNotes: reviewNotes,
+      onChanged: (updated) {
+        database.saveStringPreference(scratchPadNotesPreferenceKey, encodeScratchPadNotes(updated));
+        unawaited(_syncAutomatically(force: true));
+      },
+    ));
+  }
+
+  Widget _scratchPadButton({bool iconOnly = false, double iconOnlyWidth = 48, bool tight = false}) => _glassQuickAction(
+    key: const Key('open-scratch-pad'), onPressed: _openScratchPad,
+    icon: Icons.sticky_note_2_outlined, label: 'Scratch Pad', iconOnly: iconOnly,
+    iconOnlyWidth: iconOnlyWidth, tight: tight,
+  );
+
   Widget _androidBottomSearchDock() => ValueListenableBuilder<bool>(
     valueListenable: _inventoryIsScrolling,
     builder: (context, scrolling, _) => ValueListenableBuilder<double>(
@@ -17548,11 +17600,18 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ];
                 if (iconOnly) {
+                  // The compact rail needs all eight actions on one line.
+                  // Outlined button edges keep the targets visually distinct,
+                  // so narrow layouts trade the inter-button gaps for touch
+                  // target width instead of overflowing.
+                  const compactGap = 0.0;
                   final fittedIconWidth = math.min(
                     iconOnlyWidth,
-                    // Reserve the same 14 px outer inset used by the expanded
-                    // bar, plus the compact gaps between its seven actions.
-                    math.max(36.0, (constraints.maxWidth - 48) / 7),
+                    // Reserve the 28 px outer inset used by the expanded bar.
+                    math.max(
+                      constraints.maxWidth >= 350 ? 40.0 : 32.0,
+                      (constraints.maxWidth - 28) / 8,
+                    ),
                   );
                   final compactAddItem = _glassQuickAction(
                     key: const Key('add-item'),
@@ -17582,13 +17641,15 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 enabled: bottomActionsEnabled,
                                 disabledMessage: disabledActionMessage,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: compactGap),
                               _stockroomButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
                                 enabled: bottomActionsEnabled,
                                 disabledMessage: disabledActionMessage,
                               ),
+                              const SizedBox(width: compactGap),
+                              _scratchPadButton(iconOnly: true, iconOnlyWidth: fittedIconWidth),
                             ],
                           ),
                           const Spacer(),
@@ -17601,23 +17662,23 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 enabled: bottomActionsEnabled,
                                 disabledMessage: disabledActionMessage,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: compactGap),
                               compactAddItem,
-                              const SizedBox(width: 4),
+                              const SizedBox(width: compactGap),
                               _rapidizerButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
                                 enabled: bottomActionsEnabled,
                                 disabledMessage: disabledActionMessage,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: compactGap),
                               _filamentColorsButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
                                 enabled: bottomActionsEnabled,
                                 disabledMessage: disabledActionMessage,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: compactGap),
                               _inventoryJsonButton(
                                 iconOnly: true,
                                 iconOnlyWidth: fittedIconWidth,
@@ -17649,6 +17710,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                         enabled: bottomActionsEnabled,
                         disabledMessage: disabledActionMessage,
                       ),
+                      const SizedBox(width: 12),
+                      _scratchPadButton(tight: tightDesktop),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Align(

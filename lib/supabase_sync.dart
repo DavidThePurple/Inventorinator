@@ -7,10 +7,11 @@ import 'workshop_delta.dart';
 import 'workspace_role_template.dart';
 import 'digikey_credentials.dart';
 import 'mouser_credentials.dart';
+import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 25;
+const latestInventorinatorSchemaVersion = 26;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -27,7 +28,7 @@ bool canManageWorkspaceDevices(String? role) {
 }
 
 bool canRemoveWorkspaceDevices(String? role) =>
-    normalizeWorkspaceRole(role) == 'owner';
+    normalizeWorkspaceRole(role) == 'owner' || normalizeWorkspaceRole(role) == 'admin';
 
 String visibleSyncErrorForRole(Object error, String? role) {
   if (error is SupabaseSyncException && error.isInvalidRefreshToken) {
@@ -868,6 +869,12 @@ class SupabaseSyncService {
     'lock_out': lockOut,
   });
 
+  Future<void> backupScratchPadNotes(SupabaseSession session, Iterable<ScratchPadNote> notes) => _rpc(session, 'backup_inventorinator_device_notes', {'target_workspace': config.workspaceId, 'target_notes': notes.map((note) => note.toJson()).toList()});
+  Future<List<ScratchPadNote>> listRemovedDeviceNotes(SupabaseSession session) async {
+    final result = await _rpc(session, 'list_inventorinator_removed_device_notes', {'target_workspace': config.workspaceId});
+    return result is List ? result.whereType<Map>().map((row) => ScratchPadNote.fromRemoteJson(Map<String, dynamic>.from(row))).toList() : const [];
+  }
+
   Future<Object?> _rpc(
     SupabaseSession session,
     String function,
@@ -885,6 +892,7 @@ class SupabaseSyncService {
       ),
       'get_inventorinator_mouser_credentials' ||
       'set_inventorinator_mouser_credentials' => (24, 'Mouser credential sync'),
+      'backup_inventorinator_device_notes' || 'list_inventorinator_removed_device_notes' => (26, 'Scratch Pad backup'),
       _ => null,
     };
     if (requirement != null) {

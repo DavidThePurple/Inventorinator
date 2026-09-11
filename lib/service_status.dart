@@ -20,6 +20,7 @@ class ServiceStatus {
       if (version < 23) 'DigiKey credential sync',
       if (version < 24) 'Mouser credential sync',
       if (version < 25) 'custom role assignment',
+      if (version < 26) 'Scratch Pad backup',
     ];
     return 'Connected—server update needed for ${missing.join(', ')}. '
         'Inventory sync is supported. Local changes are retained.';

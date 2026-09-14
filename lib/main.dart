@@ -8506,9 +8506,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       final previous = before == null ? null : _decodeInventoryPayload(before);
       final fields = _changedInventoryFields(previous, entry.value);
       // Metadata-only reads must not remove a thumbnail they did not fetch.
-      if (entry.value.thumbnailBytes == null && before?['thumbnail'] != null)
+      if (entry.value.thumbnailBytes == null && before?['thumbnail'] != null) {
         fields.remove('thumbnail');
-      if (fields.isNotEmpty)
+      }
+      if (fields.isNotEmpty) {
         changes.add(
           WorkshopEntityChange(
             entityType: 'inventory',
@@ -8516,6 +8517,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             fields: fields,
           ),
         );
+      }
     }
     if (changes.isNotEmpty) database.applyAndQueueWorkshopChanges(changes);
     disk.pending.clear();
@@ -8546,8 +8548,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       args.add(value);
     }
 
-    if (hideZeroQuantityItems)
+    if (hideZeroQuantityItems) {
       clauses.add("coalesce(json_extract(payload_json, '\$.quantity'), 1) > 0");
+    }
     if (type != null) eq('type', type!.name);
     if (customTypeFilterId != null) eq('customTypeId', customTypeFilterId!);
     if (_similarItemIds.isNotEmpty) {
@@ -8600,8 +8603,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         "coalesce(json_extract(payload_json, '\$.dryingMinutes'), -1)",
       _ => null,
     };
-    if (field != null)
+    if (field != null) {
       return "$field ${sortAscending ? 'ASC' : 'DESC'}, entity_id ASC";
+    }
     return "json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage') COLLATE inventory_order";
   }
 
@@ -8638,8 +8642,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         notifier.dispose();
       }
       for (final item in previous ?? <InventoryItem>[]) {
-        if (!keep.contains(item.id) && item.thumbnailBytes != null)
+        if (!keep.contains(item.id) && item.thumbnailBytes != null) {
           MemoryImage(item.thumbnailBytes!).evict();
+        }
       }
     });
     _persistedEntityReferences['inventory']?.removeWhere(
@@ -8650,9 +8655,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   List<InventoryItem> get visibleItems {
-    if (_diskInventory != null)
+    if (_diskInventory != null) {
       return _visibleItemsCache ??
           _readInventoryPage(0, _pageSizes[pageSizeIndex]);
+    }
     final cacheKey = (
       _searchDataRevision,
       query,
@@ -12334,11 +12340,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             .fold(0, (total, item) => total + item.quantity);
 
   String _stockKey(String productId, String name) {
-    if (_diskInventory != null)
+    if (_diskInventory != null) {
       return _stockKeyCache.putIfAbsent((
         productId,
         name,
       ), () => widget.database!.inventoryStockKey(productId, name));
+    }
     final normalizedName = _normalized(name);
     final match =
         inventory
@@ -14053,8 +14060,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _backfillInventoryThumbnails() async {
     if (_diskInventory != null ||
         _thumbnailBackfillRunning ||
-        widget.database == null)
+        widget.database == null) {
       return;
+    }
     _thumbnailBackfillRunning = true;
     var changed = false;
     try {
@@ -17350,8 +17358,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                         child: Listener(
                           behavior: HitTestBehavior.opaque,
                           onPointerMove: (event) {
-                            if (event.buttons & kPrimaryMouseButton == 0)
+                            if (event.buttons & kPrimaryMouseButton == 0) {
                               return;
+                            }
                             final remainder =
                                 (_locationDialogResizeRemainders[location.id] ??
                                     Offset.zero) +
@@ -17872,8 +17881,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         builder: (context, setDialogState) {
           final needle = _normalized(query);
           final candidates = inventory.where((item) {
-            if (item.archived || item.storageLocationId != source.id)
+            if (item.archived || item.storageLocationId != source.id) {
               return false;
+            }
             if (needle.isEmpty) return true;
             return _normalized(
               '${item.name} ${item.brand} ${item.barcode} ${item.id} '
@@ -17938,8 +17948,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                         ),
                     ],
                     onChanged: (value) {
-                      if (value != null)
+                      if (value != null) {
                         setDialogState(() => destinationId = value);
+                      }
                     },
                   ),
                   const SizedBox(height: 10),
@@ -17969,8 +17980,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 key: Key('sort-item-${item.id}'),
                                 value: selected,
                                 onChanged: (_) => setDialogState(() {
-                                  if (!selectedIds.add(item.id))
+                                  if (!selectedIds.add(item.id)) {
                                     selectedIds.remove(item.id);
+                                  }
                                 }),
                                 secondary: _ItemVisual(
                                   item: item,
@@ -18656,8 +18668,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!mounted ||
                         _layoutEditMode ||
-                        _layoutFrameKey != signature)
+                        _layoutFrameKey != signature) {
                       return;
+                    }
                     _frameLayoutToLocations(
                       locationsToFrame: children,
                       viewport: constraints.biggest,
@@ -18681,8 +18694,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                           ),
                           child: Listener(
                             onPointerMove: (event) {
-                              if (event.buttons & kMiddleMouseButton == 0)
+                              if (event.buttons & kMiddleMouseButton == 0) {
                                 return;
+                              }
                               transform.value = transform.value.clone()
                                 ..translateByDouble(
                                   event.delta.dx,
@@ -18727,8 +18741,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                               },
                                               onPanUpdate: (details) {
                                                 if (_layoutDrawParentId !=
-                                                    parentId)
+                                                    parentId) {
                                                   return;
+                                                }
                                                 _layoutDrawCurrent =
                                                     details.localPosition;
                                                 refreshStructure(() {});
@@ -18739,8 +18754,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                 if (_layoutDrawParentId !=
                                                         parentId ||
                                                     start == null ||
-                                                    end == null)
+                                                    end == null) {
                                                   return;
+                                                }
                                                 _layoutDrawStart = null;
                                                 _layoutDrawCurrent = null;
                                                 _layoutDrawParentId = null;
@@ -18888,8 +18904,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                       _layoutMoveRemainders
                                                           .remove(location.id);
                                                       _persist();
-                                                      if (mounted)
+                                                      if (mounted) {
                                                         setState(() {});
+                                                      }
                                                     }
                                                   : null,
                                               child: DecoratedBox(
@@ -20345,28 +20362,33 @@ class _InventoryHomeState extends State<InventoryHome> {
       builder: (_) => SyncConflictDialog(
         store: store,
         resolve: (row, remote) async {
-          if (_syncing)
+          if (_syncing) {
             throw StateError('Sync is finishing. Retry in a moment.');
+          }
           final database = widget.database!;
           await database.waitForPendingWrites();
-          if (_syncing)
+          if (_syncing) {
             throw StateError('Sync is finishing. Retry in a moment.');
+          }
           final current = database.readEntityPayload(
             row['entityType'],
             row['entityId'],
           );
           if (remote) {
             final field = row['field'] as String;
-            if (!currentRole.canEditInventory)
+            if (!currentRole.canEditInventory) {
               throw StateError('Your role cannot replace local data.');
+            }
             if (field == '(remote deleted)') {
-              if (!currentRole.canHardDeleteItems)
+              if (!currentRole.canHardDeleteItems) {
                 throw StateError('Delete permission is required.');
+              }
             } else if (field == '(deleted)') {
-              if (current != null || !currentRole.canCreateInventory)
+              if (current != null || !currentRole.canCreateInventory) {
                 throw StateError(
                   'The record changed or restore permission is missing.',
                 );
+              }
             } else if (current == null ||
                 jsonEncode(current[field]) != jsonEncode(row['local'])) {
               throw StateError(
@@ -29017,8 +29039,9 @@ class _AddItemDialogState extends State<AddItemDialog>
     if (!_draftReady ||
         _draftCommitted ||
         _restoringDraft ||
-        _draftStore == null)
+        _draftStore == null) {
       return;
+    }
     _draftTimer?.cancel();
     _draftTimer = Timer(const Duration(milliseconds: 300), _flushDraft);
   }
@@ -29028,8 +29051,9 @@ class _AddItemDialogState extends State<AddItemDialog>
     if (!_draftReady ||
         _draftCommitted ||
         _restoringDraft ||
-        widget.database?.isClosed != false)
+        widget.database?.isClosed != false) {
       return;
+    }
     final data = _captureDraft();
     final payload = jsonEncode(data);
     if (payload == _lastDraftPayload) return;
@@ -32284,8 +32308,9 @@ class _AddItemDialogState extends State<AddItemDialog>
       customFieldControllers[field] = TextEditingController(
         text: values[field] ?? '',
       );
-      if (_draftStore != null)
+      if (_draftStore != null) {
         customFieldControllers[field]!.addListener(_queueDraft);
+      }
     }
   }
 

@@ -177,6 +177,7 @@ void main() {
     late BuildContext context;
     await tester.pumpWidget(
       MaterialApp(
+        theme: ThemeData.dark(useMaterial3: true),
         home: Builder(
           builder: (value) {
             context = value;

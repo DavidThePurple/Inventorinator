@@ -2541,6 +2541,7 @@ class StockLocationRecord {
   StockLocationRecord copyWith({
     String? name,
     String? parentId,
+    bool clearParentId = false,
     StockLocationKind? kind,
     int? depthRows,
     int? gridX,
@@ -2550,7 +2551,7 @@ class StockLocationRecord {
   }) => StockLocationRecord(
     id: id,
     name: name ?? this.name,
-    parentId: parentId ?? this.parentId,
+    parentId: clearParentId ? null : (parentId ?? this.parentId),
     kind: kind ?? this.kind,
     depthRows: depthRows ?? this.depthRows,
     gridX: gridX ?? this.gridX,
@@ -17728,7 +17729,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     for (var index = 0; index < locations.length; index++) {
       final child = locations[index];
       if (child.parentId != location.id) continue;
-      locations[index] = child.copyWith(parentId: location.parentId);
+      locations[index] = child.copyWith(
+        parentId: location.parentId,
+        clearParentId: location.parentId == null,
+      );
     }
     for (var index = 0; index < inventory.length; index++) {
       final item = inventory[index];
@@ -22991,7 +22995,9 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
               final available = lineStock.available;
               final missing = lineStock.missing;
               return Card(
-                color: missing > 0.0001 ? const Color(0xff351a22) : null,
+                color: missing > 0.0001
+                    ? Theme.of(context).colorScheme.errorContainer
+                    : null,
                 child: ListTile(
                   dense: true,
                   leading: missing > 0.0001

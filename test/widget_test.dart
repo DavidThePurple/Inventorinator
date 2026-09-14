@@ -847,8 +847,7 @@ void main() {
     expect(find.text('Add an item'), findsOneWidget);
     expect(find.byKey(const Key('search-product-web')), findsOneWidget);
     expect(find.byKey(const Key('search-provider')), findsOneWidget);
-    expect(find.byKey(const Key('product-page-url')), findsOneWidget);
-    expect(find.byKey(const Key('import-product-page')), findsOneWidget);
+    expect(find.byKey(const Key('open-product-url-import')), findsOneWidget);
     expect(
       tester
           .widget<DropdownButtonFormField<String>>(
@@ -909,10 +908,6 @@ void main() {
       '9',
     );
     await tester.enterText(find.byKey(const Key('item-cost')), '24.99');
-    await tester.enterText(
-      find.byKey(const Key('product-page-url')),
-      'https://example.com/purple-silk-pla',
-    );
     await tester.ensureVisible(find.byKey(const Key('save-item')));
     await tester.tap(find.byKey(const Key('save-item')));
     await tester.pumpAndSettle();
@@ -929,8 +924,6 @@ void main() {
     final addedCardBounds = tester.getRect(addedCard);
     await tester.tapAt(addedCardBounds.topLeft + const Offset(20, 20));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('open-product-source')), findsOneWidget);
-    expect(find.text('https://example.com/purple-silk-pla'), findsOneWidget);
     await tester.tap(find.byTooltip('Close').last);
     await tester.pumpAndSettle();
 
@@ -4483,7 +4476,10 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('confirm-delete-location')));
     await tester.pumpAndSettle();
     expect(find.text('Main workshop'), findsNothing);
-    expect(find.text('Draw or add a top-level room, rack, cabinet, or cart.'), findsOneWidget);
+    expect(
+      find.text('Draw or add a top-level room, rack, cabinet, or cart.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -4511,7 +4507,10 @@ Bed Temperature: 80°C
 
       final card = find.byKey(const Key('location-LOC-AD5X'));
       final name = find.descendant(of: card, matching: find.text('AD5X Rack'));
-      final count = find.descendant(of: card, matching: find.text('0 items'));
+      final count = find.descendant(
+        of: card,
+        matching: find.textContaining('0 items'),
+      );
       final move = find.byKey(const Key('move-items-location-LOC-AD5X'));
       expect(tester.takeException(), isNull);
       expect(name, findsOneWidget);
@@ -4546,14 +4545,16 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('location-LOC-AD5X')));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('QR Code'));
+    await tester.pumpAndSettle();
 
     final qr = find.byKey(const Key('location-qr-LOC-AD5X'));
     final summary = find.byKey(const Key('location-summary-LOC-AD5X'));
     final download = find.byKey(const Key('download-location-qr-LOC-AD5X'));
     expect(tester.takeException(), isNull);
     expect(
-      tester.getBottomLeft(qr).dy,
-      lessThan(tester.getTopLeft(summary).dy),
+      tester.getBottomLeft(summary).dy,
+      lessThan(tester.getTopLeft(qr).dy),
     );
     expect(
       tester.getBottomLeft(summary).dy,
@@ -4660,6 +4661,8 @@ Bed Temperature: 80°C
       find.byKey(const Key('location-details-LOC-PARENT')),
       findsOneWidget,
     );
+    await tester.tap(find.text('QR Code'));
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('location-qr-image-LOC-PARENT')),
       findsOneWidget,
@@ -4668,6 +4671,8 @@ Bed Temperature: 80°C
       find.byKey(const Key('download-location-qr-LOC-PARENT')),
       findsOneWidget,
     );
+    await tester.tap(find.text('Inventory'));
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('location-item-INV-PARENT-LOCATION')),
       findsOneWidget,
@@ -5907,14 +5912,10 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('add-item')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('search-product-web')), findsOneWidget);
-    expect(find.byKey(const Key('product-page-url')), findsOneWidget);
-    expect(find.byKey(const Key('import-product-page')), findsOneWidget);
+    expect(find.byKey(const Key('open-product-url-import')), findsOneWidget);
     expect(find.byKey(const Key('item-barcode')), findsOneWidget);
     expect(find.byKey(const Key('barcode-image-picker')), findsOneWidget);
     expect(find.byKey(const Key('barcode-search-divider')), findsOneWidget);
-    expect(find.byKey(const Key('search-url-divider')), findsOneWidget);
-    expect(find.text('Search for a product'), findsOneWidget);
-    expect(find.text('Import from a product URL'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('item-name')), 'Ruby ABS');
     await tester.enterText(
       find.byKey(const Key('item-compatibility')),
@@ -6104,7 +6105,14 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const ValueKey('brand-picker-null')));
     await tester.pumpAndSettle();
-    await tester.tap(find.descendant(of: find.byKey(const ValueKey('brand-picker-null')), matching: find.byType(IconButton)).last);
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('brand-picker-null')),
+            matching: find.byType(IconButton),
+          )
+          .last,
+    );
     await tester.pumpAndSettle();
     expect(find.text('E3D'), findsNothing);
     await tester.tap(find.text('Polymaker').last);
@@ -6957,7 +6965,7 @@ Bed Temperature: 80°C
       tester
           .widget<Card>(find.byKey(const Key('kit-detail-line-PROD-BOLT')))
           .color,
-      const Color(0xff351a22),
+      ThemeData.dark(useMaterial3: true).colorScheme.errorContainer,
     );
     expect(
       tester.widget<FilledButton>(find.byKey(const Key('build-kit'))).onPressed,
@@ -7007,7 +7015,7 @@ Bed Temperature: 80°C
       tester
           .widget<Card>(find.byKey(const Key('build-stock-LINE-SHORT')))
           .color,
-      const Color(0xff351a22),
+      ThemeData.dark(useMaterial3: true).colorScheme.errorContainer,
     );
   });
 
@@ -7103,7 +7111,14 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const ValueKey('brand-picker-null')));
     await tester.pumpAndSettle();
-    await tester.tap(find.descendant(of: find.byKey(const ValueKey('brand-picker-null')), matching: find.byType(IconButton)).last);
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('brand-picker-null')),
+            matching: find.byType(IconButton),
+          )
+          .last,
+    );
     await tester.pumpAndSettle();
     expect(find.text('Prusa Research'), findsOneWidget);
   });
@@ -7892,9 +7907,7 @@ Bed Temperature: 80°C
     expect(
       find.descendant(
         of: notes,
-        matching: find.byKey(
-          const Key('spool-usage-notes-glyph-USAGE-NOTES'),
-        ),
+        matching: find.byKey(const Key('spool-usage-notes-glyph-USAGE-NOTES')),
       ),
       findsOneWidget,
     );
@@ -8695,10 +8708,9 @@ Bed Temperature: 80°C
   ) async {
     var requests = 0;
     final client = FilamentColorsClient(
-      httpClient: MockClient(
-        (_) async {
-          requests++;
-          return http.Response('''
+      httpClient: MockClient((_) async {
+        requests++;
+        return http.Response('''
           {
             "results": [{
               "id": 1725,
@@ -8715,8 +8727,7 @@ Bed Temperature: 80°C
             }]
           }
         ''', 200);
-        },
-      ),
+      }),
     );
     final item = sampleInventory.first.copyWith(
       name: 'Galaxy Black PLA',
@@ -8803,13 +8814,6 @@ Bed Temperature: 80°C
           .controller
           ?.text,
       'Nozzle 190-230°C · Bed 50-60°C',
-    );
-    expect(
-      tester
-          .widget<TextFormField>(find.byKey(const Key('product-page-url')))
-          .controller
-          ?.text,
-      'https://example.com/galaxy-black',
     );
     expect(
       tester

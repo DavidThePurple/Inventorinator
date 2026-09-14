@@ -104,6 +104,36 @@ void main() {
     expect(merge.conflicts.single.field, '(remote deleted)');
     expect(merge.changes.single.deleted, false);
   });
+  test(
+    'keeping a reviewed local conflict removes its stale baseline',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('conflict-rebase-');
+      final db = await LocalDatabase.open(overridePath: '${dir.path}/db');
+      db.applyRemoteWorkshopChanges([
+        const WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {'name': 'Original'},
+        ),
+      ]);
+      db.applyAndQueueWorkshopChanges([
+        const WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {},
+          deleted: true,
+        ),
+      ]);
+      expect(
+        db.loadPendingWorkshopChanges().single.change.baseFields!['(deleted)'],
+        {'id': 'a', 'name': 'Original'},
+      );
+      db.rebasePendingWorkshopChange('inventory', 'a');
+      expect(db.loadPendingWorkshopChanges().single.change.baseFields, isEmpty);
+      db.close();
+      dir.deleteSync(recursive: true);
+    },
+  );
   test('unrelated remote changes do not create false conflicts', () async {
     final dir = Directory.systemTemp.createTempSync('baseline-test-');
     final db = await LocalDatabase.open(overridePath: '${dir.path}/db');

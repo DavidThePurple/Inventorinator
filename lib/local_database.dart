@@ -1086,6 +1086,15 @@ class LocalDatabase {
       )
       .toList();
 
+  /// Lets an explicit "keep local" conflict decision replace the stale
+  /// conditional-write baseline with the user's chosen change.
+  void rebasePendingWorkshopChange(String entityType, String entityId) {
+    _database.execute(
+      'UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?',
+      [jsonEncode(<String, dynamic>{}), entityType, entityId],
+    );
+  }
+
   void acknowledgePendingWorkshopChanges(
     Iterable<PendingWorkshopChange> changes,
   ) {
@@ -1101,7 +1110,9 @@ class LocalDatabase {
         if (remaining.isNotEmpty) {
           final base = Map<String, dynamic>.from(jsonDecode(remaining.first['base_json'] as String) as Map);
           for (final field in pending.change.fields.keys) {
-            if (base.containsKey(field)) base[field] = pending.change.fields[field];
+            if (base.containsKey(field)) {
+              base[field] = pending.change.fields[field];
+            }
           }
           _database.execute('UPDATE sync_outbox SET base_json = ? WHERE id = ?', [jsonEncode(base), pending.outboxId]);
         }

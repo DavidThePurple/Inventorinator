@@ -597,6 +597,47 @@ class SupabaseSyncService {
     return WorkshopChangeBatch(changes: changes, revision: revision);
   }
 
+  Future<WorkshopEntityChange?> loadEntity(
+    SupabaseSession session, {
+    required String entityType,
+    required String entityId,
+  }) async {
+    final workspaceId = config.workspaceId;
+    if (workspaceId == null) {
+      throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    final response = await _request(
+      _client.get(
+        _uri('/rest/v1/inventorinator_entities', {
+          'select': 'entity_type,entity_id,payload,deleted,revision',
+          'workspace_id': 'eq.$workspaceId',
+          'entity_type': 'eq.$entityType',
+          'entity_id': 'eq.$entityId',
+          'limit': '1',
+        }),
+        headers: {
+          ..._baseHeaders,
+          'Authorization': 'Bearer ${session.accessToken}',
+        },
+      ),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SupabaseSyncException(_message(response));
+    }
+    final rows = jsonDecode(response.body) as List<dynamic>;
+    if (rows.isEmpty) return null;
+    final row = Map<String, dynamic>.from(rows.single as Map);
+    return WorkshopEntityChange(
+      entityType: row['entity_type'] as String,
+      entityId: row['entity_id'] as String,
+      fields: Map<String, dynamic>.from(
+        row['payload'] as Map<String, dynamic>? ?? const {},
+      ),
+      deleted: row['deleted'] as bool? ?? false,
+      revision: (row['revision'] as num).toInt(),
+    );
+  }
+
   Future<int> uploadChanges(
     SupabaseSession session,
     Iterable<WorkshopEntityChange> changes, {

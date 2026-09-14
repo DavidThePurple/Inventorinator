@@ -14251,6 +14251,68 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
+  Future<List<WorkshopFieldConflict>> _detectUploadConflicts(
+    SupabaseSyncService service,
+    SupabaseSession session,
+    Iterable<PendingWorkshopChange> pending,
+  ) async {
+    final conflicts = <WorkshopFieldConflict>[];
+    for (final entry in pending) {
+      final local = entry.change;
+      final remote = await service.loadEntity(
+        session,
+        entityType: local.entityType,
+        entityId: local.entityId,
+      );
+      if (local.deleted) {
+        if (remote != null &&
+            !remote.deleted &&
+            !_sameJson(local.baseFields?['(deleted)'], remote.fields)) {
+          conflicts.add(
+            WorkshopFieldConflict(
+              entityType: local.entityType,
+              entityId: local.entityId,
+              field: '(deleted)',
+              localValue: null,
+              remoteValue: remote.fields,
+            ),
+          );
+        }
+        continue;
+      }
+      if (remote?.deleted == true) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: local.entityType,
+            entityId: local.entityId,
+            field: '(remote deleted)',
+            localValue: local.fields,
+            remoteValue: null,
+          ),
+        );
+        continue;
+      }
+      if (remote == null) continue;
+      for (final field in local.fields.entries) {
+        final baseline = local.baseFields?[field.key];
+        final remoteValue = remote.fields[field.key];
+        if (!_sameJson(remoteValue, baseline) &&
+            !_sameJson(remoteValue, field.value)) {
+          conflicts.add(
+            WorkshopFieldConflict(
+              entityType: local.entityType,
+              entityId: local.entityId,
+              field: field.key,
+              localValue: field.value,
+              remoteValue: remoteValue,
+            ),
+          );
+        }
+      }
+    }
+    return conflicts;
+  }
+
   void _recordAudit(
     String action,
     String entityType,
@@ -15109,12 +15171,24 @@ class _InventoryHomeState extends State<InventoryHome> {
               currentRole.canOperateBuilds && !currentRole.canEditInventory,
           batchSize: _syncUploadBatchSize,
         )) {
-          await service.uploadChanges(
-            session,
-            batch.map((entry) => entry.change),
-            deviceId: deviceId,
-            auditEvents: auditAcknowledged ? const [] : auditBatch,
-          );
+          try {
+            await service.uploadChanges(
+              session,
+              batch.map((entry) => entry.change),
+              deviceId: deviceId,
+              auditEvents: auditAcknowledged ? const [] : auditBatch,
+            );
+          } on SupabaseSyncException catch (error) {
+            if (!error.toString().contains('Sync conflict')) rethrow;
+            final conflicts = await _detectUploadConflicts(
+              service,
+              session,
+              batch,
+            );
+            if (conflicts.isEmpty) rethrow;
+            _recordSyncConflicts(conflicts);
+            continue;
+          }
           // Acknowledge each completed batch immediately. Version matching
           // preserves any newer edit made to the same record during upload.
           database.acknowledgePendingWorkshopChanges(batch);
@@ -20435,6 +20509,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                     {},
               ),
             ]);
+          } else {
+            // The person explicitly chose their local change after reviewing
+            // the remote value, so retry it without the stale baseline.
+            database.rebasePendingWorkshopChange(
+              row['entityType'] as String,
+              row['entityId'] as String,
+            );
           }
           final rows = store.load()
             ..removeWhere((r) => jsonEncode(r) == jsonEncode(row));

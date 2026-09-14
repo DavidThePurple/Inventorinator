@@ -25,6 +25,10 @@ class SupplierSearchMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) => OutlinedButton.icon(
     key: const Key('supplier-search-menu'),
+    style: OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 48),
+      visualDensity: VisualDensity.standard,
+    ),
     onPressed: () async {
       FocusManager.instance.primaryFocus?.unfocus();
       final select = await showDialog<VoidCallback>(
@@ -37,7 +41,13 @@ class SupplierSearchMenu extends StatelessWidget {
     label: const Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Flexible(child: Text('Search suppliers')),
+        Flexible(
+          child: Text(
+            'Search suppliers',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         SizedBox(width: 8),
         Icon(Icons.expand_more),
       ],

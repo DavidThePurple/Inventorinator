@@ -9,6 +9,7 @@ client_schema=$(sed -n 's/^const latestInventorinatorSchemaVersion = \([0-9][0-9
 latest_migration=$(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' \
   -printf '%f\n' | sort | tail -n 1 | sed 's/^0*\([0-9][0-9]*\)_.*/\1/')
 release_notes="docs/releases/v$app_version.md"
+server_update="docs/server-update-v$latest_migration.md"
 
 test -n "$app_version"
 test "$installer_tag" = "v$app_version"
@@ -16,8 +17,10 @@ test "$installer_schema" = "$latest_migration"
 test "$connector_schema" = "$latest_migration"
 test "$client_schema" = "$latest_migration"
 test -s "$release_notes"
+test -s "$server_update"
 grep -Fq "schema $latest_migration" "$release_notes"
 grep -Fq "Supabase-schema$latest_migration.tar.gz" "$release_notes"
+grep -Fq './apply-migrations.sh' "$server_update"
 
 printf 'Release v%s and schema v%s are consistent.\n' \
   "$app_version" "$latest_migration"

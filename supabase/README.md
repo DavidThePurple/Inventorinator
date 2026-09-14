@@ -17,7 +17,7 @@ extract full administrator access. Therefore:
 - servers older than v21 are rejected to preserve inventory protocol compatibility;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current schema: **v24**. Schema v24 adds owner-only Mouser credentials. Schema v23 adds owner-only DigiKey credentials. Schema v22 adds owner-only role templates; these
+Current schema: **v28**. Schema v28 preserves Scratch Pad note links. Schema v27 adds opt-in Scratch Pad sharing, while v26 adds per-device Scratch Pad backup and removed-device review. Schema v24 adds owner-only Mouser credentials. Schema v23 adds owner-only DigiKey credentials. Schema v22 adds owner-only role templates; these
 are drafts and do not grant device permissions.
  Schema v12 replaces whole-inventory snapshot transfers
 with per-record revisions, deletion markers, and client outboxes. Schema v13
@@ -131,4 +131,4 @@ flutter run \
 Never place the dashboard password, database password, JWT secret, or
 Supabase service-role key in the Flutter app.
 
-See [v21 to v24 update instructions](../docs/server-update-v24.md) for backup, migration, connector rebuild, and verification steps.
+See [v28 server update instructions](../docs/server-update-v28.md) for the supported upgrade path.

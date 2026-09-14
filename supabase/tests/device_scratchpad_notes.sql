@@ -16,8 +16,24 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','25000000-0000-0000-0000-000000000002',true);
 select public.backup_inventorinator_device_notes(
   '25000000-0000-0000-0000-000000000010',
-  '[{"id":"work-1","title":"Calibrate","body":"Adjust belt tension","updatedAt":"2026-09-11T00:00:00Z"}]'::jsonb
+  '[{"id":"work-1","title":"Calibrate","body":"Adjust belt tension","updatedAt":"2026-09-11T00:00:00Z","isShared":true,"subjectKind":"Location","subjectId":"rack-ad5x","subjectLabel":"AD5X Rack"}]'::jsonb
 );
+
+select set_config('request.jwt.claim.sub','25000000-0000-0000-0000-000000000001',true);
+do $$
+declare shared record;
+begin
+  select * into shared from public.list_inventorinator_shared_device_notes(
+    '25000000-0000-0000-0000-000000000010'
+  );
+  if shared.note_id is distinct from 'work-1' or
+     shared.source_device_name is distinct from 'Removed bench' or
+     shared.subject_kind is distinct from 'Location' or
+     shared.subject_id is distinct from 'rack-ad5x' or
+     shared.subject_label is distinct from 'AD5X Rack' then
+    raise exception 'Explicitly shared note was not visible to the workspace';
+  end if;
+end $$;
 
 select set_config('request.jwt.claim.sub','25000000-0000-0000-0000-000000000003',true);
 select public.remove_inventorinator_device(
@@ -33,7 +49,10 @@ begin
   );
   if archived.note_id is distinct from 'work-1' or
      archived.title not like '[Former device: Removed bench] %' or
-     archived.body is distinct from 'Adjust belt tension' then
+     archived.body is distinct from 'Adjust belt tension' or
+     archived.subject_kind is distinct from 'Location' or
+     archived.subject_id is distinct from 'rack-ad5x' or
+     archived.subject_label is distinct from 'AD5X Rack' then
     raise exception 'Removed device note was not transferred to removing admin';
   end if;
 end $$;

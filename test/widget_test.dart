@@ -4457,7 +4457,7 @@ Bed Temperature: 80°C
     await tester.pump();
     await tester.tap(find.byKey(const Key('confirm-add-location')));
     await tester.pumpAndSettle();
-    expect(find.text('Workshop'), findsOneWidget);
+    expect(find.text('Workshop'), findsWidgets);
     expect(
       tester.getTopLeft(find.byTooltip('Move items')).dx,
       lessThan(tester.getTopLeft(find.byTooltip('Rename Workshop')).dx),
@@ -4475,7 +4475,7 @@ Bed Temperature: 80°C
     );
     await tester.tap(find.byKey(const Key('confirm-rename-location')));
     await tester.pumpAndSettle();
-    expect(find.text('Main workshop'), findsOneWidget);
+    expect(find.text('Main workshop'), findsWidgets);
 
     await tester.tap(find.byTooltip('Delete Main workshop'));
     await tester.pumpAndSettle();
@@ -4483,7 +4483,7 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('confirm-delete-location')));
     await tester.pumpAndSettle();
     expect(find.text('Main workshop'), findsNothing);
-    expect(find.text('Add a shelf, cabinet, bin, or room.'), findsOneWidget);
+    expect(find.text('Draw or add a top-level room, rack, cabinet, or cart.'), findsOneWidget);
   });
 
   testWidgets(

@@ -62,6 +62,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/digikey_credentials.sql
       - name: Test Mouser credential permissions
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/mouser_credentials.sql
+      - name: Test Scratch Pad backup and sharing
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/device_scratchpad_notes.sql
       - name: Verify owner recovery
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
       - name: Verify incremental record sync
@@ -80,6 +82,8 @@ jobs:
           install -m 755 supabase/connector/entrypoint.sh "$package_dir/connector/"
           install -m 644 supabase/migrations/*.sql "$package_dir/migrations/"
           test "$(find "$package_dir/migrations" -maxdepth 1 -name '*.sql' | wc -l)" -eq "$schema_version"
+          test "$(find "$package_dir/migrations" -maxdepth 1 -name "$(printf '%03d' "$schema_version")_*.sql" | wc -l)" -eq 1
+          test -x "$package_dir/apply-migrations.sh"
       - uses: actions/upload-artifact@v7
         with:
           name: inventorinator-supabase-schema

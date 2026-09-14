@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'disk_inventory_list.dart';
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -8,6 +10,7 @@ import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -60,10 +63,14 @@ class _DraftActionIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox.square(
     dimension: 18,
-    child: CustomPaint(painter: _DraftActionPainter(
-      color: IconTheme.of(context).color ?? Theme.of(context).colorScheme.onSurface,
-      edit: edit,
-    )),
+    child: CustomPaint(
+      painter: _DraftActionPainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.onSurface,
+        edit: edit,
+      ),
+    ),
   );
 }
 
@@ -76,18 +83,51 @@ class _DraftActionPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24, size.height / 24);
-    final pen = Paint()..color = color..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8..strokeCap = StrokeCap.round..strokeJoin = StrokeJoin.round;
+    final pen = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
     if (!edit) {
-      canvas.drawPath(Path()..moveTo(5, 3)..lineTo(3, 3)..lineTo(3, 20)..lineTo(16, 20), pen);
+      canvas.drawPath(
+        Path()
+          ..moveTo(5, 3)
+          ..lineTo(3, 3)
+          ..lineTo(3, 20)
+          ..lineTo(16, 20),
+        pen,
+      );
     }
-    canvas.drawPath(Path()..moveTo(8, 2)..lineTo(16, 2)..lineTo(21, 7)
-      ..lineTo(21, edit ? 10 : 17)..lineTo(8, 17)..close(), pen);
-    canvas.drawPath(Path()..moveTo(16, 2)..lineTo(16, 7)..lineTo(21, 7), pen);
+    canvas.drawPath(
+      Path()
+        ..moveTo(8, 2)
+        ..lineTo(16, 2)
+        ..lineTo(21, 7)
+        ..lineTo(21, edit ? 10 : 17)
+        ..lineTo(8, 17)
+        ..close(),
+      pen,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(16, 2)
+        ..lineTo(16, 7)
+        ..lineTo(21, 7),
+      pen,
+    );
     canvas.drawLine(const Offset(11, 10), const Offset(17, 10), pen);
     if (edit) {
-      canvas.drawPath(Path()..moveTo(12, 22)..lineTo(13, 18)..lineTo(20, 11)
-        ..lineTo(23, 14)..lineTo(16, 21)..close(), pen);
+      canvas.drawPath(
+        Path()
+          ..moveTo(12, 22)
+          ..lineTo(13, 18)
+          ..lineTo(20, 11)
+          ..lineTo(23, 14)
+          ..lineTo(16, 21)
+          ..close(),
+        pen,
+      );
     } else {
       canvas.drawLine(const Offset(11, 13), const Offset(17, 13), pen);
     }
@@ -117,6 +157,154 @@ class _ShoppingCartIcon extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// A small floor-plan icon drawn locally so it remains consistent across the
+/// platform icon fonts bundled with each release.
+class _LayoutTabIcon extends StatelessWidget {
+  const _LayoutTabIcon();
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 24,
+    child: CustomPaint(
+      painter: _LayoutTabPainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.onSurface,
+      ),
+    ),
+  );
+}
+
+class _LayoutTabPainter extends CustomPainter {
+  const _LayoutTabPainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    for (final rect in <Rect>[
+      const Rect.fromLTWH(3, 4, 18, 4),
+      const Rect.fromLTWH(3, 10, 8, 10),
+      const Rect.fromLTWH(13, 10, 8, 10),
+    ]) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(1.25)),
+        stroke,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LayoutTabPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+/// A dedicated clockwise landscape rotation control. This avoids depending on
+/// a Material glyph whose codepoint differs between desktop and Android fonts.
+class _LayoutRotateIcon extends StatelessWidget {
+  const _LayoutRotateIcon();
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 22,
+    child: CustomPaint(
+      painter: _LayoutRotatePainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.onSurface,
+      ),
+    ),
+  );
+}
+
+class _LayoutRotatePainter extends CustomPainter {
+  const _LayoutRotatePainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(6, 9, 12, 7),
+        const Radius.circular(1.35),
+      ),
+      stroke,
+    );
+    final arcBounds = Rect.fromCircle(center: const Offset(12, 12), radius: 9);
+    canvas.drawArc(arcBounds, 2.6, 4.2, false, stroke);
+    canvas.drawPath(
+      Path()
+        ..moveTo(18.3, 3.4)
+        ..lineTo(21, 3.8)
+        ..lineTo(20.2, 6.6),
+      stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_LayoutRotatePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _FullscreenIcon extends StatelessWidget {
+  const _FullscreenIcon({required this.expanded});
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 22,
+    child: CustomPaint(
+      painter: _FullscreenPainter(
+        color:
+            IconTheme.of(context).color ??
+            Theme.of(context).colorScheme.onSurface,
+        expanded: expanded,
+      ),
+    ),
+  );
+}
+
+class _FullscreenPainter extends CustomPainter {
+  const _FullscreenPainter({required this.color, required this.expanded});
+  final Color color;
+  final bool expanded;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final pen = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.square;
+    final d = expanded ? 6.0 : 2.5;
+    final e = expanded ? 2.5 : 6.0;
+    for (final (origin, x, y) in [
+      (Offset(d, d), 1.0, 1.0),
+      (Offset(size.width - d, d), -1.0, 1.0),
+      (Offset(d, size.height - d), 1.0, -1.0),
+      (Offset(size.width - d, size.height - d), -1.0, -1.0),
+    ]) {
+      canvas.drawLine(origin, Offset(origin.dx + (x * e), origin.dy), pen);
+      canvas.drawLine(origin, Offset(origin.dx, origin.dy + (y * e)), pen);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FullscreenPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.expanded != expanded;
 }
 
 class _ShoppingCartPainter extends CustomPainter {
@@ -213,11 +401,67 @@ class _PrintNotesPainter extends CustomPainter {
 }
 
 class _LocationIcon extends StatelessWidget {
-  const _LocationIcon({super.key});
+  const _LocationIcon({super.key, this.kind = StockLocationKind.location});
+
+  final StockLocationKind kind;
 
   @override
-  Widget build(BuildContext context) =>
-      const Icon(Icons.warehouse_outlined, size: 24, semanticLabel: 'Location');
+  Widget build(BuildContext context) => Icon(
+    locationKindIcon(kind),
+    size: 24,
+    semanticLabel: locationKindLabel(kind),
+  );
+}
+
+class _DotGridPainter extends CustomPainter {
+  const _DotGridPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dot = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    for (var x = 12.0; x < size.width; x += 24) {
+      for (var y = 12.0; y < size.height; y += 24) {
+        canvas.drawCircle(Offset(x, y), 1.15, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DotGridPainter oldDelegate) => oldDelegate.color != color;
+}
+
+class _LayoutDogearPainter extends CustomPainter {
+  const _LayoutDogearPainter({required this.color, required this.lineColor});
+  final Color color;
+  final Color lineColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dogear = Path()
+      ..moveTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(dogear, Paint()..color = color);
+    final line = Paint()
+      ..color = lineColor
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    for (var inset = 8.0; inset <= 20; inset += 6) {
+      canvas.drawLine(
+        Offset(size.width - inset, size.height - 3),
+        Offset(size.width - 3, size.height - inset),
+        line,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LayoutDogearPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.lineColor != lineColor;
 }
 
 /// A moving, localized light band for the inventory search rim. Most of the
@@ -964,7 +1208,10 @@ Future<void> main() async {
   runApp(
     InventorinatorApp(
       database: database,
-      persistedState: database.loadState(includeFullImages: false, includeInventory: false),
+      persistedState: database.loadState(
+        includeFullImages: false,
+        includeInventory: false,
+      ),
     ),
   );
 }
@@ -2246,16 +2493,71 @@ class BuildRecord {
   DateTime updatedAt;
 }
 
+enum StockLocationKind { location, room, rack, shelf, cabinet, drawer, bin }
+
+String locationKindLabel(StockLocationKind kind) => switch (kind) {
+  StockLocationKind.location => 'Location',
+  StockLocationKind.room => 'Room',
+  StockLocationKind.rack => 'Rack',
+  StockLocationKind.shelf => 'Shelf',
+  StockLocationKind.cabinet => 'Cabinet',
+  StockLocationKind.drawer => 'Drawer',
+  StockLocationKind.bin => 'Bin',
+};
+
+IconData locationKindIcon(StockLocationKind kind) => switch (kind) {
+  StockLocationKind.location => Icons.warehouse_outlined,
+  StockLocationKind.room => Icons.meeting_room_outlined,
+  StockLocationKind.rack => Icons.view_column_outlined,
+  StockLocationKind.shelf => Icons.shelves,
+  StockLocationKind.cabinet => Icons.inventory_2_outlined,
+  StockLocationKind.drawer => Icons.table_rows_outlined,
+  StockLocationKind.bin => Icons.inbox_outlined,
+};
+
 class StockLocationRecord {
   const StockLocationRecord({
     required this.id,
     required this.name,
     this.parentId,
+    this.kind = StockLocationKind.location,
+    this.depthRows = 1,
+    this.gridX = 0,
+    this.gridY = 0,
+    this.gridWidth = 3,
+    this.gridHeight = 2,
   });
 
   final String id;
   final String name;
   final String? parentId;
+  final StockLocationKind kind;
+  final int depthRows;
+  final int gridX;
+  final int gridY;
+  final int gridWidth;
+  final int gridHeight;
+
+  StockLocationRecord copyWith({
+    String? name,
+    String? parentId,
+    StockLocationKind? kind,
+    int? depthRows,
+    int? gridX,
+    int? gridY,
+    int? gridWidth,
+    int? gridHeight,
+  }) => StockLocationRecord(
+    id: id,
+    name: name ?? this.name,
+    parentId: parentId ?? this.parentId,
+    kind: kind ?? this.kind,
+    depthRows: depthRows ?? this.depthRows,
+    gridX: gridX ?? this.gridX,
+    gridY: gridY ?? this.gridY,
+    gridWidth: gridWidth ?? this.gridWidth,
+    gridHeight: gridHeight ?? this.gridHeight,
+  );
 }
 
 enum ShoppingListStatus { needed, ordered, received }
@@ -3052,6 +3354,7 @@ class InventoryItem {
     this.brand = '',
     this.storageLocation = '',
     this.storageLocationId = '',
+    this.locationHistory = const [],
     this.deploymentLocation = '',
     this.lastDriedAt,
     this.imageBytes,
@@ -3111,6 +3414,7 @@ class InventoryItem {
   final String brand;
   final String storageLocation;
   final String storageLocationId;
+  final List<String> locationHistory;
   final String deploymentLocation;
   final DateTime? lastDriedAt;
   final Uint8List? imageBytes;
@@ -3171,6 +3475,7 @@ class InventoryItem {
     String? brand,
     String? storageLocation,
     String? storageLocationId,
+    List<String>? locationHistory,
     String? deploymentLocation,
     DateTime? lastDriedAt,
     Uint8List? imageBytes,
@@ -3256,6 +3561,7 @@ class InventoryItem {
     brand: brand ?? this.brand,
     storageLocation: storageLocation ?? this.storageLocation,
     storageLocationId: storageLocationId ?? this.storageLocationId,
+    locationHistory: locationHistory ?? this.locationHistory,
     deploymentLocation: deploymentLocation ?? this.deploymentLocation,
     lastDriedAt: clearFilamentData ? null : lastDriedAt ?? this.lastDriedAt,
     imageBytes: clearImageBytes ? null : imageBytes ?? this.imageBytes,
@@ -4474,6 +4780,7 @@ typedef WorkshopState = ({
   List<KitRecord> kits,
   List<BuildRecord> builds,
   List<StockLocationRecord> locations,
+  Map<String, List<int>> layoutCanvasSizes,
   List<ShoppingListEntry> shoppingList,
   List<AuditEntry> auditLog,
   List<AdditionHistoryEntry> additionHistory,
@@ -4576,6 +4883,7 @@ Map<String, dynamic> _inventoryItemJson(
   'brand': item.brand,
   'storageLocation': item.storageLocation,
   'storageLocationId': item.storageLocationId,
+  'locationHistory': item.locationHistory,
   'deploymentLocation': item.deploymentLocation,
   'lastDriedAt': item.lastDriedAt?.toIso8601String(),
   if (includeBinary) 'image': _bytesToJson(item.imageBytes),
@@ -4623,13 +4931,14 @@ String encodeWorkshopState({
   List<KitRecord> kits = const [],
   List<BuildRecord> builds = const [],
   List<StockLocationRecord> locations = const [],
+  Map<String, List<int>> layoutCanvasSizes = const {},
   List<ShoppingListEntry> shoppingList = const [],
   List<AuditEntry> auditLog = const [],
   List<AdditionHistoryEntry> additionHistory = const [],
   List<SpoolUsageRecord> spoolUsage = const [],
   int historyLimit = 100,
 }) => jsonEncode({
-  'schemaVersion': 8,
+  'schemaVersion': 9,
   'inventory': inventory.map(_inventoryItemJson).toList(),
   'customItemTypes': customItemTypes
       .map(
@@ -4725,9 +5034,16 @@ String encodeWorkshopState({
           'id': location.id,
           'name': location.name,
           if (location.parentId != null) 'parentId': location.parentId,
+          'kind': location.kind.name,
+          'depthRows': location.depthRows,
+          'gridX': location.gridX,
+          'gridY': location.gridY,
+          'gridWidth': location.gridWidth,
+          'gridHeight': location.gridHeight,
         },
       )
       .toList(),
+  'layoutCanvasSizes': layoutCanvasSizes,
   'shoppingList': shoppingList
       .map(
         (entry) => {
@@ -4895,126 +5211,114 @@ Map<String, dynamic> encodeWorkshopEntityPayload(
   );
 }
 
-InventoryItem _inventoryItemFromJson(Map<String, dynamic> item, {int schemaVersion = 8}) => InventoryItem(
-            id: item['id'] as String,
-            name: item['name'] as String,
-            type: _migratedInventoryType(
-              item['type'] as String,
-              item['name'] as String,
-            ),
-            compatibility: (item['compatibility'] as List).cast<String>(),
-            purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
-                .cast<String>(),
-            styleEntries: (item['styleEntries'] as List<dynamic>? ?? const [])
-                .map(
-                  (entry) => FilamentStyleEntry.fromJson(
-                    (entry as Map).cast<String, dynamic>(),
-                  ),
-                )
-                .toList(),
-            added: DateTime.parse(item['added'] as String),
-            cost: (item['cost'] as num).toDouble(),
-            color: Color(item['color'] as int),
-            itemColorName: _decodedItemColorName(item, schemaVersion),
-            itemColorLabel: _decodedItemColorLabel(item),
-            quantity: (item['quantity'] as num?)?.toDouble() ?? 1,
-            quantityAlertThreshold: (item['quantityAlertThreshold'] as num?)
-                ?.toDouble(),
-            dryingMinutes: item['dryingMinutes'] as int?,
-            dryingRemaining: item['dryingRemaining'] as int?,
-            dryingStartedAt: item['dryingStartedAt'] == null
-                ? null
-                : DateTime.parse(item['dryingStartedAt'] as String),
-            moistureLifespanMinutes:
-                item['moistureLifespanMinutes'] as int? ??
-                ((item['moistureLifespanDays'] as int?) == null
-                    ? null
-                    : (item['moistureLifespanDays'] as int) * 1440),
-            moistureTimeUnit: MoistureTimeUnit.values.byName(
-              item['moistureTimeUnit'] as String? ?? 'days',
-            ),
-            moistureAlertEnabled:
-                item['moistureAlertEnabled'] as bool? ?? false,
-            moistureAlertThresholdMinutes:
-                item['moistureAlertThresholdMinutes'] as int? ??
-                ((item['moistureAlertThresholdDays'] as int?) == null
-                    ? null
-                    : (item['moistureAlertThresholdDays'] as int) * 1440),
-            deployed: item['deployed'] as bool? ?? false,
-            vendor: item['vendor'] as String? ?? '',
-            printingInstructions: item['printingInstructions'] as String? ?? '',
-            dryingInstructions: item['dryingInstructions'] as String? ?? '',
-            storageInstructions: item['storageInstructions'] as String? ?? '',
-            archived: item['archived'] as bool? ?? false,
-            archiveDisposition: ArchiveDisposition.values.byName(
-              item['archiveDisposition'] as String? ?? 'archived',
-            ),
-            filamentStatus: FilamentStatus.values.byName(
-              item['filamentStatus'] as String? ?? 'ready',
-            ),
-            brand: item['brand'] as String? ?? '',
-            storageLocation: item['storageLocation'] as String? ?? '',
-            storageLocationId: item['storageLocationId'] as String? ?? '',
-            deploymentLocation: item['deploymentLocation'] as String? ?? '',
-            lastDriedAt: item['lastDriedAt'] == null
-                ? null
-                : DateTime.parse(item['lastDriedAt'] as String),
-            imageBytes: _bytesFromJson(item['image']),
-            thumbnailBytes: _bytesFromJson(item['thumbnail']),
-            labelImageBytes: _bytesFromJson(item['labelImage']),
-            barcode: item['barcode'] as String? ?? '',
-            productUrl: item['productUrl'] as String? ?? '',
-            compatibleMachineIds:
-                (item['compatibleMachineIds'] as List<dynamic>? ?? const [])
-                    .cast<String>(),
-            spoolTypeId: item['spoolTypeId'] as String? ?? defaultSpoolTypeId,
-            filamentWeightGrams: (item['filamentWeightGrams'] as num?)
-                ?.toDouble(),
-            amsCompatible: item['amsCompatible'] as bool? ?? false,
-            spoolTareWeightGrams: (item['spoolTareWeightGrams'] as num?)
-                ?.toDouble(),
-            spoolOuterDiameterMm: (item['spoolOuterDiameterMm'] as num?)
-                ?.toDouble(),
-            spoolWidthMm: (item['spoolWidthMm'] as num?)?.toDouble(),
-            spoolHoleDiameterMm: (item['spoolHoleDiameterMm'] as num?)
-                ?.toDouble(),
-            refill: item['refill'] as bool? ?? false,
-            masterSpool: item['masterSpool'] as String? ?? '',
-            catalogProductId: item['catalogProductId'] as String?,
-            customTypeId: item['customTypeId'] as String? ?? '',
-            customTypeName: item['customTypeName'] as String? ?? '',
-            customFieldValues:
-                (item['customFieldValues'] as Map<String, dynamic>? ?? const {})
-                    .map((key, value) => MapEntry(key, value.toString())),
-            materialId:
-                item['materialId'] as String? ??
-                _inferStarterMaterial(
-                  _migratedInventoryType(
-                    item['type'] as String,
-                    item['name'] as String,
-                  ),
-                  item['name'] as String,
-                  (item['compatibility'] as List).cast<String>(),
-                )?.id ??
-                '',
-            materialName:
-                item['materialName'] as String? ??
-                _inferStarterMaterial(
-                  _migratedInventoryType(
-                    item['type'] as String,
-                    item['name'] as String,
-                  ),
-                  item['name'] as String,
-                  (item['compatibility'] as List).cast<String>(),
-                )?.name ??
-                '',
-            spoolMaterialId: item['spoolMaterialId'] as String? ?? '',
-            spoolMaterialName: item['spoolMaterialName'] as String? ?? '',
-            masterSpoolMaterialId:
-                item['masterSpoolMaterialId'] as String? ?? '',
-            masterSpoolMaterialName:
-                item['masterSpoolMaterialName'] as String? ?? '',
-          );
+InventoryItem _inventoryItemFromJson(
+  Map<String, dynamic> item, {
+  int schemaVersion = 8,
+}) => InventoryItem(
+  id: item['id'] as String,
+  name: item['name'] as String,
+  type: _migratedInventoryType(item['type'] as String, item['name'] as String),
+  compatibility: (item['compatibility'] as List).cast<String>(),
+  purposeTags: (item['purposeTags'] as List<dynamic>? ?? const [])
+      .cast<String>(),
+  styleEntries: (item['styleEntries'] as List<dynamic>? ?? const [])
+      .map(
+        (entry) =>
+            FilamentStyleEntry.fromJson((entry as Map).cast<String, dynamic>()),
+      )
+      .toList(),
+  added: DateTime.parse(item['added'] as String),
+  cost: (item['cost'] as num).toDouble(),
+  color: Color(item['color'] as int),
+  itemColorName: _decodedItemColorName(item, schemaVersion),
+  itemColorLabel: _decodedItemColorLabel(item),
+  quantity: (item['quantity'] as num?)?.toDouble() ?? 1,
+  quantityAlertThreshold: (item['quantityAlertThreshold'] as num?)?.toDouble(),
+  dryingMinutes: item['dryingMinutes'] as int?,
+  dryingRemaining: item['dryingRemaining'] as int?,
+  dryingStartedAt: item['dryingStartedAt'] == null
+      ? null
+      : DateTime.parse(item['dryingStartedAt'] as String),
+  moistureLifespanMinutes:
+      item['moistureLifespanMinutes'] as int? ??
+      ((item['moistureLifespanDays'] as int?) == null
+          ? null
+          : (item['moistureLifespanDays'] as int) * 1440),
+  moistureTimeUnit: MoistureTimeUnit.values.byName(
+    item['moistureTimeUnit'] as String? ?? 'days',
+  ),
+  moistureAlertEnabled: item['moistureAlertEnabled'] as bool? ?? false,
+  moistureAlertThresholdMinutes:
+      item['moistureAlertThresholdMinutes'] as int? ??
+      ((item['moistureAlertThresholdDays'] as int?) == null
+          ? null
+          : (item['moistureAlertThresholdDays'] as int) * 1440),
+  deployed: item['deployed'] as bool? ?? false,
+  vendor: item['vendor'] as String? ?? '',
+  printingInstructions: item['printingInstructions'] as String? ?? '',
+  dryingInstructions: item['dryingInstructions'] as String? ?? '',
+  storageInstructions: item['storageInstructions'] as String? ?? '',
+  archived: item['archived'] as bool? ?? false,
+  archiveDisposition: ArchiveDisposition.values.byName(
+    item['archiveDisposition'] as String? ?? 'archived',
+  ),
+  filamentStatus: FilamentStatus.values.byName(
+    item['filamentStatus'] as String? ?? 'ready',
+  ),
+  brand: item['brand'] as String? ?? '',
+  storageLocation: item['storageLocation'] as String? ?? '',
+  storageLocationId: item['storageLocationId'] as String? ?? '',
+  locationHistory: (item['locationHistory'] as List<dynamic>? ?? const [])
+      .cast<String>(),
+  deploymentLocation: item['deploymentLocation'] as String? ?? '',
+  lastDriedAt: item['lastDriedAt'] == null
+      ? null
+      : DateTime.parse(item['lastDriedAt'] as String),
+  imageBytes: _bytesFromJson(item['image']),
+  thumbnailBytes: _bytesFromJson(item['thumbnail']),
+  labelImageBytes: _bytesFromJson(item['labelImage']),
+  barcode: item['barcode'] as String? ?? '',
+  productUrl: item['productUrl'] as String? ?? '',
+  compatibleMachineIds:
+      (item['compatibleMachineIds'] as List<dynamic>? ?? const [])
+          .cast<String>(),
+  spoolTypeId: item['spoolTypeId'] as String? ?? defaultSpoolTypeId,
+  filamentWeightGrams: (item['filamentWeightGrams'] as num?)?.toDouble(),
+  amsCompatible: item['amsCompatible'] as bool? ?? false,
+  spoolTareWeightGrams: (item['spoolTareWeightGrams'] as num?)?.toDouble(),
+  spoolOuterDiameterMm: (item['spoolOuterDiameterMm'] as num?)?.toDouble(),
+  spoolWidthMm: (item['spoolWidthMm'] as num?)?.toDouble(),
+  spoolHoleDiameterMm: (item['spoolHoleDiameterMm'] as num?)?.toDouble(),
+  refill: item['refill'] as bool? ?? false,
+  masterSpool: item['masterSpool'] as String? ?? '',
+  catalogProductId: item['catalogProductId'] as String?,
+  customTypeId: item['customTypeId'] as String? ?? '',
+  customTypeName: item['customTypeName'] as String? ?? '',
+  customFieldValues:
+      (item['customFieldValues'] as Map<String, dynamic>? ?? const {}).map(
+        (key, value) => MapEntry(key, value.toString()),
+      ),
+  materialId:
+      item['materialId'] as String? ??
+      _inferStarterMaterial(
+        _migratedInventoryType(item['type'] as String, item['name'] as String),
+        item['name'] as String,
+        (item['compatibility'] as List).cast<String>(),
+      )?.id ??
+      '',
+  materialName:
+      item['materialName'] as String? ??
+      _inferStarterMaterial(
+        _migratedInventoryType(item['type'] as String, item['name'] as String),
+        item['name'] as String,
+        (item['compatibility'] as List).cast<String>(),
+      )?.name ??
+      '',
+  spoolMaterialId: item['spoolMaterialId'] as String? ?? '',
+  spoolMaterialName: item['spoolMaterialName'] as String? ?? '',
+  masterSpoolMaterialId: item['masterSpoolMaterialId'] as String? ?? '',
+  masterSpoolMaterialName: item['masterSpoolMaterialName'] as String? ?? '',
+);
 
 WorkshopState? decodeWorkshopState(String? source) {
   if (source == null || source.isEmpty) return null;
@@ -5275,9 +5579,32 @@ WorkshopState? decodeWorkshopState(String? source) {
             id: location['id'] as String,
             name: location['name'] as String,
             parentId: location['parentId'] as String?,
+            kind: StockLocationKind.values.byName(
+              location['kind'] as String? ?? 'location',
+            ),
+            depthRows: (location['depthRows'] as num?)?.toInt() ?? 1,
+            gridX: (location['gridX'] as num?)?.toInt() ?? 0,
+            gridY: (location['gridY'] as num?)?.toInt() ?? 0,
+            gridWidth: (location['gridWidth'] as num?)?.toInt() ?? 3,
+            gridHeight: (location['gridHeight'] as num?)?.toInt() ?? 2,
           ),
         )
         .toList();
+    final layoutCanvasSizes =
+        (root['layoutCanvasSizes'] as Map<String, dynamic>? ?? const {}).map((
+          key,
+          value,
+        ) {
+          final dimensions = (value as List<dynamic>?)
+              ?.map((entry) => (entry as num).toInt())
+              .toList();
+          return MapEntry(
+            key,
+            dimensions != null && dimensions.length == 2
+                ? dimensions
+                : const [60, 40],
+          );
+        });
     final shoppingList = (root['shoppingList'] as List<dynamic>? ?? const [])
         .cast<Map<String, dynamic>>()
         .map(
@@ -5370,6 +5697,7 @@ WorkshopState? decodeWorkshopState(String? source) {
       kits: kits,
       builds: builds,
       locations: locations,
+      layoutCanvasSizes: layoutCanvasSizes,
       shoppingList: shoppingList,
       auditLog: auditLog,
       additionHistory: additionHistory,
@@ -6459,6 +6787,20 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final List<KitRecord> kits;
   late final List<BuildRecord> builds;
   late final List<StockLocationRecord> locations;
+  late final Map<String, List<int>> layoutCanvasSizes;
+  final Map<String, TransformationController> _layoutTransforms = {};
+  bool _layoutEditMode = false;
+  int _layoutQuarterTurns = 0;
+  String? _layoutFrameKey;
+  final Map<String, Offset> _layoutResizeRemainders = {};
+  final Map<String, Offset> _layoutMoveRemainders = {};
+  Size _stockroomDialogSize = const Size(760, 650);
+  Offset _stockroomDialogResizeRemainder = Offset.zero;
+  final Map<String, Size> _locationDialogSizes = {};
+  final Map<String, Offset> _locationDialogResizeRemainders = {};
+  Offset? _layoutDrawStart;
+  Offset? _layoutDrawCurrent;
+  String? _layoutDrawParentId;
   late final List<ShoppingListEntry> shoppingList;
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
@@ -6624,6 +6966,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   List<({String value, String label, String hex})>?
   _availableItemColorFiltersCache;
   double itemDetailsPanelWidth = 520;
+  bool stockroomFullscreen = false;
   static const _audioChannel = MethodChannel('inventorinator/audio');
   static const _deviceChannel = MethodChannel('inventorinator/device');
 
@@ -6662,18 +7005,29 @@ class _InventoryHomeState extends State<InventoryHome> {
     final firstLaunch =
         widget.database != null && widget.persistedState == null;
     if (widget.database case final database?) {
-      if (database.inventoryCount() == 0 && restored?.inventory.isNotEmpty == true) {
+      if (database.inventoryCount() == 0 &&
+          restored?.inventory.isNotEmpty == true) {
         database.saveState(widget.persistedState!);
       }
-      inventory = DiskInventoryList<InventoryItem>(ids: database.inventoryIds(),
+      inventory = DiskInventoryList<InventoryItem>(
+        ids: database.inventoryIds(),
         idOf: (item) => item.id,
-        read: (id) => _decodeInventoryPayload(database.inventoryPayload(id)!));
+        read: (id) => _decodeInventoryPayload(database.inventoryPayload(id)!),
+      );
       database.configureInventoryFunctions(
-        searchText: (payload) => _searchableInventoryText(_decodeInventoryPayload(jsonDecode(payload) as Map<String,dynamic>)),
+        searchText: (payload) => _searchableInventoryText(
+          _decodeInventoryPayload(jsonDecode(payload) as Map<String, dynamic>),
+        ),
         compare: (a, b) => compareInventoryItems(
-          _decodeInventoryPayload(jsonDecode(a) as Map<String,dynamic>),
-          _decodeInventoryPayload(jsonDecode(b) as Map<String,dynamic>),
-          sort: sort, ascending: sortAscending, now: DateTime.now(), spoolTypes: spoolTypes, usage: spoolUsage));
+          _decodeInventoryPayload(jsonDecode(a) as Map<String, dynamic>),
+          _decodeInventoryPayload(jsonDecode(b) as Map<String, dynamic>),
+          sort: sort,
+          ascending: sortAscending,
+          now: DateTime.now(),
+          spoolTypes: spoolTypes,
+          usage: spoolUsage,
+        ),
+      );
     } else {
       inventory = restored?.inventory ?? [...sampleInventory];
     }
@@ -6712,6 +7066,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     kits = restored?.kits ?? [];
     builds = restored?.builds ?? [];
     locations = restored?.locations ?? [];
+    layoutCanvasSizes = restored?.layoutCanvasSizes ?? {};
     shoppingList = restored?.shoppingList ?? [];
     final initializedLocations = _initializeLegacyLocations();
     auditLog = restored?.auditLog ?? [];
@@ -7432,6 +7787,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       notifier.dispose();
     }
     if (_ownsFilamentColorsClient) _filamentColorsClient.close();
+    for (final transform in _layoutTransforms.values) {
+      transform.dispose();
+    }
     inventorySearchController.dispose();
     inventorySearchFocusNode.dispose();
     inventoryScrollController.dispose();
@@ -8120,11 +8478,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     ...?_diskInventory?.pending.keys,
   }.length;
 
-  InventoryItem _decodeInventoryPayload(Map<String,dynamic> payload) =>
+  InventoryItem _decodeInventoryPayload(Map<String, dynamic> payload) =>
       _inventoryItemFromJson(payload);
 
   DiskInventoryList<InventoryItem>? get _diskInventory =>
-      inventory is DiskInventoryList<InventoryItem> ? inventory as DiskInventoryList<InventoryItem> : null;
+      inventory is DiskInventoryList<InventoryItem>
+      ? inventory as DiskInventoryList<InventoryItem>
+      : null;
 
   bool _flushDiskInventory() {
     final disk = _diskInventory;
@@ -8132,63 +8492,98 @@ class _InventoryHomeState extends State<InventoryHome> {
     final database = widget.database!;
     final changes = <WorkshopEntityChange>[];
     for (final id in disk.removed) {
-      changes.add(WorkshopEntityChange(entityType: 'inventory', entityId: id, fields: const {}, deleted: true));
+      changes.add(
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: id,
+          fields: const {},
+          deleted: true,
+        ),
+      );
     }
     for (final entry in disk.pending.entries) {
       final before = database.inventoryPayload(entry.key, thumbnail: true);
       final previous = before == null ? null : _decodeInventoryPayload(before);
       final fields = _changedInventoryFields(previous, entry.value);
       // Metadata-only reads must not remove a thumbnail they did not fetch.
-      if (entry.value.thumbnailBytes == null && before?['thumbnail'] != null) fields.remove('thumbnail');
-      if (fields.isNotEmpty) changes.add(WorkshopEntityChange(entityType: 'inventory', entityId: entry.key, fields: fields));
+      if (entry.value.thumbnailBytes == null && before?['thumbnail'] != null)
+        fields.remove('thumbnail');
+      if (fields.isNotEmpty)
+        changes.add(
+          WorkshopEntityChange(
+            entityType: 'inventory',
+            entityId: entry.key,
+            fields: fields,
+          ),
+        );
     }
     if (changes.isNotEmpty) database.applyAndQueueWorkshopChanges(changes);
-    disk.pending.clear(); disk.removed.clear();
+    disk.pending.clear();
+    disk.removed.clear();
     return changes.isNotEmpty;
   }
 
   String _searchableInventoryText(InventoryItem item) => _normalized(
-              '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
-              '${item.purposeTags.join(' ')} '
-              '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
-              '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
-              '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
-              '${item.itemColorLabel} ${item.itemColorName} '
-              '${_spoolSizeLabel(item)} ${item.amsCompatible ? 'AMS compatible' : ''} '
-              '${item.refill ? 'refill reload master spool ${item.masterSpool}' : 'factory spool'} '
-              '${item.spoolOuterDiameterMm ?? ''} ${item.spoolWidthMm ?? ''} ${item.spoolHoleDiameterMm ?? ''} '
-              '${machines.where((machine) => item.compatibleMachineIds.contains(machine.id)).map((machine) => '${machine.name} ${machine.model} ${_machineTypePath(machine.typeId)}').join(' ')}',
-            );
+    '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
+    '${item.purposeTags.join(' ')} '
+    '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${_locationPath(item.storageLocationId)} ${item.productUrl} '
+    '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
+    '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
+    '${item.itemColorLabel} ${item.itemColorName} '
+    '${_spoolSizeLabel(item)} ${item.amsCompatible ? 'AMS compatible' : ''} '
+    '${item.refill ? 'refill reload master spool ${item.masterSpool}' : 'factory spool'} '
+    '${item.spoolOuterDiameterMm ?? ''} ${item.spoolWidthMm ?? ''} ${item.spoolHoleDiameterMm ?? ''} '
+    '${machines.where((machine) => item.compatibleMachineIds.contains(machine.id)).map((machine) => '${machine.name} ${machine.model} ${_machineTypePath(machine.typeId)}').join(' ')}',
+  );
 
   (String, List<Object?>) _inventorySqlFilter() {
-    final clauses = <String>["coalesce(json_extract(payload_json, '\$.archived'), 0) = ?"];
+    final clauses = <String>[
+      "coalesce(json_extract(payload_json, '\$.archived'), 0) = ?",
+    ];
     final args = <Object?>[archivedOnly ? 1 : 0];
     void eq(String field, Object value) {
-      clauses.add("json_extract(payload_json, '\$.$field') = ?"); args.add(value);
+      clauses.add("json_extract(payload_json, '\$.$field') = ?");
+      args.add(value);
     }
-    if (hideZeroQuantityItems) clauses.add("coalesce(json_extract(payload_json, '\$.quantity'), 1) > 0");
+
+    if (hideZeroQuantityItems)
+      clauses.add("coalesce(json_extract(payload_json, '\$.quantity'), 1) > 0");
     if (type != null) eq('type', type!.name);
     if (customTypeFilterId != null) eq('customTypeId', customTypeFilterId!);
     if (_similarItemIds.isNotEmpty) {
-      clauses.add('entity_id IN (SELECT value FROM json_each(?))'); args.add(jsonEncode(_similarItemIds.toList()));
+      clauses.add('entity_id IN (SELECT value FROM json_each(?))');
+      args.add(jsonEncode(_similarItemIds.toList()));
     }
     if (itemColorFilter != null) {
-      clauses.add("trim(coalesce(nullif(json_extract(payload_json, '\$.itemColorName'), ''), json_extract(payload_json, '\$.itemColorLabel'), '')) = ?");
-      args.add(itemColorFilter == _unspecifiedItemColorKey ? '' : itemColorFilter);
+      clauses.add(
+        "trim(coalesce(nullif(json_extract(payload_json, '\$.itemColorName'), ''), json_extract(payload_json, '\$.itemColorLabel'), '')) = ?",
+      );
+      args.add(
+        itemColorFilter == _unspecifiedItemColorKey ? '' : itemColorFilter,
+      );
     }
-    for (final entry in [('materialName', filamentMaterialFilter, _unspecifiedMaterialKey), ('brand', filamentBrandFilter, _unspecifiedBrandKey)]) {
+    for (final entry in [
+      ('materialName', filamentMaterialFilter, _unspecifiedMaterialKey),
+      ('brand', filamentBrandFilter, _unspecifiedBrandKey),
+    ]) {
       if (entry.$2 == null) continue;
       eq('type', 'filament');
-      clauses.add("trim(coalesce(json_extract(payload_json, '\$.${entry.$1}'), '')) = ?");
+      clauses.add(
+        "trim(coalesce(json_extract(payload_json, '\$.${entry.$1}'), '')) = ?",
+      );
       args.add(entry.$2 == entry.$3 ? '' : entry.$2);
     }
     if (filamentPurposeTagFilter != null) {
       eq('type', 'filament');
-      clauses.add("EXISTS (SELECT 1 FROM json_each(payload_json, '\$.purposeTags') WHERE lower(trim(value)) = ?)");
+      clauses.add(
+        "EXISTS (SELECT 1 FROM json_each(payload_json, '\$.purposeTags') WHERE lower(trim(value)) = ?)",
+      );
       args.add(filamentPurposeTagFilter!.trim().toLowerCase());
     }
     if (_normalized(query).isNotEmpty) {
-      clauses.add("instr(inventory_search(json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage')), ?) > 0");
+      clauses.add(
+        "instr(inventory_search(json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage')), ?) > 0",
+      );
       args.add(_normalized(query));
     }
     return (clauses.join(' AND '), args);
@@ -8196,22 +8591,42 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   String get _inventorySqlOrder {
     final field = switch (sort) {
-      InventorySort.quantity => "coalesce(json_extract(payload_json, '\$.quantity'), 1)",
+      InventorySort.quantity =>
+        "coalesce(json_extract(payload_json, '\$.quantity'), 1)",
       InventorySort.cost => "json_extract(payload_json, '\$.cost')",
-      InventorySort.addedDate => "julianday(json_extract(payload_json, '\$.added'))",
-      InventorySort.dryingTime => "coalesce(json_extract(payload_json, '\$.dryingMinutes'), -1)",
+      InventorySort.addedDate =>
+        "julianday(json_extract(payload_json, '\$.added'))",
+      InventorySort.dryingTime =>
+        "coalesce(json_extract(payload_json, '\$.dryingMinutes'), -1)",
       _ => null,
     };
-    if (field != null) return "$field ${sortAscending ? 'ASC' : 'DESC'}, entity_id ASC";
+    if (field != null)
+      return "$field ${sortAscending ? 'ASC' : 'DESC'}, entity_id ASC";
     return "json_remove(payload_json, '\$.thumbnail', '\$.image', '\$.labelImage') COLLATE inventory_order";
   }
 
   List<InventoryItem> _readInventoryPage(int offset, int limit) {
     final filter = _inventorySqlFilter();
-    final key = (_searchDataRevision, filter.$1, jsonEncode(filter.$2), sort, sortAscending, offset, limit);
+    final key = (
+      _searchDataRevision,
+      filter.$1,
+      jsonEncode(filter.$2),
+      sort,
+      sortAscending,
+      offset,
+      limit,
+    );
     if (_visibleItemsCacheKey == key) return _visibleItemsCache!;
-    final items = widget.database!.inventoryPage(where: filter.$1, parameters: filter.$2,
-      orderBy: _inventorySqlOrder, limit: limit, offset: offset).map(_decodeInventoryPayload).toList();
+    final items = widget.database!
+        .inventoryPage(
+          where: filter.$1,
+          parameters: filter.$2,
+          orderBy: _inventorySqlOrder,
+          limit: limit,
+          offset: offset,
+        )
+        .map(_decodeInventoryPayload)
+        .toList();
     final keep = items.map((e) => e.id).toSet();
     final old = _inventoryItemNotifiers.values.toList();
     _inventoryItemNotifiers.clear();
@@ -8223,16 +8638,21 @@ class _InventoryHomeState extends State<InventoryHome> {
         notifier.dispose();
       }
       for (final item in previous ?? <InventoryItem>[]) {
-        if (!keep.contains(item.id) && item.thumbnailBytes != null) MemoryImage(item.thumbnailBytes!).evict();
+        if (!keep.contains(item.id) && item.thumbnailBytes != null)
+          MemoryImage(item.thumbnailBytes!).evict();
       }
     });
-    _persistedEntityReferences['inventory']?.removeWhere((id, _) => !keep.contains(id));
+    _persistedEntityReferences['inventory']?.removeWhere(
+      (id, _) => !keep.contains(id),
+    );
     _visibleItemsCacheKey = key;
     return _visibleItemsCache = items;
   }
 
   List<InventoryItem> get visibleItems {
-    if (_diskInventory != null) return _visibleItemsCache ?? _readInventoryPage(0, _pageSizes[pageSizeIndex]);
+    if (_diskInventory != null)
+      return _visibleItemsCache ??
+          _readInventoryPage(0, _pageSizes[pageSizeIndex]);
     final cacheKey = (
       _searchDataRevision,
       query,
@@ -8285,7 +8705,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           : _normalized(
               '${item.name} ${_itemTypeDisplayLabel(item)} ${item.compatibility.join(' ')} ${item.barcode} '
               '${item.purposeTags.join(' ')} '
-              '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${item.productUrl} '
+              '${item.brand} ${item.vendor} ${item.materialName} ${item.storageLocation} ${_locationPath(item.storageLocationId)} ${item.productUrl} '
               '${item.spoolMaterialName} ${item.masterSpoolMaterialName} '
               '${item.customFieldValues.entries.map((entry) => '${entry.key} ${entry.value}').join(' ')} '
               '${item.itemColorLabel} ${item.itemColorName} '
@@ -8340,49 +8760,63 @@ class _InventoryHomeState extends State<InventoryHome> {
     final filamentColorLabels = <String, String>{};
     final filamentBrands = <String, double>{};
     if (_diskInventory != null) {
-      for (final row in widget.database!.inventoryMetricGroups(metricsUntrackedTypeKeys)) {
+      for (final row in widget.database!.inventoryMetricGroups(
+        metricsUntrackedTypeKeys,
+      )) {
         itemRecords += row['records'] as int;
         totalUnits += (row['units'] as num).toDouble();
         lowStockRecords += row['lowStock'] as int;
         if (row['type'] != 'filament') continue;
         final units = (row['units'] as num).toDouble();
         filamentSpools += units;
-        final material = row['material'] == '' ? _unspecifiedMaterialKey : row['material'] as String;
-        final brand = row['brand'] == '' ? _unspecifiedBrandKey : row['brand'] as String;
-        final color = row['color'] == '' ? _unspecifiedItemColorKey : row['color'] as String;
+        final material = row['material'] == ''
+            ? _unspecifiedMaterialKey
+            : row['material'] as String;
+        final brand = row['brand'] == ''
+            ? _unspecifiedBrandKey
+            : row['brand'] as String;
+        final color = row['color'] == ''
+            ? _unspecifiedItemColorKey
+            : row['color'] as String;
         final label = row['colorLabel'] as String;
-        filamentMaterials[material] = (filamentMaterials[material] ?? 0) + units;
+        filamentMaterials[material] =
+            (filamentMaterials[material] ?? 0) + units;
         filamentBrands[brand] = (filamentBrands[brand] ?? 0) + units;
         filamentColors[color] = (filamentColors[color] ?? 0) + units;
-        filamentColorLabels[color] = color == _unspecifiedItemColorKey ? 'Unspecified color'
-          : label.isEmpty ? color : label.toUpperCase() == color.toUpperCase() ? label : '$label · $color';
+        filamentColorLabels[color] = color == _unspecifiedItemColorKey
+            ? 'Unspecified color'
+            : label.isEmpty
+            ? color
+            : label.toUpperCase() == color.toUpperCase()
+            ? label
+            : '$label · $color';
       }
     } else {
-    for (final item in inventory) {
-      if (item.archived || !_isMetricsTracked(item)) continue;
-      itemRecords++;
-      totalUnits += item.quantity;
-      if (item.type == InventoryType.filament) {
-        filamentSpools += item.quantity;
-        final materialKey = _metricsFilamentMaterialFilterValue(item);
-        final colorKey = _metricsFilamentColorFilterValue(item);
-        final colorLabel = _metricsFilamentColorLabel(item);
-        final brandKey = _metricsFilamentBrandFilterValue(item);
-        filamentMaterials[materialKey] =
-            (filamentMaterials[materialKey] ?? 0.0) + item.quantity;
-        if (colorKey.isNotEmpty) {
-          filamentColors[colorKey] =
-              (filamentColors[colorKey] ?? 0.0) + item.quantity;
-          filamentColorLabels[colorKey] = colorLabel;
+      for (final item in inventory) {
+        if (item.archived || !_isMetricsTracked(item)) continue;
+        itemRecords++;
+        totalUnits += item.quantity;
+        if (item.type == InventoryType.filament) {
+          filamentSpools += item.quantity;
+          final materialKey = _metricsFilamentMaterialFilterValue(item);
+          final colorKey = _metricsFilamentColorFilterValue(item);
+          final colorLabel = _metricsFilamentColorLabel(item);
+          final brandKey = _metricsFilamentBrandFilterValue(item);
+          filamentMaterials[materialKey] =
+              (filamentMaterials[materialKey] ?? 0.0) + item.quantity;
+          if (colorKey.isNotEmpty) {
+            filamentColors[colorKey] =
+                (filamentColors[colorKey] ?? 0.0) + item.quantity;
+            filamentColorLabels[colorKey] = colorLabel;
+          }
+          filamentBrands[brandKey] =
+              (filamentBrands[brandKey] ?? 0.0) + item.quantity;
         }
-        filamentBrands[brandKey] =
-            (filamentBrands[brandKey] ?? 0.0) + item.quantity;
+        if (item.quantityAlertThreshold != null &&
+            item.quantity <= item.quantityAlertThreshold!) {
+          lowStockRecords++;
+        }
       }
-      if (item.quantityAlertThreshold != null &&
-          item.quantity <= item.quantityAlertThreshold!) {
-        lowStockRecords++;
-      }
-    }
     }
     return _InventoryMetrics(
       itemRecords: itemRecords,
@@ -8623,7 +9057,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget build(BuildContext context) {
     final showingCatalog = catalogFilter != null;
     if (showingCatalog && _diskInventory != null) _readInventoryPage(0, 0);
-    final allItems = showingCatalog || _diskInventory != null ? const <InventoryItem>[] : visibleItems;
+    final allItems = showingCatalog || _diskInventory != null
+        ? const <InventoryItem>[]
+        : visibleItems;
     final allCatalogRecords = showingCatalog
         ? visibleCatalogRecords
         : const <Object>[];
@@ -8642,7 +9078,11 @@ class _InventoryHomeState extends State<InventoryHome> {
         : allItems.cast<Object>();
     final sqlFilter = _inventorySqlFilter();
     final diskCount = !showingCatalog && _diskInventory != null
-        ? widget.database!.inventoryCount(where: sqlFilter.$1, parameters: sqlFilter.$2) : 0;
+        ? widget.database!.inventoryCount(
+            where: sqlFilter.$1,
+            parameters: sqlFilter.$2,
+          )
+        : 0;
     final resultCount = allRecords.length + diskCount;
     final pageSize = _pageSizes[pageSizeIndex];
     final pageCount = resultCount == 0 ? 1 : (resultCount / pageSize).ceil();
@@ -8650,7 +9090,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     final start = page * pageSize;
     final records = allRecords.skip(start).take(pageSize).toList();
     if (!showingCatalog && _diskInventory != null) {
-      records.addAll(_readInventoryPage((start - allRecords.length).clamp(0, resultCount), pageSize - records.length));
+      records.addAll(
+        _readInventoryPage(
+          (start - allRecords.length).clamp(0, resultCount),
+          pageSize - records.length,
+        ),
+      );
     }
     return _CustomIconAnimationScope(
       mode: customIconAnimationMode,
@@ -8917,7 +9362,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _publishInventoryItem(InventoryItem item) {
-    final index = _diskInventory?.indexOfId(item.id) ?? inventory.indexWhere((candidate) => candidate.id == item.id);
+    final index =
+        _diskInventory?.indexOfId(item.id) ??
+        inventory.indexWhere((candidate) => candidate.id == item.id);
     if (index < 0) return;
     inventory[index] = item;
     final notifier = _inventoryItemNotifiers.putIfAbsent(
@@ -10339,59 +10786,73 @@ class _InventoryHomeState extends State<InventoryHome> {
       if (item.imageBytes == null && item.labelImageBytes == null) continue;
       final lightweight = _withoutFullInventoryImages(item);
       _publishInventoryItem(lightweight);
-      if (_diskInventory != null) { _diskInventory!.acknowledge(lightweight.id); }
-      else { _persistedEntityReferences.putIfAbsent('inventory', () => {})[lightweight.id] = lightweight; }
+      if (_diskInventory != null) {
+        _diskInventory!.acknowledge(lightweight.id);
+      } else {
+        _persistedEntityReferences.putIfAbsent(
+          'inventory',
+          () => {},
+        )[lightweight.id] = lightweight;
+      }
     }
   }
 
   Future<void> _openDetails(InventoryItem item) async {
     final detailedItem = _withFullInventoryImages(item);
     final storageLocation = _itemStorageLocation(item);
+    var detailsFullscreen = false;
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close item details',
       barrierColor: Colors.black54,
       transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (context, _, _) => Align(
-        alignment: Alignment.centerRight,
-        child: ItemDetailsPanel(
-          item: detailedItem,
-          typeLabel: _itemTypeDisplayLabel(detailedItem),
-          typeIcon: _itemTypeIcon(detailedItem),
-          typeIconImageBytes: _iconImageBytesFromKey(
-            _itemTypeIconKey(detailedItem),
+      pageBuilder: (context, _, _) => StatefulBuilder(
+        builder: (context, refreshDetails) => Align(
+          alignment: Alignment.centerRight,
+          child: ItemDetailsPanel(
+            item: detailedItem,
+            typeLabel: _itemTypeDisplayLabel(detailedItem),
+            typeIcon: _itemTypeIcon(detailedItem),
+            typeIconImageBytes: _iconImageBytesFromKey(
+              _itemTypeIconKey(detailedItem),
+            ),
+            initialWidth: detailsFullscreen
+                ? MediaQuery.sizeOf(context).width
+                : itemDetailsPanelWidth,
+            onWidthChanged: (width) => itemDetailsPanelWidth = width,
+            fullscreen: detailsFullscreen,
+            onFullscreenChanged: (fullscreen) =>
+                refreshDetails(() => detailsFullscreen = fullscreen),
+            machines: machines,
+            machineTypes: machineTypes,
+            spoolTypes: spoolTypes,
+            spoolUsage: spoolUsage,
+            onSpoolUsageAdded: _addSpoolUsage,
+            onSpoolUsageChanged: currentRole.canEditInventory
+                ? _updateSpoolUsage
+                : null,
+            onSpoolUsageDeleted: currentRole.canEditInventory
+                ? _deleteSpoolUsage
+                : null,
+            onChanged: (updated) =>
+                _updateItemById(_withoutFullInventoryImages(updated)),
+            onEdit: currentRole.canEditInventory
+                ? (item) => _handleAction(item, ItemAction.edit)
+                : null,
+            onSplitOne:
+                currentRole.canEditInventory && currentRole.canCreateInventory
+                ? _splitOneIntoNewStack
+                : null,
+            canEdit: currentRole.canEditInventory,
+            canArchive: currentRole.canArchiveInventory,
+            canMarkDepleted: _itemCanMarkDepleted(item),
+            showStatus: _itemShowsStatus(item),
+            onStorageLocationTap: storageLocation == null
+                ? null
+                : () => _openLocation(storageLocation),
+            onFindSimilar: _findSimilarItems,
           ),
-          initialWidth: itemDetailsPanelWidth,
-          onWidthChanged: (width) => itemDetailsPanelWidth = width,
-          machines: machines,
-          machineTypes: machineTypes,
-          spoolTypes: spoolTypes,
-          spoolUsage: spoolUsage,
-          onSpoolUsageAdded: _addSpoolUsage,
-          onSpoolUsageChanged: currentRole.canEditInventory
-              ? _updateSpoolUsage
-              : null,
-          onSpoolUsageDeleted: currentRole.canEditInventory
-              ? _deleteSpoolUsage
-              : null,
-          onChanged: (updated) =>
-              _updateItemById(_withoutFullInventoryImages(updated)),
-          onEdit: currentRole.canEditInventory
-              ? (item) => _handleAction(item, ItemAction.edit)
-              : null,
-          onSplitOne:
-              currentRole.canEditInventory && currentRole.canCreateInventory
-              ? _splitOneIntoNewStack
-              : null,
-          canEdit: currentRole.canEditInventory,
-          canArchive: currentRole.canArchiveInventory,
-          canMarkDepleted: _itemCanMarkDepleted(item),
-          showStatus: _itemShowsStatus(item),
-          onStorageLocationTap: storageLocation == null
-              ? null
-              : () => _openLocation(storageLocation),
-          onFindSimilar: _findSimilarItems,
         ),
       ),
       transitionBuilder: (context, animation, _, child) {
@@ -10794,8 +11255,24 @@ class _InventoryHomeState extends State<InventoryHome> {
         .firstOrNull;
     final enteredLowStock =
         previous != null && !_isLowStock(previous) && _isLowStock(item);
+    final previousLocation = previous?.storageLocation.trim() ?? '';
+    final locationChanged =
+        previous != null &&
+        previous.storageLocationId != item.storageLocationId;
+    final updatedItem = locationChanged && previousLocation.isNotEmpty
+        ? item.copyWith(
+            locationHistory: [
+              previousLocation,
+              ...previous.locationHistory.where(
+                (path) => path != previousLocation,
+              ),
+            ].take(5).toList(),
+          )
+        : previous != null && item.locationHistory.isEmpty
+        ? item.copyWith(locationHistory: previous.locationHistory)
+        : item;
     setState(() {
-      _publishInventoryItem(item);
+      _publishInventoryItem(updatedItem);
       if (previous != null) {
         final changes = <String, String>{};
         if (previous.name != item.name) {
@@ -11839,21 +12316,29 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Map<(String, String), double> _stockQuantityCache = {};
   final Map<(String, String), String> _stockKeyCache = {};
 
-  double _availableInventoryQuantity(String productId, String name) => _diskInventory != null
-      ? _stockQuantityCache.putIfAbsent((productId, name), () => widget.database!.availableInventoryQuantity(productId, name))
+  double _availableInventoryQuantity(String productId, String name) =>
+      _diskInventory != null
+      ? _stockQuantityCache.putIfAbsent((
+          productId,
+          name,
+        ), () => widget.database!.availableInventoryQuantity(productId, name))
       : inventory
-      .where(
-        (item) =>
-            !item.archived &&
-            item.quantity > 0 &&
-            (item.id == productId ||
-                item.catalogProductId == productId ||
-                _normalized(item.name) == _normalized(name)),
-      )
-      .fold(0, (total, item) => total + item.quantity);
+            .where(
+              (item) =>
+                  !item.archived &&
+                  item.quantity > 0 &&
+                  (item.id == productId ||
+                      item.catalogProductId == productId ||
+                      _normalized(item.name) == _normalized(name)),
+            )
+            .fold(0, (total, item) => total + item.quantity);
 
   String _stockKey(String productId, String name) {
-    if (_diskInventory != null) return _stockKeyCache.putIfAbsent((productId, name), () => widget.database!.inventoryStockKey(productId, name));
+    if (_diskInventory != null)
+      return _stockKeyCache.putIfAbsent((
+        productId,
+        name,
+      ), () => widget.database!.inventoryStockKey(productId, name));
     final normalizedName = _normalized(name);
     final match =
         inventory
@@ -13299,9 +13784,16 @@ class _InventoryHomeState extends State<InventoryHome> {
         database.applyAndQueueWorkshopChanges([
           for (final collection in _entityCollections().entries)
             for (final record in collection.value)
-              WorkshopEntityChange(entityType: collection.key, entityId: _entityId(record),
-                fields: encodeWorkshopEntityPayload(collection.key, record)),
-          WorkshopEntityChange(entityType: workshopMetadataEntityType, entityId: workshopMetadataEntityId, fields: _workshopMetadata()),
+              WorkshopEntityChange(
+                entityType: collection.key,
+                entityId: _entityId(record),
+                fields: encodeWorkshopEntityPayload(collection.key, record),
+              ),
+          WorkshopEntityChange(
+            entityType: workshopMetadataEntityType,
+            entityId: workshopMetadataEntityId,
+            fields: _workshopMetadata(),
+          ),
         ]);
         wroteChange = true;
       } else if (_incrementalPersistenceReady) {
@@ -13533,7 +14025,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (_diskInventory != null) {
       _flushDiskInventory();
       _invalidateSearchCaches();
-      if (!_applyingCloudState) { _localStateRevision++; _scheduleAutomaticSync(); }
+      if (!_applyingCloudState) {
+        _localStateRevision++;
+        _scheduleAutomaticSync();
+      }
       return;
     }
     _reconcileReadInventoryAlerts();
@@ -13556,7 +14051,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _backfillInventoryThumbnails() async {
-    if (_diskInventory != null || _thumbnailBackfillRunning || widget.database == null) return;
+    if (_diskInventory != null ||
+        _thumbnailBackfillRunning ||
+        widget.database == null)
+      return;
     _thumbnailBackfillRunning = true;
     var changed = false;
     try {
@@ -13640,12 +14138,15 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   String _currentStateJson() => encodeWorkshopState(
-    inventory: _diskInventory == null ? inventory : [
-      for (final item in inventory) _decodeInventoryPayload({
-        ...?widget.database!.inventoryPayload(item.id, thumbnail: true),
-        ..._inventoryItemJson(item, includeBinary: false),
-      }),
-    ],
+    inventory: _diskInventory == null
+        ? inventory
+        : [
+            for (final item in inventory)
+              _decodeInventoryPayload({
+                ...?widget.database!.inventoryPayload(item.id, thumbnail: true),
+                ..._inventoryItemJson(item, includeBinary: false),
+              }),
+          ],
     vendors: vendors,
     brands: brands,
     spoolTypes: spoolTypes,
@@ -13662,6 +14163,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     kits: kits,
     builds: builds,
     locations: locations,
+    layoutCanvasSizes: layoutCanvasSizes,
     shoppingList: shoppingList,
     auditLog: auditLog,
     additionHistory: additionHistory,
@@ -13677,6 +14179,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     };
     for (var index = 0; index < inventory.length; index++) {
       final item = inventory[index];
+      // Legacy free-text locations are only migrated for records which have
+      // never been assigned a structured location. A structured path such as
+      // "X1C / Tippy Top" is display text, not a new top-level location.
+      if (item.storageLocationId.isNotEmpty) continue;
       final name = item.storageLocation.trim();
       if (name.isEmpty) continue;
       final key = name.toLowerCase();
@@ -13717,7 +14223,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         conflict.entityType,
         conflict.entityId,
         {
-          conflict.field: 'held for review; another device changed this field too',
+          conflict.field:
+              'held for review; another device changed this field too',
         },
       );
     }
@@ -13999,13 +14506,16 @@ class _InventoryHomeState extends State<InventoryHome> {
       if (change.entityType == 'inventory') {
         inventoryChanged = true;
         if (_diskInventory != null) rebuildRoot = true;
-        final index = _diskInventory?.indexOfId(change.entityId) ?? inventory.indexWhere(
-          (item) => item.id == change.entityId,
-        );
+        final index =
+            _diskInventory?.indexOfId(change.entityId) ??
+            inventory.indexWhere((item) => item.id == change.entityId);
         if (change.deleted) {
           if (index >= 0) {
-            if (_diskInventory != null) { _diskInventory!.removeId(change.entityId); }
-            else { inventory.removeAt(index); }
+            if (_diskInventory != null) {
+              _diskInventory!.removeId(change.entityId);
+            } else {
+              inventory.removeAt(index);
+            }
           }
           _inventoryItemNotifiers.remove(change.entityId)?.dispose();
           rebuildRoot = true;
@@ -14388,7 +14898,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     // local edit after this point needs another pass, even if it lands while
     // we are waiting to apply or confirm remote changes.
     final syncingRevision = _localStateRevision;
-    final statusKey = 'Supabase:${digiKeyScope(config.url, config.workspaceId)}';
+    final statusKey =
+        'Supabase:${digiKeyScope(config.url, config.workspaceId)}';
     ServiceStatus.set(statusKey, ConnectionStateLed.checking);
     _syncing = true;
     _syncActivity.value = true;
@@ -14485,22 +14996,46 @@ class _InventoryHomeState extends State<InventoryHome> {
 
       if (installedSchema >= 26) {
         final workspaceId = config.workspaceId!;
-        final notesRaw = database.loadStringPreference(scratchPadNotesPreferenceKey, fallback: '[]');
+        final notesRaw = database.loadStringPreference(
+          scratchPadNotesPreferenceKey,
+          fallback: '[]',
+        );
         final backupKey = 'scratch_pad_backup_$workspaceId';
         final backupErrorKey = 'scratch_pad_backup_error_$workspaceId';
-        if (database.loadStringPreference(backupKey, fallback: '') != notesRaw) {
+        if (database.loadStringPreference(backupKey, fallback: '') !=
+            notesRaw) {
           try {
-            await service.backupScratchPadNotes(session, decodeScratchPadNotes(notesRaw));
+            await service.backupScratchPadNotes(
+              session,
+              decodeScratchPadNotes(notesRaw),
+            );
             database.saveStringPreference(backupKey, notesRaw);
             database.saveStringPreference(backupErrorKey, '');
           } catch (error) {
-            database.saveStringPreference(backupErrorKey, 'Scratch Pad backup is waiting: $error');
+            database.saveStringPreference(
+              backupErrorKey,
+              'Scratch Pad backup is waiting: $error',
+            );
           }
         }
         if (canRemoveWorkspaceDevices(config.workspaceRole)) {
           try {
             final reviewNotes = await service.listRemovedDeviceNotes(session);
-            database.saveStringPreference('scratch_pad_review_$workspaceId', encodeScratchPadNotes(reviewNotes));
+            database.saveStringPreference(
+              'scratch_pad_review_$workspaceId',
+              encodeScratchPadNotes(reviewNotes),
+            );
+          } catch (_) {}
+        }
+        if (installedSchema >= 27) {
+          try {
+            final sharedNotes = await service.listSharedScratchPadNotes(
+              session,
+            );
+            database.saveStringPreference(
+              'scratch_pad_shared_$workspaceId',
+              encodeScratchPadNotes(sharedNotes),
+            );
           } catch (_) {}
         }
       }
@@ -14537,13 +15072,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       // versioned acknowledgement leaves any still-newer edit in the outbox.
       await database.waitForPendingWrites();
       var pending = database.loadPendingWorkshopChanges();
-      pending = _conflictStore?.readyForUpload(pending,
-        atomicBuilds: currentRole.canOperateBuilds && !currentRole.canEditInventory) ?? pending;
+      pending =
+          _conflictStore?.readyForUpload(
+            pending,
+            atomicBuilds:
+                currentRole.canOperateBuilds && !currentRole.canEditInventory,
+          ) ??
+          pending;
       if (pending.isNotEmpty) {
         var auditAcknowledged = false;
-        for (final batch in workshopUploadBatches(pending, (entry) => entry.change,
-          atomicBuilds: currentRole.canOperateBuilds && !currentRole.canEditInventory,
-          batchSize: _syncUploadBatchSize)) {
+        for (final batch in workshopUploadBatches(
+          pending,
+          (entry) => entry.change,
+          atomicBuilds:
+              currentRole.canOperateBuilds && !currentRole.canEditInventory,
+          batchSize: _syncUploadBatchSize,
+        )) {
           await service.uploadChanges(
             session,
             batch.map((entry) => entry.change),
@@ -14623,7 +15167,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     } finally {
       ServiceStatus.set(
         statusKey,
-        syncSucceeded ? ConnectionStateLed.connected : ConnectionStateLed.failed,
+        syncSucceeded
+            ? ConnectionStateLed.connected
+            : ConnectionStateLed.failed,
       );
       _syncing = false;
       final newerStateNeedsSync =
@@ -15521,10 +16067,16 @@ class _InventoryHomeState extends State<InventoryHome> {
         final narrow = constraints.maxWidth < 600;
         final database = widget.database;
         final raw = database?.loadSyncConfig();
-        final config = raw == null ? null : SupabaseConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final config = raw == null
+            ? null
+            : SupabaseConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final scope = digiKeyScope(config?.url ?? '', config?.workspaceId);
-        final digikey = database == null ? null : DigiKeyCredentialStore(database, scope).read();
-        final mouser = database == null ? null : MouserCredentialStore(database, scope).read();
+        final digikey = database == null
+            ? null
+            : DigiKeyCredentialStore(database, scope).read();
+        final mouser = database == null
+            ? null
+            : MouserCredentialStore(database, scope).read();
         final indicators = <Widget>[
           if (mouser?.credentials.configured == true)
             ServiceStatusLed(name: 'Mouser', statusKey: 'Mouser:$scope'),
@@ -15534,15 +16086,37 @@ class _InventoryHomeState extends State<InventoryHome> {
             ServiceStatusLed(name: 'DigiKey', statusKey: 'DigiKey:$scope'),
         ];
         return Padding(
-          padding: EdgeInsets.fromLTRB(narrow ? 12 : 20, 16, narrow ? 12 : 20, 4),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: _headerIdentity(compactLogo: narrow))),
-            if (indicators.isNotEmpty) ...[
-              const SizedBox(width: 16),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
-                children: [for (final indicator in indicators) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: indicator)]),
+          padding: EdgeInsets.fromLTRB(
+            narrow ? 12 : 20,
+            16,
+            narrow ? 12 : 20,
+            4,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: _headerIdentity(compactLogo: narrow),
+                ),
+              ),
+              if (indicators.isNotEmpty) ...[
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final indicator in indicators)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: indicator,
+                      ),
+                  ],
+                ),
+              ],
             ],
-          ]),
+          ),
         );
       },
     ),
@@ -16381,6 +16955,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openLocation(
     StockLocationRecord location, {
     StateSetter? stockroomRefresh,
+    int? initialTab,
   }) async {
     final path = _locationPath(location.id);
     final items =
@@ -16396,11 +16971,38 @@ class _InventoryHomeState extends State<InventoryHome> {
       0,
       (total, item) => total + item.quantity,
     );
+    final directChildren =
+        locations.where((entry) => entry.parentId == location.id).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    final parentLocation = location.parentId == null
+        ? null
+        : locations.where((entry) => entry.id == location.parentId).firstOrNull;
+    final preferredTab = switch (widget.database?.loadStringPreference(
+      'location_default_tab',
+      fallback: 'inventory',
+    )) {
+      'layout' => 1,
+      'qr' => 2,
+      _ => 0,
+    };
+    final selectedTab = initialTab ?? preferredTab;
+    var locationFullscreen = false;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        final compact = MediaQuery.sizeOf(dialogContext).width < 600;
-        final availableHeight = MediaQuery.sizeOf(dialogContext).height - 150;
+        final screenSize = MediaQuery.sizeOf(dialogContext);
+        final maxDialogWidth = math.max(280.0, screenSize.width - 32);
+        final maxDialogHeight = math.max(280.0, screenSize.height - 48);
+        final minDialogWidth = math.min(420.0, maxDialogWidth);
+        final minDialogHeight = math.min(360.0, maxDialogHeight);
+        final defaultDialogHeight = math
+            .min(650.0, screenSize.height - 150)
+            .clamp(minDialogHeight, maxDialogHeight);
+        final locationRefresh =
+            stockroomRefresh ??
+            (VoidCallback callback) {
+              if (mounted) setState(callback);
+            };
         final qrCode = Container(
           key: Key('location-qr-${location.id}'),
           width: 168,
@@ -16418,6 +17020,65 @@ class _InventoryHomeState extends State<InventoryHome> {
         final locationInfo = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (parentLocation != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: InkWell(
+                  key: Key('location-parent-${location.id}'),
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () {
+                    Navigator.pop(dialogContext);
+                    unawaited(
+                      _openLocation(
+                        parentLocation,
+                        stockroomRefresh: stockroomRefresh,
+                      ),
+                    );
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(dialogContext)
+                          .colorScheme
+                          .primaryContainer,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: Theme.of(dialogContext).colorScheme.primary
+                            .withValues(alpha: .55),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.subdirectory_arrow_left_rounded,
+                          color: Theme.of(dialogContext).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Inside ${_locationPath(parentLocation.id)}',
+                            style: TextStyle(
+                              color: Theme.of(dialogContext)
+                                  .colorScheme
+                                  .onPrimaryContainer,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: Theme.of(dialogContext).colorScheme.primary,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             Text(
               '${items.length} item${items.length == 1 ? '' : 's'} · ${_formatBomQuantity(totalUnits)} units',
               key: Key('location-summary-${location.id}'),
@@ -16429,125 +17090,315 @@ class _InventoryHomeState extends State<InventoryHome> {
               'Includes inventory in this location and its child locations.',
               style: Theme.of(dialogContext).textTheme.bodySmall,
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  key: Key('download-location-qr-${location.id}'),
-                  onPressed: () =>
-                      _downloadLocationQr(dialogContext, location, path),
-                  icon: const Icon(Icons.download_rounded),
-                  label: const Text('Download QR'),
-                ),
-                FilledButton.icon(
-                  key: Key('move-items-from-location-${location.id}'),
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                    final refresh =
-                        stockroomRefresh ??
-                        (VoidCallback callback) {
-                          if (mounted) setState(callback);
-                        };
-                    unawaited(_moveItemsToLocation(location, refresh));
-                  },
-                  icon: const Icon(Icons.drive_file_move_outline),
-                  label: const Text('Move items here'),
-                ),
-              ],
-            ),
-          ],
-        );
-        return AlertDialog(
-          key: Key('location-details-${location.id}'),
-          title: Row(
-            children: [
-              const _LocationIcon(),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(path, maxLines: 2, overflow: TextOverflow.ellipsis),
-              ),
-              IconButton(
-                key: const Key('close-location-details'),
-                tooltip: 'Close location',
-                style: _destructiveIconButtonStyle(dialogContext),
-                onPressed: () => Navigator.pop(dialogContext),
-                icon: const Icon(Icons.close_rounded),
+            if (directChildren.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: Key('sort-items-from-location-${location.id}'),
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                  final refresh =
+                      stockroomRefresh ??
+                      (VoidCallback callback) {
+                        if (mounted) setState(callback);
+                      };
+                  unawaited(_sortItemsIntoChildLocations(location, refresh));
+                },
+                icon: const Icon(Icons.account_tree_outlined),
+                label: const Text('Sort into shelves'),
               ),
             ],
-          ),
-          content: SizedBox(
-            width: 680,
-            height: availableHeight.clamp(360.0, 650.0),
-            child: Column(
-              children: [
-                if (compact)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(alignment: Alignment.center, child: qrCode),
-                      const SizedBox(height: 16),
-                      locationInfo,
-                    ],
-                  )
-                else
+          ],
+        );
+        return DefaultTabController(
+          length: 3,
+          initialIndex: selectedTab,
+          child: StatefulBuilder(
+            builder: (context, refreshLocationDialog) => AlertDialog(
+              key: Key('location-details-${location.id}'),
+              insetPadding: locationFullscreen ? EdgeInsets.zero : null,
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      qrCode,
-                      const SizedBox(width: 16),
-                      Expanded(child: locationInfo),
+                      _LocationIcon(kind: location.kind),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          path,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        key: Key('toggle-location-fullscreen-${location.id}'),
+                        tooltip: locationFullscreen
+                            ? 'Exit full screen'
+                            : 'Full screen',
+                        onPressed: () => refreshLocationDialog(
+                          () => locationFullscreen = !locationFullscreen,
+                        ),
+                        icon: _FullscreenIcon(expanded: locationFullscreen),
+                      ),
+                      IconButton(
+                        key: const Key('close-location-details'),
+                        tooltip: 'Close location',
+                        style: _destructiveIconButtonStyle(dialogContext),
+                        onPressed: () => Navigator.pop(dialogContext),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
                     ],
                   ),
-                const SizedBox(height: 16),
-                const Divider(height: 1),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: items.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'No inventory is assigned to this area yet.',
-                            textAlign: TextAlign.center,
-                          ),
-                        )
-                      : ListView.separated(
-                          itemCount: items.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            return ListTile(
-                              key: Key('location-item-${item.id}'),
-                              leading: _ItemVisual(
-                                item: item,
-                                size: 42,
-                                typeIcon: _itemTypeIcon(item),
-                                typeIconImageBytes: _iconImageBytesFromKey(
-                                  _itemTypeIconKey(item),
-                                ),
-                              ),
-                              title: Text(item.name),
-                              subtitle: Text(
-                                '${_locationPath(item.storageLocationId)} · ${_itemTypeDisplayLabel(item)}',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              trailing: Text(
-                                '×${_formatBomQuantity(item.quantity)}',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                                _focusInventoryItemInMainView(item);
-                                _openDetails(item);
-                              },
-                            );
-                          },
+                ],
+              ),
+              content: SizedBox(
+                width:
+                    (locationFullscreen
+                            ? screenSize.width
+                            : (_locationDialogSizes[location.id]?.width ??
+                                  680.0))
+                        .clamp(minDialogWidth, maxDialogWidth),
+                height:
+                    (locationFullscreen
+                            ? screenSize.height
+                            : (_locationDialogSizes[location.id]?.height ??
+                                  defaultDialogHeight))
+                        .clamp(minDialogHeight, maxDialogHeight),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Column(
+                      children: [
+                        locationInfo,
+                        const SizedBox(height: 16),
+                        const Divider(height: 1),
+                        const SizedBox(height: 8),
+                        const TabBar(
+                          tabs: [
+                            Tab(
+                              icon: Icon(Icons.inventory_2_outlined),
+                              text: 'Inventory',
+                            ),
+                            Tab(icon: _LayoutTabIcon(), text: 'Layout'),
+                            Tab(
+                              icon: Icon(Icons.qr_code_rounded),
+                              text: 'QR Code',
+                            ),
+                          ],
                         ),
+                        Expanded(
+                          child: Stack(
+                            children: [
+                              TabBarView(
+                                physics: const NeverScrollableScrollPhysics(),
+                                children: [
+                                  items.isEmpty
+                                      ? const Center(
+                                          child: Text(
+                                            'No inventory is assigned to this area yet.',
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        )
+                                      : ListView.separated(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 68,
+                                          ),
+                                          itemCount: items.length,
+                                          separatorBuilder: (_, _) =>
+                                              const Divider(height: 1),
+                                          itemBuilder: (context, index) {
+                                            final item = items[index];
+                                            return ListTile(
+                                              key: Key(
+                                                'location-item-${item.id}',
+                                              ),
+                                              leading: _ItemVisual(
+                                                item: item,
+                                                size: 42,
+                                                typeIcon: _itemTypeIcon(item),
+                                                typeIconImageBytes:
+                                                    _iconImageBytesFromKey(
+                                                      _itemTypeIconKey(item),
+                                                    ),
+                                              ),
+                                              title: Text(item.name),
+                                              subtitle: Text(
+                                                '${_locationPath(item.storageLocationId)} · ${_itemTypeDisplayLabel(item)}',
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              trailing: Text(
+                                                '×${_formatBomQuantity(item.quantity)}',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              onTap: () {
+                                                Navigator.pop(dialogContext);
+                                                _focusInventoryItemInMainView(
+                                                  item,
+                                                );
+                                                _openDetails(item);
+                                              },
+                                            );
+                                          },
+                                        ),
+                                  _layoutEditor(
+                                    parentId: location.id,
+                                    title:
+                                        'Draw the front view of ${location.name}. Add shelves, racks, drawers, or bins here.',
+                                    stockroomRefresh: locationRefresh,
+                                  ),
+                                  Center(
+                                    child: SingleChildScrollView(
+                                      padding: const EdgeInsets.all(20),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          qrCode,
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            path,
+                                            textAlign: TextAlign.center,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium,
+                                          ),
+                                          const SizedBox(height: 12),
+                                          OutlinedButton.icon(
+                                            key: Key(
+                                              'download-location-qr-${location.id}',
+                                            ),
+                                            onPressed: () =>
+                                                _downloadLocationQr(
+                                                  dialogContext,
+                                                  location,
+                                                  path,
+                                                ),
+                                            icon: const Icon(
+                                              Icons.download_rounded,
+                                            ),
+                                            label: const Text('Download QR'),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: BackdropFilter(
+                                    filter: ui.ImageFilter.blur(
+                                      sigmaX: 10,
+                                      sigmaY: 10,
+                                    ),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surface
+                                            .withValues(alpha: .12),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outlineVariant
+                                              .withValues(alpha: .28),
+                                        ),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: FilledButton.icon(
+                                          key: Key(
+                                            'move-items-from-location-${location.id}',
+                                          ),
+                                          onPressed: () {
+                                            Navigator.pop(dialogContext);
+                                            unawaited(
+                                              _moveItemsToLocation(
+                                                location,
+                                                locationRefresh,
+                                              ),
+                                            );
+                                          },
+                                          icon: const Icon(
+                                            Icons.drive_file_move_outline,
+                                          ),
+                                          label: const Text('Move items here'),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                        child: Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerMove: (event) {
+                            if (event.buttons & kPrimaryMouseButton == 0)
+                              return;
+                            final remainder =
+                                (_locationDialogResizeRemainders[location.id] ??
+                                    Offset.zero) +
+                                event.delta;
+                            _locationDialogResizeRemainders[location.id] =
+                                Offset.zero;
+                            final current =
+                                _locationDialogSizes[location.id] ??
+                                Size(680, defaultDialogHeight);
+                            refreshLocationDialog(() {
+                              _locationDialogSizes[location.id] = Size(
+                                (current.width + remainder.dx).clamp(
+                                  minDialogWidth,
+                                  maxDialogWidth,
+                                ),
+                                (current.height + remainder.dy).clamp(
+                                  minDialogHeight,
+                                  maxDialogHeight,
+                                ),
+                              );
+                            });
+                          },
+                          onPointerUp: (_) => _locationDialogResizeRemainders
+                              .remove(location.id),
+                          child: Tooltip(
+                            message: 'Drag to resize ${location.name}',
+                            child: SizedBox(
+                              width: 38,
+                              height: 38,
+                              child: CustomPaint(
+                                painter: _LayoutDogearPainter(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primaryContainer,
+                                  lineColor: Theme.of(context)
+                                      .colorScheme
+                                      .primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         );
@@ -16555,9 +17406,18 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  Future<void> _addLocation(StateSetter refresh) async {
+  Future<void> _addLocation(
+    StateSetter refresh, {
+    String? initialParentId,
+    int? initialGridX,
+    int? initialGridY,
+    int? initialGridWidth,
+    int? initialGridHeight,
+  }) async {
     final controller = TextEditingController();
-    String? parentId;
+    final depthController = TextEditingController(text: '1');
+    String? parentId = initialParentId;
+    var kind = StockLocationKind.location;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -16596,6 +17456,38 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ],
                   onChanged: (value) => parentId = value,
                 ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<StockLocationKind>(
+                  key: const Key('new-location-kind'),
+                  initialValue: kind,
+                  decoration: const InputDecoration(labelText: 'What is it?'),
+                  items: [
+                    for (final value in StockLocationKind.values)
+                      DropdownMenuItem(
+                        value: value,
+                        child: Row(
+                          children: [
+                            Icon(locationKindIcon(value), size: 18),
+                            const SizedBox(width: 8),
+                            Text(locationKindLabel(value)),
+                          ],
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => kind = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const Key('new-location-depth-rows'),
+                  controller: depthController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Rows deep',
+                    helperText: 'Example: a two-row-deep rack is 2.',
+                  ),
+                ),
               ],
             ),
           ),
@@ -16616,13 +17508,24 @@ class _InventoryHomeState extends State<InventoryHome> {
       ),
     );
     final name = controller.text.trim();
-    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    final depthRows =
+        int.tryParse(depthController.text.trim())?.clamp(1, 12) ?? 1;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+      depthController.dispose();
+    });
     if (accepted != true || name.isEmpty || !mounted) return;
     locations.add(
       StockLocationRecord(
         id: 'LOC-${DateTime.now().microsecondsSinceEpoch}',
         name: name,
         parentId: parentId,
+        kind: kind,
+        depthRows: depthRows,
+        gridX: initialGridX ?? (locations.length % 4) * 4,
+        gridY: initialGridY ?? (locations.length ~/ 4) * 3,
+        gridWidth: initialGridWidth ?? 3,
+        gridHeight: initialGridHeight ?? 2,
       ),
     );
     _recordAudit('create', 'location', locations.last.id, {'name': name});
@@ -16653,22 +17556,73 @@ class _InventoryHomeState extends State<InventoryHome> {
     StateSetter refresh,
   ) async {
     final controller = TextEditingController(text: location.name);
+    final depthController = TextEditingController(
+      text: '${location.depthRows}',
+    );
+    var parentId = location.parentId;
+    var kind = location.kind;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Rename location'),
-          content: TextField(
-            key: const Key('rename-location-name'),
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Location name'),
-            onChanged: (_) => setDialogState(() {}),
-            onSubmitted: (_) {
-              if (controller.text.trim().isNotEmpty) {
-                Navigator.pop(dialogContext, true);
-              }
-            },
+          title: const Text('Edit location'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const Key('rename-location-name'),
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Location name'),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  initialValue: parentId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Inside (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('Top level'),
+                    ),
+                    for (final candidate in locations)
+                      if (candidate.id != location.id &&
+                          !_locationIsWithin(candidate.id, location.id))
+                        DropdownMenuItem(
+                          value: candidate.id,
+                          child: Text(_locationPath(candidate.id)),
+                        ),
+                  ],
+                  onChanged: (value) => setDialogState(() => parentId = value),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<StockLocationKind>(
+                  initialValue: kind,
+                  decoration: const InputDecoration(labelText: 'What is it?'),
+                  items: [
+                    for (final value in StockLocationKind.values)
+                      DropdownMenuItem(
+                        value: value,
+                        child: Text(locationKindLabel(value)),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => kind = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: depthController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Rows deep'),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -16681,22 +17635,28 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ? null
                   : () => Navigator.pop(dialogContext, true),
               icon: const Icon(Icons.save_outlined),
-              label: const Text('Rename'),
+              label: const Text('Save'),
             ),
           ],
         ),
       ),
     );
     final nextName = controller.text.trim();
-    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
+    final depthRows =
+        int.tryParse(depthController.text.trim())?.clamp(1, 12).toInt() ?? 1;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+      depthController.dispose();
+    });
     if (accepted != true || nextName.isEmpty || !mounted) return;
     final oldPath = _locationPath(location.id);
     final index = locations.indexWhere((entry) => entry.id == location.id);
     if (index < 0) return;
-    locations[index] = StockLocationRecord(
-      id: location.id,
+    locations[index] = location.copyWith(
       name: nextName,
-      parentId: location.parentId,
+      parentId: parentId,
+      kind: kind,
+      depthRows: depthRows,
     );
     _refreshStructuredLocationPaths();
     _recordAudit('rename', 'location', location.id, {
@@ -16759,11 +17719,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     for (var index = 0; index < locations.length; index++) {
       final child = locations[index];
       if (child.parentId != location.id) continue;
-      locations[index] = StockLocationRecord(
-        id: child.id,
-        name: child.name,
-        parentId: location.parentId,
-      );
+      locations[index] = child.copyWith(parentId: location.parentId);
     }
     for (var index = 0; index < inventory.length; index++) {
       final item = inventory[index];
@@ -16787,12 +17743,27 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (mounted) setState(() {});
   }
 
+  List<String> _locationHistoryAfterMove(InventoryItem item, String nextPath) {
+    final previousPath = item.storageLocation.trim();
+    if (previousPath.isEmpty || previousPath == nextPath) {
+      return item.locationHistory;
+    }
+    return [
+      previousPath,
+      ...item.locationHistory.where((path) => path != previousPath),
+    ].take(5).toList();
+  }
+
   void _moveInventoryItem(InventoryItem item, StockLocationRecord location) {
     setState(() {
       _publishInventoryItem(
         item.copyWith(
           storageLocationId: location.id,
           storageLocation: _locationPath(location.id),
+          locationHistory: _locationHistoryAfterMove(
+            item,
+            _locationPath(location.id),
+          ),
         ),
       );
       _recordAudit('move', 'inventory', item.id, {
@@ -16801,6 +17772,253 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
     });
     _persist();
+  }
+
+  String _moveItemColorLabel(InventoryItem item) {
+    final label = item.itemColorLabel.trim();
+    if (label.isNotEmpty) return label;
+    final value = item.itemColorName.trim();
+    if (value.isNotEmpty) return value;
+    final gradient = _itemGradientName(item);
+    if (gradient.isNotEmpty) return gradient;
+    return _itemCoextrudedName(item);
+  }
+
+  Widget _moveItemTile({
+    required InventoryItem item,
+    required bool here,
+    required VoidCallback? onTap,
+    Key? key,
+  }) {
+    final colorLabel = _moveItemColorLabel(item);
+    final location = item.storageLocationId.isNotEmpty
+        ? _locationPath(item.storageLocationId)
+        : item.storageLocation.trim();
+    // Inventory pages deliberately load without every image blob. This picker
+    // is small and local, so hydrate the thumbnail source only for its visible
+    // result row; the color swatch remains the fallback for image-free items.
+    final localImage =
+        item.thumbnailBytes ??
+        item.imageBytes ??
+        widget.database?.loadInventoryImages(item.id).imageBytes;
+    final visualItem =
+        localImage == null ||
+            item.thumbnailBytes != null ||
+            item.imageBytes != null
+        ? item
+        : item.copyWith(imageBytes: localImage);
+    return ListTile(
+      key: key,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      leading: _ItemVisual(
+        item: visualItem,
+        size: 42,
+        typeIcon: _itemTypeIcon(item),
+        typeIconImageBytes: _iconImageBytesFromKey(_itemTypeIconKey(item)),
+      ),
+      title: Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (_itemHasColorIndicator(item))
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ItemColorIndicator(item: item, size: 14),
+                    if (colorLabel.isNotEmpty) ...[
+                      const SizedBox(width: 5),
+                      Text(colorLabel),
+                    ],
+                  ],
+                ),
+              if (item.materialName.trim().isNotEmpty)
+                Text(item.materialName.trim()),
+              Text(_itemTypeDisplayLabel(item)),
+            ],
+          ),
+          Text(
+            location.isEmpty ? 'No location' : location,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+      trailing: here
+          ? const Icon(Icons.check_rounded)
+          : const Icon(Icons.arrow_forward_rounded),
+      onTap: onTap,
+    );
+  }
+
+  Future<void> _sortItemsIntoChildLocations(
+    StockLocationRecord source,
+    StateSetter refresh,
+  ) async {
+    final destinations =
+        locations.where((entry) => entry.parentId == source.id).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    if (destinations.isEmpty) return;
+    var destinationId = destinations.first.id;
+    var query = '';
+    final selectedIds = <String>{};
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final needle = _normalized(query);
+          final candidates = inventory.where((item) {
+            if (item.archived || item.storageLocationId != source.id)
+              return false;
+            if (needle.isEmpty) return true;
+            return _normalized(
+              '${item.name} ${item.brand} ${item.barcode} ${item.id} '
+              '${item.storageLocation} ${_locationPath(item.storageLocationId)}',
+            ).contains(needle);
+          }).toList()..sort((a, b) => a.name.compareTo(b.name));
+          final destination =
+              destinations
+                  .where((entry) => entry.id == destinationId)
+                  .firstOrNull ??
+              destinations.first;
+          void moveSelected() {
+            final chosen = candidates
+                .where((item) => selectedIds.contains(item.id))
+                .toList();
+            if (chosen.isEmpty) return;
+            setState(() {
+              for (final item in chosen) {
+                _publishInventoryItem(
+                  item.copyWith(
+                    storageLocationId: destination.id,
+                    storageLocation: _locationPath(destination.id),
+                    locationHistory: _locationHistoryAfterMove(
+                      item,
+                      _locationPath(destination.id),
+                    ),
+                  ),
+                );
+                _recordAudit('move', 'inventory', item.id, {
+                  'name': item.name,
+                  'location': _locationPath(destination.id),
+                });
+              }
+            });
+            _persist();
+            refresh(() {});
+            setDialogState(() => selectedIds.clear());
+          }
+
+          return AlertDialog(
+            key: Key('sort-items-from-location-dialog'),
+            title: Text('Sort ${source.name} into shelves'),
+            content: SizedBox(
+              width: 640,
+              height: 540,
+              child: Column(
+                children: [
+                  DropdownButtonFormField<String>(
+                    key: const Key('sort-items-destination'),
+                    initialValue: destination.id,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Move selected items to',
+                    ),
+                    items: [
+                      for (final entry in destinations)
+                        DropdownMenuItem(
+                          value: entry.id,
+                          child: Text(
+                            '${locationKindLabel(entry.kind)} · ${entry.name}',
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null)
+                        setDialogState(() => destinationId = value);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const Key('sort-items-search'),
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      hintText: 'Search items or location',
+                    ),
+                    onChanged: (value) => setDialogState(() => query = value),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: candidates.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No items are stored directly in this location.',
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: candidates.length,
+                            itemBuilder: (context, index) {
+                              final item = candidates[index];
+                              final selected = selectedIds.contains(item.id);
+                              return CheckboxListTile(
+                                key: Key('sort-item-${item.id}'),
+                                value: selected,
+                                onChanged: (_) => setDialogState(() {
+                                  if (!selectedIds.add(item.id))
+                                    selectedIds.remove(item.id);
+                                }),
+                                secondary: _ItemVisual(
+                                  item: item,
+                                  size: 38,
+                                  typeIcon: _itemTypeIcon(item),
+                                  typeIconImageBytes: _iconImageBytesFromKey(
+                                    _itemTypeIconKey(item),
+                                  ),
+                                ),
+                                title: Text(item.name),
+                                subtitle: Wrap(
+                                  spacing: 8,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    if (_itemHasColorIndicator(item))
+                                      _ItemColorIndicator(item: item, size: 13),
+                                    if (_moveItemColorLabel(item).isNotEmpty)
+                                      Text(_moveItemColorLabel(item)),
+                                    Text(_itemTypeDisplayLabel(item)),
+                                  ],
+                                ),
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Done'),
+              ),
+              FilledButton.icon(
+                key: const Key('confirm-sort-items'),
+                onPressed: selectedIds.isEmpty ? null : moveSelected,
+                icon: const Icon(Icons.drive_file_move_outline),
+                label: Text(
+                  'Move ${selectedIds.length} item${selectedIds.length == 1 ? '' : 's'}',
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _moveItemsToLocation(
@@ -16819,7 +18037,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                     !item.archived &&
                     (needle.isEmpty ||
                         _normalized(
-                          '${item.name} ${item.brand} ${item.barcode} ${item.id}',
+                          '${item.name} ${item.brand} ${item.barcode} ${item.id} ${item.storageLocation} ${_locationPath(item.storageLocationId)}',
                         ).contains(needle)),
               )
               .toList();
@@ -16898,18 +18116,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                       itemBuilder: (context, index) {
                         final item = matches[index];
                         final here = item.storageLocationId == location.id;
-                        return ListTile(
+                        return _moveItemTile(
                           key: Key('move-item-${item.id}'),
-                          leading: Icon(item.icon),
-                          title: Text(item.name),
-                          subtitle: Text(
-                            item.storageLocation.isEmpty
-                                ? 'No location'
-                                : item.storageLocation,
-                          ),
-                          trailing: here
-                              ? const Icon(Icons.check_rounded)
-                              : const Icon(Icons.arrow_forward_rounded),
+                          item: item,
+                          here: here,
                           onTap: here
                               ? null
                               : () {
@@ -17066,23 +18276,794 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  void _moveLayoutLocation({
+    required StockLocationRecord location,
+    required Offset delta,
+    required int maxX,
+    required int maxY,
+    required StateSetter stockroomRefresh,
+    required StateSetter refreshStructure,
+  }) {
+    const grid = 24.0;
+    final remainder =
+        (_layoutMoveRemainders[location.id] ?? Offset.zero) + delta;
+    final stepX = remainder.dx.abs() >= grid
+        ? (remainder.dx / grid).truncate()
+        : 0;
+    final stepY = remainder.dy.abs() >= grid
+        ? (remainder.dy / grid).truncate()
+        : 0;
+    _layoutMoveRemainders[location.id] = Offset(
+      remainder.dx - stepX * grid,
+      remainder.dy - stepY * grid,
+    );
+    if (stepX == 0 && stepY == 0) return;
+    final index = locations.indexWhere((entry) => entry.id == location.id);
+    if (index < 0) return;
+    final current = locations[index];
+    locations[index] = current.copyWith(
+      gridX: (current.gridX + stepX)
+          .clamp(0, maxX - current.gridWidth + 1)
+          .toInt(),
+      gridY: (current.gridY + stepY)
+          .clamp(0, maxY - current.gridHeight + 1)
+          .toInt(),
+    );
+    stockroomRefresh(() {});
+    refreshStructure(() {});
+  }
+
+  Future<void> _editLayoutCanvasSize({
+    required BuildContext context,
+    required String canvasKey,
+    required StateSetter stockroomRefresh,
+    required StateSetter refreshStructure,
+  }) async {
+    final current = layoutCanvasSizes[canvasKey] ?? const [60, 40];
+    final columns = TextEditingController(text: current[0].toString());
+    final rows = TextEditingController(text: current[1].toString());
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Resize sketch area'),
+        content: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: columns,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Columns'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: rows,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Rows'),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved == true) {
+      layoutCanvasSizes[canvasKey] = [
+        (int.tryParse(columns.text) ?? current[0]).clamp(12, 160),
+        (int.tryParse(rows.text) ?? current[1]).clamp(10, 120),
+      ];
+      _persist();
+      stockroomRefresh(() {});
+      refreshStructure(() {});
+    }
+    columns.dispose();
+    rows.dispose();
+  }
+
+  void _resizeLayoutLocation({
+    required StockLocationRecord location,
+    required Offset delta,
+    required bool fromLeft,
+    required bool fromTop,
+    required int maxX,
+    required int maxY,
+    required StateSetter stockroomRefresh,
+    required StateSetter refreshStructure,
+  }) {
+    const grid = 24.0;
+    final key = '${location.id}:${fromLeft ? 'l' : 'r'}:${fromTop ? 't' : 'b'}';
+    final remainder = (_layoutResizeRemainders[key] ?? Offset.zero) + delta;
+    final stepX = remainder.dx.abs() >= grid
+        ? (remainder.dx / grid).truncate()
+        : 0;
+    final stepY = remainder.dy.abs() >= grid
+        ? (remainder.dy / grid).truncate()
+        : 0;
+    _layoutResizeRemainders[key] = Offset(
+      remainder.dx - stepX * grid,
+      remainder.dy - stepY * grid,
+    );
+    if (stepX == 0 && stepY == 0) return;
+
+    final index = locations.indexWhere((entry) => entry.id == location.id);
+    if (index < 0) return;
+    final current = locations[index];
+    var x = current.gridX;
+    var y = current.gridY;
+    var width = current.gridWidth;
+    var height = current.gridHeight;
+    if (fromLeft) {
+      final right = x + width;
+      x = (x + stepX).clamp(0, right - 1).toInt();
+      width = right - x;
+    } else {
+      width = (width + stepX).clamp(1, maxX - x + 1).toInt();
+    }
+    if (fromTop) {
+      final bottom = y + height;
+      y = (y + stepY).clamp(0, bottom - 1).toInt();
+      height = bottom - y;
+    } else {
+      height = (height + stepY).clamp(1, maxY - y + 1).toInt();
+    }
+    locations[index] = current.copyWith(
+      gridX: x,
+      gridY: y,
+      gridWidth: width,
+      gridHeight: height,
+    );
+    stockroomRefresh(() {});
+    refreshStructure(() {});
+  }
+
+  Widget _layoutResizeHandle({
+    required StockLocationRecord location,
+    required bool fromLeft,
+    required bool fromTop,
+    required int maxX,
+    required int maxY,
+    required StateSetter stockroomRefresh,
+    required StateSetter refreshStructure,
+  }) => Positioned(
+    left: fromLeft ? 0 : null,
+    right: fromLeft ? null : 0,
+    top: fromTop ? 0 : null,
+    bottom: fromTop ? null : 0,
+    child: MouseRegion(
+      cursor: fromLeft == fromTop
+          ? SystemMouseCursors.resizeUpLeftDownRight
+          : SystemMouseCursors.resizeUpRightDownLeft,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (details) => _resizeLayoutLocation(
+          location: location,
+          delta: details.delta,
+          fromLeft: fromLeft,
+          fromTop: fromTop,
+          maxX: maxX,
+          maxY: maxY,
+          stockroomRefresh: stockroomRefresh,
+          refreshStructure: refreshStructure,
+        ),
+        onPanEnd: (_) {
+          _layoutResizeRemainders.remove(
+            '${location.id}:${fromLeft ? 'l' : 'r'}:${fromTop ? 't' : 'b'}',
+          );
+          _persist();
+          if (mounted) setState(() {});
+        },
+        child: Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border.all(
+              color: Theme.of(context).colorScheme.primary,
+              width: 1.5,
+            ),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  void _frameLayoutToLocations({
+    required List<StockLocationRecord> locationsToFrame,
+    required Size viewport,
+    required String canvasKey,
+    required TransformationController transform,
+  }) {
+    if (_layoutEditMode || viewport.isEmpty) return;
+    const grid = 24.0;
+    final mapped = locationsToFrame
+        .where((location) => location.gridWidth > 0 && location.gridHeight > 0)
+        .toList();
+    if (mapped.isEmpty) {
+      transform.value = Matrix4.identity();
+      return;
+    }
+    final left = mapped
+        .map((location) => location.gridX * grid)
+        .reduce(math.min);
+    final top = mapped
+        .map((location) => location.gridY * grid)
+        .reduce(math.min);
+    final right = mapped
+        .map((location) => (location.gridX + location.gridWidth) * grid)
+        .reduce(math.max);
+    final bottom = mapped
+        .map((location) => (location.gridY + location.gridHeight) * grid)
+        .reduce(math.max);
+    final contentWidth = math.max(grid, right - left);
+    final contentHeight = math.max(grid, bottom - top);
+    const padding = 64.0;
+    final availableWidth =
+        (_layoutQuarterTurns.isOdd ? viewport.height : viewport.width) -
+        padding * 2;
+    final availableHeight =
+        (_layoutQuarterTurns.isOdd ? viewport.width : viewport.height) -
+        padding * 2;
+    final scale = math
+        .min(availableWidth / contentWidth, availableHeight / contentHeight)
+        .clamp(.35, 3.5)
+        .toDouble();
+    final centerX = (left + right) / 2;
+    final centerY = (top + bottom) / 2;
+    transform.value = Matrix4.identity()
+      ..translateByDouble(
+        viewport.width / 2 - centerX * scale,
+        viewport.height / 2 - centerY * scale,
+        0,
+        1,
+      )
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
+  Widget _layoutEditor({
+    required String? parentId,
+    required String title,
+    required StateSetter stockroomRefresh,
+  }) => StatefulBuilder(
+    builder: (context, refreshStructure) {
+      final children = locations
+          .where((location) => location.parentId == parentId)
+          .toList();
+      const grid = 24.0;
+      final canvasKey = parentId ?? '__shop__';
+      final transform = _layoutTransforms.putIfAbsent(
+        canvasKey,
+        TransformationController.new,
+      );
+      final canvasSize = layoutCanvasSizes[canvasKey] ?? const [60, 40];
+      final baseCanvasWidth = canvasSize[0] * grid;
+      final baseCanvasHeight = canvasSize[1] * grid;
+
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 10, 0, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton.outlined(
+                  tooltip: 'Frame mapped locations',
+                  onPressed: () {
+                    _layoutFrameKey = null;
+                    refreshStructure(() {});
+                  },
+                  icon: const Icon(Icons.center_focus_strong_rounded),
+                ),
+                const SizedBox(width: 6),
+                IconButton.outlined(
+                  tooltip: 'Rotate layout',
+                  onPressed: () {
+                    _layoutQuarterTurns = (_layoutQuarterTurns + 1) % 4;
+                    _layoutFrameKey = null;
+                    stockroomRefresh(() {});
+                    refreshStructure(() {});
+                  },
+                  icon: const _LayoutRotateIcon(),
+                ),
+                const SizedBox(width: 6),
+                IconButton.outlined(
+                  key: Key('edit-layout-${parentId ?? 'shop'}'),
+                  tooltip: _layoutEditMode
+                      ? 'Done editing layout'
+                      : 'Edit layout',
+                  onPressed: () {
+                    refreshStructure(() {
+                      _layoutEditMode = !_layoutEditMode;
+                      if (!_layoutEditMode) _layoutFrameKey = null;
+                      _layoutDrawStart = null;
+                      _layoutDrawCurrent = null;
+                      _layoutDrawParentId = null;
+                    });
+                    stockroomRefresh(() {});
+                  },
+                  icon: Icon(
+                    _layoutEditMode ? Icons.check_rounded : Icons.edit_outlined,
+                  ),
+                ),
+                if (_layoutEditMode) ...[
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: 'Resize sketch area',
+                    child: Text(
+                      '${canvasSize[0]} × ${canvasSize[1]}',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton.outlined(
+                    tooltip: 'Resize sketch area',
+                    onPressed: () => _editLayoutCanvasSize(
+                      context: context,
+                      canvasKey: canvasKey,
+                      stockroomRefresh: stockroomRefresh,
+                      refreshStructure: refreshStructure,
+                    ),
+                    icon: const Icon(Icons.aspect_ratio_rounded),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (_layoutEditMode)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Drag blank grid to draw. Drag a location to move it. Drag a corner to resize. Middle-drag to pan.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // The logical grid keeps its saved minimum, while its visible
+                // drawing surface grows with the resizable Stockroom panel.
+                final canvasWidth = math
+                    .max(baseCanvasWidth, constraints.maxWidth)
+                    .toDouble();
+                final canvasHeight = math
+                    .max(baseCanvasHeight, constraints.maxHeight)
+                    .toDouble();
+                final maxX = (canvasWidth / grid).ceil() - 1;
+                final maxY = (canvasHeight / grid).ceil() - 1;
+                final signature =
+                    '$canvasKey:${constraints.maxWidth.round()}x${constraints.maxHeight.round()}:$_layoutQuarterTurns:${children.map((location) => '${location.id}:${location.gridX},${location.gridY},${location.gridWidth},${location.gridHeight}').join('|')}';
+                if (!_layoutEditMode && _layoutFrameKey != signature) {
+                  _layoutFrameKey = signature;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted ||
+                        _layoutEditMode ||
+                        _layoutFrameKey != signature)
+                      return;
+                    _frameLayoutToLocations(
+                      locationsToFrame: children,
+                      viewport: constraints.biggest,
+                      canvasKey: canvasKey,
+                      transform: transform,
+                    );
+                  });
+                }
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.outline
+                                  .withValues(alpha: .45),
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Listener(
+                            onPointerMove: (event) {
+                              if (event.buttons & kMiddleMouseButton == 0)
+                                return;
+                              transform.value = transform.value.clone()
+                                ..translateByDouble(
+                                  event.delta.dx,
+                                  event.delta.dy,
+                                  0,
+                                  1,
+                                );
+                            },
+                            child: Transform.rotate(
+                              angle: _layoutQuarterTurns * math.pi / 2,
+                              child: InteractiveViewer(
+                                transformationController: transform,
+                                constrained: false,
+                                boundaryMargin: const EdgeInsets.all(480),
+                                minScale: .35,
+                                maxScale: 3.5,
+                                panEnabled: false,
+                                scaleEnabled: true,
+                                trackpadScrollCausesScale: true,
+                                child: SizedBox(
+                                  width: canvasWidth,
+                                  height: canvasHeight,
+                                  child: CustomPaint(
+                                    painter: _DotGridPainter(
+                                      Theme.of(context).colorScheme.primary
+                                          .withValues(alpha: .26),
+                                    ),
+                                    child: Stack(
+                                      clipBehavior: Clip.hardEdge,
+                                      children: [
+                                        if (_layoutEditMode)
+                                          Positioned.fill(
+                                            child: GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onPanStart: (details) {
+                                                _layoutDrawParentId = parentId;
+                                                _layoutDrawStart =
+                                                    details.localPosition;
+                                                _layoutDrawCurrent =
+                                                    details.localPosition;
+                                                refreshStructure(() {});
+                                              },
+                                              onPanUpdate: (details) {
+                                                if (_layoutDrawParentId !=
+                                                    parentId)
+                                                  return;
+                                                _layoutDrawCurrent =
+                                                    details.localPosition;
+                                                refreshStructure(() {});
+                                              },
+                                              onPanEnd: (_) async {
+                                                final start = _layoutDrawStart;
+                                                final end = _layoutDrawCurrent;
+                                                if (_layoutDrawParentId !=
+                                                        parentId ||
+                                                    start == null ||
+                                                    end == null)
+                                                  return;
+                                                _layoutDrawStart = null;
+                                                _layoutDrawCurrent = null;
+                                                _layoutDrawParentId = null;
+                                                final left = math.min(
+                                                  start.dx,
+                                                  end.dx,
+                                                );
+                                                final top = math.min(
+                                                  start.dy,
+                                                  end.dy,
+                                                );
+                                                final right = math.max(
+                                                  start.dx,
+                                                  end.dx,
+                                                );
+                                                final bottom = math.max(
+                                                  start.dy,
+                                                  end.dy,
+                                                );
+                                                final x = (left / grid)
+                                                    .floor()
+                                                    .clamp(0, maxX)
+                                                    .toInt();
+                                                final y = (top / grid)
+                                                    .floor()
+                                                    .clamp(0, maxY)
+                                                    .toInt();
+                                                final width = math
+                                                    .max(
+                                                      1,
+                                                      (right / grid).ceil() - x,
+                                                    )
+                                                    .toInt();
+                                                final height = math
+                                                    .max(
+                                                      1,
+                                                      (bottom / grid).ceil() -
+                                                          y,
+                                                    )
+                                                    .toInt();
+                                                refreshStructure(() {});
+                                                await _addLocation(
+                                                  stockroomRefresh,
+                                                  initialParentId: parentId,
+                                                  initialGridX: x,
+                                                  initialGridY: y,
+                                                  initialGridWidth: width,
+                                                  initialGridHeight: height,
+                                                );
+                                                refreshStructure(() {});
+                                              },
+                                            ),
+                                          ),
+                                        if (_layoutDrawParentId == parentId &&
+                                            _layoutDrawStart != null &&
+                                            _layoutDrawCurrent != null)
+                                          Positioned(
+                                            left: math.min(
+                                              _layoutDrawStart!.dx,
+                                              _layoutDrawCurrent!.dx,
+                                            ),
+                                            top: math.min(
+                                              _layoutDrawStart!.dy,
+                                              _layoutDrawCurrent!.dy,
+                                            ),
+                                            width: math.max(
+                                              24,
+                                              math.max(
+                                                    _layoutDrawStart!.dx,
+                                                    _layoutDrawCurrent!.dx,
+                                                  ) -
+                                                  math.min(
+                                                    _layoutDrawStart!.dx,
+                                                    _layoutDrawCurrent!.dx,
+                                                  ),
+                                            ),
+                                            height: math.max(
+                                              24,
+                                              math.max(
+                                                    _layoutDrawStart!.dy,
+                                                    _layoutDrawCurrent!.dy,
+                                                  ) -
+                                                  math.min(
+                                                    _layoutDrawStart!.dy,
+                                                    _layoutDrawCurrent!.dy,
+                                                  ),
+                                            ),
+                                            child: IgnorePointer(
+                                              child: DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .primary
+                                                      .withValues(alpha: .22),
+                                                  border: Border.all(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .primary,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        for (final location in children)
+                                          Positioned(
+                                            left: location.gridX * grid,
+                                            top: location.gridY * grid,
+                                            width: math
+                                                .min(
+                                                  location.gridWidth * grid,
+                                                  canvasWidth -
+                                                      location.gridX * grid,
+                                                )
+                                                .toDouble(),
+                                            height: math
+                                                .min(
+                                                  location.gridHeight * grid,
+                                                  canvasHeight -
+                                                      location.gridY * grid,
+                                                )
+                                                .toDouble(),
+                                            child: GestureDetector(
+                                              onTap: () => _openLocation(
+                                                location,
+                                                stockroomRefresh:
+                                                    stockroomRefresh,
+                                                initialTab: 1,
+                                              ),
+                                              onPanUpdate: _layoutEditMode
+                                                  ? (details) =>
+                                                        _moveLayoutLocation(
+                                                          location: location,
+                                                          delta: details.delta,
+                                                          maxX: maxX,
+                                                          maxY: maxY,
+                                                          stockroomRefresh:
+                                                              stockroomRefresh,
+                                                          refreshStructure:
+                                                              refreshStructure,
+                                                        )
+                                                  : null,
+                                              onPanEnd: _layoutEditMode
+                                                  ? (_) {
+                                                      _layoutMoveRemainders
+                                                          .remove(location.id);
+                                                      _persist();
+                                                      if (mounted)
+                                                        setState(() {});
+                                                    }
+                                                  : null,
+                                              child: DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .primaryContainer
+                                                      .withValues(alpha: .62),
+                                                  border: Border.all(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .primary
+                                                        .withValues(alpha: .85),
+                                                    width: 1.5,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(3),
+                                                ),
+                                                child: Stack(
+                                                  clipBehavior: Clip.hardEdge,
+                                                  children: [
+                                                    Center(
+                                                      child:
+                                                          location.gridWidth <=
+                                                                  3 &&
+                                                              location.gridHeight >
+                                                                  location
+                                                                      .gridWidth
+                                                          ? RotatedBox(
+                                                              quarterTurns: 3,
+                                                              child: Padding(
+                                                                padding:
+                                                                    const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          3,
+                                                                    ),
+                                                                child: Text(
+                                                                  location.name,
+                                                                  maxLines: 1,
+                                                                  textAlign:
+                                                                      TextAlign
+                                                                          .center,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
+                                                                  style: const TextStyle(
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            )
+                                                          : Padding(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal:
+                                                                        16,
+                                                                  ),
+                                                              child: Text(
+                                                                location.name,
+                                                                maxLines: 2,
+                                                                textAlign:
+                                                                    TextAlign
+                                                                        .center,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style: const TextStyle(
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                    ),
+                                                    if (_layoutEditMode) ...[
+                                                      _layoutResizeHandle(
+                                                        location: location,
+                                                        fromLeft: true,
+                                                        fromTop: true,
+                                                        maxX: maxX,
+                                                        maxY: maxY,
+                                                        stockroomRefresh:
+                                                            stockroomRefresh,
+                                                        refreshStructure:
+                                                            refreshStructure,
+                                                      ),
+                                                      _layoutResizeHandle(
+                                                        location: location,
+                                                        fromLeft: false,
+                                                        fromTop: true,
+                                                        maxX: maxX,
+                                                        maxY: maxY,
+                                                        stockroomRefresh:
+                                                            stockroomRefresh,
+                                                        refreshStructure:
+                                                            refreshStructure,
+                                                      ),
+                                                      _layoutResizeHandle(
+                                                        location: location,
+                                                        fromLeft: true,
+                                                        fromTop: false,
+                                                        maxX: maxX,
+                                                        maxY: maxY,
+                                                        stockroomRefresh:
+                                                            stockroomRefresh,
+                                                        refreshStructure:
+                                                            refreshStructure,
+                                                      ),
+                                                      _layoutResizeHandle(
+                                                        location: location,
+                                                        fromLeft: false,
+                                                        fromTop: false,
+                                                        maxX: maxX,
+                                                        maxY: maxY,
+                                                        stockroomRefresh:
+                                                            stockroomRefresh,
+                                                        refreshStructure:
+                                                            refreshStructure,
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    },
+  );
+
   Future<void> _openStockroom() => showDialog<void>(
     context: context,
     builder: (dialogContext) => DefaultTabController(
-      length: 2,
+      length: 3,
       child: StatefulBuilder(
         builder: (context, refresh) {
           final compact = MediaQuery.sizeOf(context).width < 600;
           final sortedLocations = [
-            ...locations,
+            ...locations.where((location) => location.parentId == null),
           ]..sort((a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)));
           return AlertDialog(
             key: const Key('stockroom-dialog'),
+            insetPadding: stockroomFullscreen ? EdgeInsets.zero : null,
             title: Row(
               children: [
                 const Icon(Icons.warehouse_outlined),
                 const SizedBox(width: 10),
                 const Expanded(child: Text('Stockroom')),
+                IconButton(
+                  key: const Key('toggle-stockroom-fullscreen'),
+                  tooltip: stockroomFullscreen
+                      ? 'Exit full screen'
+                      : 'Full screen',
+                  onPressed: () =>
+                      refresh(() => stockroomFullscreen = !stockroomFullscreen),
+                  icon: _FullscreenIcon(expanded: stockroomFullscreen),
+                ),
                 IconButton(
                   key: const Key('close-stockroom'),
                   tooltip: 'Close Stockroom',
@@ -17093,333 +19074,495 @@ class _InventoryHomeState extends State<InventoryHome> {
               ],
             ),
             content: SizedBox(
-              width: 760,
-              height: 650,
-              child: Column(
+              width: stockroomFullscreen
+                  ? MediaQuery.sizeOf(context).width
+                  : _stockroomDialogSize.width,
+              height: stockroomFullscreen
+                  ? MediaQuery.sizeOf(context).height
+                  : _stockroomDialogSize.height,
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  const TabBar(
-                    tabs: [
-                      Tab(
-                        icon: Icon(Icons.account_tree_outlined),
-                        text: 'Locations',
+                  Column(
+                    children: [
+                      const TabBar(
+                        tabs: [
+                          Tab(
+                            icon: Icon(Icons.inventory_2_outlined),
+                            text: 'Items',
+                          ),
+                          Tab(icon: _LayoutTabIcon(), text: 'Layout'),
+                          Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
+                        ],
                       ),
-                      Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
-                    ],
-                  ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        Column(
+                      Expanded(
+                        child: TabBarView(
+                          physics: _layoutEditMode
+                              ? const NeverScrollableScrollPhysics()
+                              : const PageScrollPhysics(),
                           children: [
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 10,
-                                ),
-                                child: FilledButton.icon(
-                                  key: const Key('add-location'),
-                                  onPressed: () => _addLocation(refresh),
-                                  icon: const Icon(Icons.add_rounded),
-                                  label: const Text('Add location'),
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: sortedLocations.isEmpty
-                                  ? const Center(
-                                      child: Text(
-                                        'Add a shelf, cabinet, bin, or room.',
+                            Column(
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Locations',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
                                       ),
-                                    )
-                                  : ListView.builder(
-                                      itemCount: sortedLocations.length,
-                                      itemBuilder: (context, index) {
-                                        final location = sortedLocations[index];
-                                        final count = inventory
-                                            .where(
-                                              (item) =>
-                                                  item.storageLocationId ==
-                                                  location.id,
-                                            )
-                                            .length;
-                                        Widget locationActions() => Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton.filledTonal(
-                                              key: Key(
-                                                'move-items-location-${location.id}',
-                                              ),
-                                              tooltip: 'Move items',
-                                              onPressed: () =>
-                                                  _moveItemsToLocation(
-                                                    location,
-                                                    refresh,
-                                                  ),
-                                              icon: const Icon(
-                                                Icons.drive_file_move_outline,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            IconButton(
-                                              key: Key(
-                                                'rename-location-${location.id}',
-                                              ),
-                                              tooltip:
-                                                  'Rename ${_locationPath(location.id)}',
-                                              onPressed: () => _renameLocation(
-                                                location,
-                                                refresh,
-                                              ),
-                                              icon: const Icon(
-                                                Icons.edit_outlined,
-                                              ),
-                                            ),
-                                            IconButton(
-                                              key: Key(
-                                                'delete-location-${location.id}',
-                                              ),
-                                              tooltip:
-                                                  'Delete ${_locationPath(location.id)}',
-                                              style:
-                                                  _destructiveIconButtonStyle(
-                                                    context,
-                                                  ),
-                                              onPressed: () => _deleteLocation(
-                                                location,
-                                                refresh,
-                                              ),
-                                              icon: const Icon(
-                                                Icons.delete_outline_rounded,
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                        if (compact) {
-                                          return Card(
-                                            clipBehavior: Clip.antiAlias,
-                                            child: InkWell(
-                                              key: Key(
-                                                'location-${location.id}',
-                                              ),
-                                              onTap: () => _openLocation(
-                                                location,
-                                                stockroomRefresh: refresh,
-                                              ),
-                                              child: Padding(
-                                                padding:
-                                                    const EdgeInsets.fromLTRB(
-                                                      14,
-                                                      12,
-                                                      8,
-                                                      8,
-                                                    ),
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment
-                                                          .stretch,
-                                                  children: [
-                                                    Row(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Padding(
-                                                          padding:
-                                                              const EdgeInsets.only(
-                                                                top: 2,
-                                                              ),
-                                                          child: _LocationIcon(
-                                                            key: Key(
-                                                              'location-pin-${location.id}',
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Stack(
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 68,
+                                        ),
+                                        child: sortedLocations.isEmpty
+                                            ? const Center(
+                                                child: Text(
+                                                  'Draw or add a top-level room, rack, cabinet, or cart.',
+                                                ),
+                                              )
+                                            : ListView.builder(
+                                                itemCount:
+                                                    sortedLocations.length,
+                                                itemBuilder: (context, index) {
+                                                  final location =
+                                                      sortedLocations[index];
+                                                  final count = inventory
+                                                      .where(
+                                                        (item) =>
+                                                            item.storageLocationId ==
+                                                            location.id,
+                                                      )
+                                                      .length;
+                                                  Widget
+                                                  locationActions() => Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      IconButton.filledTonal(
+                                                        key: Key(
+                                                          'move-items-location-${location.id}',
+                                                        ),
+                                                        tooltip: 'Move items',
+                                                        onPressed: () =>
+                                                            _moveItemsToLocation(
+                                                              location,
+                                                              refresh,
                                                             ),
-                                                          ),
+                                                        icon: const Icon(
+                                                          Icons
+                                                              .drive_file_move_outline,
                                                         ),
-                                                        const SizedBox(
-                                                          width: 12,
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      IconButton(
+                                                        key: Key(
+                                                          'rename-location-${location.id}',
                                                         ),
-                                                        Expanded(
+                                                        tooltip:
+                                                            'Rename ${_locationPath(location.id)}',
+                                                        onPressed: () =>
+                                                            _renameLocation(
+                                                              location,
+                                                              refresh,
+                                                            ),
+                                                        icon: const Icon(
+                                                          Icons.edit_outlined,
+                                                        ),
+                                                      ),
+                                                      IconButton(
+                                                        key: Key(
+                                                          'delete-location-${location.id}',
+                                                        ),
+                                                        tooltip:
+                                                            'Delete ${_locationPath(location.id)}',
+                                                        style:
+                                                            _destructiveIconButtonStyle(
+                                                              context,
+                                                            ),
+                                                        onPressed: () =>
+                                                            _deleteLocation(
+                                                              location,
+                                                              refresh,
+                                                            ),
+                                                        icon: const Icon(
+                                                          Icons
+                                                              .delete_outline_rounded,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                  if (compact) {
+                                                    return Card(
+                                                      clipBehavior:
+                                                          Clip.antiAlias,
+                                                      child: InkWell(
+                                                        key: Key(
+                                                          'location-${location.id}',
+                                                        ),
+                                                        onTap: () =>
+                                                            _openLocation(
+                                                              location,
+                                                              stockroomRefresh:
+                                                                  refresh,
+                                                              initialTab: 1,
+                                                            ),
+                                                        child: Padding(
+                                                          padding:
+                                                              const EdgeInsets.fromLTRB(
+                                                                14,
+                                                                12,
+                                                                8,
+                                                                8,
+                                                              ),
                                                           child: Column(
                                                             crossAxisAlignment:
                                                                 CrossAxisAlignment
-                                                                    .start,
+                                                                    .stretch,
                                                             children: [
-                                                              Text(
-                                                                _locationPath(
-                                                                  location.id,
-                                                                ),
+                                                              Row(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  Padding(
+                                                                    padding:
+                                                                        const EdgeInsets.only(
+                                                                          top:
+                                                                              2,
+                                                                        ),
+                                                                    child: _LocationIcon(
+                                                                      kind: location
+                                                                          .kind,
+                                                                      key: Key(
+                                                                        'location-pin-${location.id}',
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                  const SizedBox(
+                                                                    width: 12,
+                                                                  ),
+                                                                  Expanded(
+                                                                    child: Column(
+                                                                      crossAxisAlignment:
+                                                                          CrossAxisAlignment
+                                                                              .start,
+                                                                      children: [
+                                                                        Text(
+                                                                          _locationPath(
+                                                                            location.id,
+                                                                          ),
+                                                                        ),
+                                                                        Text(
+                                                                          '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
+                                                                        ),
+                                                                      ],
+                                                                    ),
+                                                                  ),
+                                                                ],
                                                               ),
-                                                              Text(
-                                                                '$count item${count == 1 ? '' : 's'}',
+                                                              const SizedBox(
+                                                                height: 6,
+                                                              ),
+                                                              Align(
+                                                                alignment: Alignment
+                                                                    .centerRight,
+                                                                child:
+                                                                    locationActions(),
                                                               ),
                                                             ],
                                                           ),
                                                         ),
-                                                      ],
+                                                      ),
+                                                    );
+                                                  }
+                                                  return Card(
+                                                    clipBehavior:
+                                                        Clip.antiAlias,
+                                                    child: ListTile(
+                                                      key: Key(
+                                                        'location-${location.id}',
+                                                      ),
+                                                      onTap: () =>
+                                                          _openLocation(
+                                                            location,
+                                                            stockroomRefresh:
+                                                                refresh,
+                                                            initialTab: 1,
+                                                          ),
+                                                      leading: _LocationIcon(
+                                                        kind: location.kind,
+                                                        key: Key(
+                                                          'location-pin-${location.id}',
+                                                        ),
+                                                      ),
+                                                      title: Text(
+                                                        _locationPath(
+                                                          location.id,
+                                                        ),
+                                                      ),
+                                                      subtitle: Text(
+                                                        '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
+                                                      ),
+                                                      trailing:
+                                                          locationActions(),
                                                     ),
-                                                    const SizedBox(height: 6),
-                                                    Align(
-                                                      alignment:
-                                                          Alignment.centerRight,
-                                                      child: locationActions(),
-                                                    ),
-                                                  ],
-                                                ),
+                                                  );
+                                                },
                                               ),
-                                            ),
-                                          );
-                                        }
-                                        return Card(
-                                          child: ListTile(
-                                            key: Key('location-${location.id}'),
-                                            onTap: () => _openLocation(
-                                              location,
-                                              stockroomRefresh: refresh,
-                                            ),
-                                            leading: _LocationIcon(
-                                              key: Key(
-                                                'location-pin-${location.id}',
-                                              ),
-                                            ),
-                                            title: Text(
-                                              _locationPath(location.id),
-                                            ),
-                                            subtitle: Text(
-                                              '$count item${count == 1 ? '' : 's'}',
-                                            ),
-                                            trailing: locationActions(),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                          ],
-                        ),
-                        shoppingList.isEmpty
-                            ? const Center(
-                                child: Text(
-                                  'Add shortages from a kit BOM to shop and receive them here.',
-                                  textAlign: TextAlign.center,
-                                ),
-                              )
-                            : ListView.builder(
-                                padding: const EdgeInsets.only(top: 10),
-                                itemCount: shoppingList.length,
-                                itemBuilder: (context, index) {
-                                  final entry = shoppingList[index];
-                                  final remaining = math.max(
-                                    0,
-                                    entry.quantityNeeded -
-                                        entry.quantityReceived,
-                                  );
-                                  return Card(
-                                    key: Key('shopping-${entry.id}'),
-                                    child: Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        14,
-                                        12,
-                                        8,
-                                        8,
                                       ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              entry.status ==
-                                                      ShoppingListStatus
-                                                          .received
-                                                  ? const Icon(
-                                                      Icons
-                                                          .check_circle_rounded,
-                                                    )
-                                                  : const _ShoppingCartIcon(),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Text(
-                                                  entry.name,
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.w700,
+                                      Positioned(
+                                        left: 0,
+                                        right: 0,
+                                        bottom: 0,
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                          child: BackdropFilter(
+                                            filter: ui.ImageFilter.blur(
+                                              sigmaX: 10,
+                                              sigmaY: 10,
+                                            ),
+                                            child: Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .surface
+                                                    .withValues(alpha: .12),
+                                                border: Border.all(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .outlineVariant
+                                                      .withValues(alpha: .28),
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                              child: Align(
+                                                alignment:
+                                                    Alignment.centerRight,
+                                                child: FilledButton.icon(
+                                                  key: const Key(
+                                                    'add-location',
+                                                  ),
+                                                  onPressed: () =>
+                                                      _addLocation(refresh),
+                                                  icon: const Icon(
+                                                    Icons.add_rounded,
+                                                  ),
+                                                  label: const Text(
+                                                    'Add location',
                                                   ),
                                                 ),
                                               ),
-                                            ],
+                                            ),
                                           ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'Need ${_formatBomQuantity(entry.quantityNeeded)} · Received ${_formatBomQuantity(entry.quantityReceived)}${entry.quantityOrdered > 0 ? ' · Ordered ${_formatBomQuantity(entry.quantityOrdered)}' : ''}',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Column(
+                              children: [
+                                Expanded(
+                                  child: _layoutEditor(
+                                    parentId: null,
+                                    title: 'Top-down shop layout. Drag blank grid to add a named room, rack, cabinet, or cart.',
+                                    stockroomRefresh: refresh,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            shoppingList.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'Add shortages from a kit BOM to shop and receive them here.',
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    padding: const EdgeInsets.only(top: 10),
+                                    itemCount: shoppingList.length,
+                                    itemBuilder: (context, index) {
+                                      final entry = shoppingList[index];
+                                      final remaining = math.max(
+                                        0,
+                                        entry.quantityNeeded -
+                                            entry.quantityReceived,
+                                      );
+                                      return Card(
+                                        key: Key('shopping-${entry.id}'),
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            14,
+                                            12,
+                                            8,
+                                            8,
                                           ),
-                                          const SizedBox(height: 8),
-                                          Wrap(
-                                            alignment: WrapAlignment.end,
-                                            spacing: 6,
-                                            runSpacing: 6,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
                                             children: [
-                                              if (entry.status ==
-                                                  ShoppingListStatus.needed)
-                                                OutlinedButton(
-                                                  onPressed: () {
-                                                    setState(() {
-                                                      shoppingList[index] =
-                                                          entry.copyWith(
-                                                            quantityOrdered: entry
-                                                                .quantityNeeded,
-                                                            status:
-                                                                ShoppingListStatus
-                                                                    .ordered,
-                                                          );
-                                                    });
-                                                    _persist();
-                                                    refresh(() {});
-                                                  },
-                                                  child: const Text('Ordered'),
-                                                ),
-                                              FilledButton(
-                                                onPressed: remaining <= 0
-                                                    ? null
-                                                    : () =>
-                                                          _receiveShoppingEntry(
-                                                            entry,
-                                                            refresh,
-                                                          ),
-                                                child: const Text('Receive'),
-                                              ),
-                                              IconButton(
-                                                key: Key(
-                                                  'remove-shopping-${entry.id}',
-                                                ),
-                                                tooltip:
-                                                    'Remove from shopping list',
-                                                style:
-                                                    _destructiveIconButtonStyle(
-                                                      context,
-                                                    ),
-                                                onPressed: () {
-                                                  setState(
-                                                    () => shoppingList.removeAt(
-                                                      index,
-                                                    ),
-                                                  );
-                                                  _persist();
-                                                  refresh(() {});
-                                                },
-                                                icon:
-                                                    const _ShoppingCartIcon.remove(
-                                                      key: Key(
-                                                        'remove-shopping-cart-glyph',
+                                              Row(
+                                                children: [
+                                                  entry.status ==
+                                                          ShoppingListStatus
+                                                              .received
+                                                      ? const Icon(
+                                                          Icons
+                                                              .check_circle_rounded,
+                                                        )
+                                                      : const _ShoppingCartIcon(),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: Text(
+                                                      entry.name,
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w700,
                                                       ),
                                                     ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                'Need ${_formatBomQuantity(entry.quantityNeeded)} · Received ${_formatBomQuantity(entry.quantityReceived)}${entry.quantityOrdered > 0 ? ' · Ordered ${_formatBomQuantity(entry.quantityOrdered)}' : ''}',
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Wrap(
+                                                alignment: WrapAlignment.end,
+                                                spacing: 6,
+                                                runSpacing: 6,
+                                                children: [
+                                                  if (entry.status ==
+                                                      ShoppingListStatus.needed)
+                                                    OutlinedButton(
+                                                      onPressed: () {
+                                                        setState(() {
+                                                          shoppingList[index] =
+                                                              entry.copyWith(
+                                                                quantityOrdered:
+                                                                    entry
+                                                                        .quantityNeeded,
+                                                                status:
+                                                                    ShoppingListStatus
+                                                                        .ordered,
+                                                              );
+                                                        });
+                                                        _persist();
+                                                        refresh(() {});
+                                                      },
+                                                      child: const Text(
+                                                        'Ordered',
+                                                      ),
+                                                    ),
+                                                  FilledButton(
+                                                    onPressed: remaining <= 0
+                                                        ? null
+                                                        : () =>
+                                                              _receiveShoppingEntry(
+                                                                entry,
+                                                                refresh,
+                                                              ),
+                                                    child: const Text(
+                                                      'Receive',
+                                                    ),
+                                                  ),
+                                                  IconButton(
+                                                    key: Key(
+                                                      'remove-shopping-${entry.id}',
+                                                    ),
+                                                    tooltip: 'Remove from shopping list',
+                                                    style:
+                                                        _destructiveIconButtonStyle(
+                                                          context,
+                                                        ),
+                                                    onPressed: () {
+                                                      setState(
+                                                        () => shoppingList
+                                                            .removeAt(index),
+                                                      );
+                                                      _persist();
+                                                      refresh(() {});
+                                                    },
+                                                    icon:
+                                                        const _ShoppingCartIcon.remove(
+                                                          key: Key(
+                                                            'remove-shopping-cart-glyph',
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ],
                                               ),
                                             ],
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                },
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                      child: Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerMove: (event) {
+                          if (event.buttons & kPrimaryMouseButton == 0) return;
+                          _stockroomDialogResizeRemainder += event.delta;
+                          final delta = _stockroomDialogResizeRemainder;
+                          _stockroomDialogResizeRemainder = Offset.zero;
+                          final available = MediaQuery.sizeOf(context);
+                          refresh(() {
+                            _stockroomDialogSize = Size(
+                              (_stockroomDialogSize.width + delta.dx).clamp(
+                                420.0,
+                                available.width - 64,
                               ),
-                      ],
+                              (_stockroomDialogSize.height + delta.dy).clamp(
+                                360.0,
+                                available.height - 96,
+                              ),
+                            );
+                          });
+                        },
+                        onPointerUp: (_) =>
+                            _stockroomDialogResizeRemainder = Offset.zero,
+                        child: Tooltip(
+                          message: 'Drag to resize Stockroom',
+                          child: SizedBox(
+                            width: 38,
+                            height: 38,
+                            child: CustomPaint(
+                              painter: _LayoutDogearPainter(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primaryContainer,
+                                lineColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -17455,31 +19598,100 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openScratchPad() async {
     final database = widget.database;
     if (database == null) return;
-    final notes = decodeScratchPadNotes(database.loadStringPreference(scratchPadNotesPreferenceKey, fallback: '[]'));
+    final notes = decodeScratchPadNotes(
+      database.loadStringPreference(
+        scratchPadNotesPreferenceKey,
+        fallback: '[]',
+      ),
+    );
     var reviewNotes = const <ScratchPadNote>[];
+    var sharedNotes = const <ScratchPadNote>[];
     final source = database.loadSyncConfig();
     if (source != null) {
       try {
-        final config = SupabaseConfig.fromJson(jsonDecode(source) as Map<String, dynamic>);
+        final config = SupabaseConfig.fromJson(
+          jsonDecode(source) as Map<String, dynamic>,
+        );
         if (config.workspaceId != null) {
-          reviewNotes = decodeScratchPadNotes(database.loadStringPreference('scratch_pad_review_${config.workspaceId}', fallback: '[]'));
+          reviewNotes = decodeScratchPadNotes(
+            database.loadStringPreference(
+              'scratch_pad_review_${config.workspaceId}',
+              fallback: '[]',
+            ),
+          );
+          sharedNotes = decodeScratchPadNotes(
+            database.loadStringPreference(
+              'scratch_pad_shared_${config.workspaceId}',
+              fallback: '[]',
+            ),
+          );
         }
       } catch (_) {}
     }
-    await showDialog<void>(context: context, builder: (_) => ScratchPadDialog(
-      notes: notes,
-      reviewNotes: reviewNotes,
-      onChanged: (updated) {
-        database.saveStringPreference(scratchPadNotesPreferenceKey, encodeScratchPadNotes(updated));
-        unawaited(_syncAutomatically(force: true));
-      },
-    ));
+    await showDialog<void>(
+      context: context,
+      builder: (_) => ScratchPadDialog(
+        notes: notes,
+        sharedNotes: sharedNotes,
+        reviewNotes: reviewNotes,
+        subjects: _scratchPadSubjects(),
+        onChanged: (updated) {
+          database.saveStringPreference(
+            scratchPadNotesPreferenceKey,
+            encodeScratchPadNotes(updated),
+          );
+          unawaited(_syncAutomatically(force: true));
+        },
+      ),
+    );
   }
 
-  Widget _scratchPadButton({bool iconOnly = false, double iconOnlyWidth = 48, bool tight = false}) => _glassQuickAction(
-    key: const Key('open-scratch-pad'), onPressed: _openScratchPad,
-    icon: Icons.sticky_note_2_outlined, label: 'Scratch Pad', iconOnly: iconOnly,
-    iconOnlyWidth: iconOnlyWidth, tight: tight,
+  List<ScratchPadSubject> _scratchPadSubjects() {
+    final subjects = <ScratchPadSubject>[
+      for (final item in inventory.where((item) => !item.archived))
+        ScratchPadSubject(kind: 'Item', id: item.id, label: item.name),
+      for (final location in locations)
+        ScratchPadSubject(
+          kind: 'Location',
+          id: location.id,
+          label: _locationPath(location.id),
+        ),
+      for (final brand in brands.where((brand) => !brand.archived))
+        ScratchPadSubject(kind: 'Brand', id: brand.id, label: brand.name),
+      for (final vendor in vendors.where((vendor) => !vendor.archived))
+        ScratchPadSubject(kind: 'Vendor', id: vendor.id, label: vendor.name),
+      for (final material in materials)
+        ScratchPadSubject(
+          kind: 'Material',
+          id: material.id,
+          label: material.name,
+        ),
+      for (final machine in machines)
+        ScratchPadSubject(kind: 'Machine', id: machine.id, label: machine.name),
+      for (final kit in kits)
+        ScratchPadSubject(kind: 'Kit', id: kit.id, label: kit.name),
+      for (final build in builds)
+        ScratchPadSubject(kind: 'Build', id: build.id, label: build.name),
+    ];
+    subjects.sort((a, b) {
+      final byKind = a.kind.compareTo(b.kind);
+      return byKind == 0 ? a.label.compareTo(b.label) : byKind;
+    });
+    return subjects;
+  }
+
+  Widget _scratchPadButton({
+    bool iconOnly = false,
+    double iconOnlyWidth = 48,
+    bool tight = false,
+  }) => _glassQuickAction(
+    key: const Key('open-scratch-pad'),
+    onPressed: _openScratchPad,
+    icon: Icons.sticky_note_2_outlined,
+    label: 'Scratch Pad',
+    iconOnly: iconOnly,
+    iconOnlyWidth: iconOnlyWidth,
+    tight: tight,
   );
 
   Widget _androidBottomSearchDock() => ValueListenableBuilder<bool>(
@@ -17649,7 +19861,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 disabledMessage: disabledActionMessage,
                               ),
                               const SizedBox(width: compactGap),
-                              _scratchPadButton(iconOnly: true, iconOnlyWidth: fittedIconWidth),
+                              _scratchPadButton(
+                                iconOnly: true,
+                                iconOnlyWidth: fittedIconWidth,
+                              ),
                             ],
                           ),
                           const Spacer(),
@@ -17909,7 +20124,11 @@ class _InventoryHomeState extends State<InventoryHome> {
               tooltip: 'Reports and change log',
               onPressed: _openAuditLog,
               icon: Icons.history_rounded,
-              iconWidget: Badge.count(count: _conflictStore?.load().length ?? 0, isLabelVisible: (_conflictStore?.load().isNotEmpty ?? false), child: const Icon(Icons.history_rounded)),
+              iconWidget: Badge.count(
+                count: _conflictStore?.load().length ?? 0,
+                isLabelVisible: (_conflictStore?.load().isNotEmpty ?? false),
+                child: const Icon(Icons.history_rounded),
+              ),
             ),
             _configBlockDivider(),
             _configBlockButton(
@@ -17964,29 +20183,146 @@ class _InventoryHomeState extends State<InventoryHome> {
     await widget.database?.waitForPendingWrites();
     if (!mounted) return;
     // Explicit report snapshots use image-free records, never full-size photos.
-    final stock = inventory.map((item) => ReportRow([
-      item.name, item.type.name, item.materialName, item.brand, item.vendor,
-      item.storageLocation, item.quantity.toString(), item.cost.toStringAsFixed(2),
-      item.archived ? 'Archived' : 'Active',
-      item.quantityAlertThreshold != null && item.quantity <= item.quantityAlertThreshold! ? 'Low stock' : '',
-      item.added.toLocal().toString().split(' ').first,
-    ], date: item.added)).toList();
+    final stock = inventory
+        .map(
+          (item) => ReportRow([
+            item.name,
+            item.type.name,
+            item.materialName,
+            item.brand,
+            item.vendor,
+            item.storageLocation,
+            item.quantity.toString(),
+            item.cost.toStringAsFixed(2),
+            item.archived ? 'Archived' : 'Active',
+            item.quantityAlertThreshold != null &&
+                    item.quantity <= item.quantityAlertThreshold!
+                ? 'Low stock'
+                : '',
+            item.added.toLocal().toString().split(' ').first,
+          ], date: item.added),
+        )
+        .toList();
     final reports = <WorkshopReport>[
-      WorkshopReport('Inventory', ['Item', 'Type', 'Material', 'Brand', 'Vendor', 'Location', 'Quantity', 'Recorded cost', 'State', 'Alert', 'Added'], stock,
-        dated: true, note: 'Current inventory snapshot. Date filter uses added date; costs are recorded values, not supplier quotes.'),
-      WorkshopReport('Spool consumption', ['Spool ID', 'Date', 'Used g', 'Waste g', 'Outcome', 'Project', 'Build', 'Reason', 'Notes'],
-        spoolUsage.map((e) => ReportRow([e.spoolId, e.recordedAt.toLocal().toString(), e.gramsUsed.toString(), e.gramsWaste.toString(), e.outcome.name, e.project, e.buildId ?? '', e.wasteReason, e.notes],
-          date: e.recordedAt, values: {'Used g': e.gramsUsed, 'Waste g': e.gramsWaste})).toList(), dated: true),
-      WorkshopReport('Recorded movements', ['Date', 'Actor', 'Operation', 'Record type', 'Record ID', 'Changes'],
-        auditLog.map((e) => ReportRow([e.timestamp.toLocal().toString(), e.actor, e.action, e.entityType, e.entityId, e.changes.entries.map((c) => '${c.key}: ${c.value}').join('; ')], date: e.timestamp)).toList(),
-        dated: true, note: 'Retained change log only (up to 2,000 entries). This is not a reconstruction of historical stock levels.'),
-      WorkshopReport('Shopping list', ['Done', 'Item', 'Needed', 'Ordered', 'Received', 'Still needed', 'Status', 'Source'],
-        shoppingList.map((e) => ReportRow(['☐', e.name, e.quantityNeeded.toString(), e.quantityOrdered.toString(), e.quantityReceived.toString(), math.max(0, e.quantityNeeded - e.quantityReceived).toString(), e.status.name, e.sourceUrl])).toList()),
-      for (final kit in kits) WorkshopReport('Kit: ${kit.name}', ['Done', 'Part', 'Required', 'Available', 'Shortage'],
-        _flattenKitRequirements(kit).values.map((r) {
-          final available = math.max(0.0, _availableInventoryQuantity(r.productId, r.name) - _reservedInventoryQuantity(r.productId, r.name));
-          return ReportRow(['☐', r.name, r.quantity.toString(), available.toString(), math.max(0, r.quantity - available).toString()]);
-        }).toList(), note: 'One kit; nested kits expanded. ${_kitBuildability(kit).buildCount} builds available. Existing reservations excluded.'),
+      WorkshopReport(
+        'Inventory',
+        [
+          'Item',
+          'Type',
+          'Material',
+          'Brand',
+          'Vendor',
+          'Location',
+          'Quantity',
+          'Recorded cost',
+          'State',
+          'Alert',
+          'Added',
+        ],
+        stock,
+        dated: true,
+        note: 'Current inventory snapshot. Date filter uses added date; costs are recorded values, not supplier quotes.',
+      ),
+      WorkshopReport(
+        'Spool consumption',
+        [
+          'Spool ID',
+          'Date',
+          'Used g',
+          'Waste g',
+          'Outcome',
+          'Project',
+          'Build',
+          'Reason',
+          'Notes',
+        ],
+        spoolUsage
+            .map(
+              (e) => ReportRow(
+                [
+                  e.spoolId,
+                  e.recordedAt.toLocal().toString(),
+                  e.gramsUsed.toString(),
+                  e.gramsWaste.toString(),
+                  e.outcome.name,
+                  e.project,
+                  e.buildId ?? '',
+                  e.wasteReason,
+                  e.notes,
+                ],
+                date: e.recordedAt,
+                values: {'Used g': e.gramsUsed, 'Waste g': e.gramsWaste},
+              ),
+            )
+            .toList(),
+        dated: true,
+      ),
+      WorkshopReport(
+        'Recorded movements',
+        ['Date', 'Actor', 'Operation', 'Record type', 'Record ID', 'Changes'],
+        auditLog
+            .map(
+              (e) => ReportRow([
+                e.timestamp.toLocal().toString(),
+                e.actor,
+                e.action,
+                e.entityType,
+                e.entityId,
+                e.changes.entries.map((c) => '${c.key}: ${c.value}').join('; '),
+              ], date: e.timestamp),
+            )
+            .toList(),
+        dated: true,
+        note: 'Retained change log only (up to 2,000 entries). This is not a reconstruction of historical stock levels.',
+      ),
+      WorkshopReport(
+        'Shopping list',
+        [
+          'Done',
+          'Item',
+          'Needed',
+          'Ordered',
+          'Received',
+          'Still needed',
+          'Status',
+          'Source',
+        ],
+        shoppingList
+            .map(
+              (e) => ReportRow([
+                '☐',
+                e.name,
+                e.quantityNeeded.toString(),
+                e.quantityOrdered.toString(),
+                e.quantityReceived.toString(),
+                math.max(0, e.quantityNeeded - e.quantityReceived).toString(),
+                e.status.name,
+                e.sourceUrl,
+              ]),
+            )
+            .toList(),
+      ),
+      for (final kit in kits)
+        WorkshopReport(
+          'Kit: ${kit.name}',
+          ['Done', 'Part', 'Required', 'Available', 'Shortage'],
+          _flattenKitRequirements(kit).values.map((r) {
+            final available = math.max(
+              0.0,
+              _availableInventoryQuantity(r.productId, r.name) -
+                  _reservedInventoryQuantity(r.productId, r.name),
+            );
+            return ReportRow([
+              '☐',
+              r.name,
+              r.quantity.toString(),
+              available.toString(),
+              math.max(0, r.quantity - available).toString(),
+            ]);
+          }).toList(),
+          note:
+              'One kit; nested kits expanded. ${_kitBuildability(kit).buildCount} builds available. Existing reservations excluded.',
+        ),
     ];
     await showWorkshopReports(context, reports);
   }
@@ -18004,37 +20340,82 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openSyncConflicts() async {
     final store = _conflictStore;
     if (store == null) return;
-    await showDialog<void>(context: context, builder: (_) => SyncConflictDialog(store: store,
-      resolve: (row, remote) async {
-        if (_syncing) throw StateError('Sync is finishing. Retry in a moment.');
-        final database = widget.database!;
-        await database.waitForPendingWrites();
-        if (_syncing) throw StateError('Sync is finishing. Retry in a moment.');
-        final current = database.readEntityPayload(row['entityType'], row['entityId']);
-        if (remote) {
-          final field = row['field'] as String;
-          if (!currentRole.canEditInventory) throw StateError('Your role cannot replace local data.');
-          if (field == '(remote deleted)') {
-            if (!currentRole.canHardDeleteItems) throw StateError('Delete permission is required.');
-          } else if (field == '(deleted)') {
-            if (current != null || !currentRole.canCreateInventory) throw StateError('The record changed or restore permission is missing.');
-          } else if (current == null || jsonEncode(current[field]) != jsonEncode(row['local'])) {
-            throw StateError('This field has newer local edits. Keep current local or reopen after reviewing the item.');
+    await showDialog<void>(
+      context: context,
+      builder: (_) => SyncConflictDialog(
+        store: store,
+        resolve: (row, remote) async {
+          if (_syncing)
+            throw StateError('Sync is finishing. Retry in a moment.');
+          final database = widget.database!;
+          await database.waitForPendingWrites();
+          if (_syncing)
+            throw StateError('Sync is finishing. Retry in a moment.');
+          final current = database.readEntityPayload(
+            row['entityType'],
+            row['entityId'],
+          );
+          if (remote) {
+            final field = row['field'] as String;
+            if (!currentRole.canEditInventory)
+              throw StateError('Your role cannot replace local data.');
+            if (field == '(remote deleted)') {
+              if (!currentRole.canHardDeleteItems)
+                throw StateError('Delete permission is required.');
+            } else if (field == '(deleted)') {
+              if (current != null || !currentRole.canCreateInventory)
+                throw StateError(
+                  'The record changed or restore permission is missing.',
+                );
+            } else if (current == null ||
+                jsonEncode(current[field]) != jsonEncode(row['local'])) {
+              throw StateError(
+                'This field has newer local edits. Keep current local or reopen after reviewing the item.',
+              );
+            }
+            final change = WorkshopEntityChange(
+              entityType: row['entityType'],
+              entityId: row['entityId'],
+              deleted: field == '(remote deleted)',
+              fields: field == '(remote deleted)'
+                  ? {}
+                  : field == '(deleted)'
+                  ? Map<String, dynamic>.from(row['remote'] as Map)
+                  : {field: row['remote']},
+            );
+            database.applyAndQueueWorkshopChanges([change]);
+            _applyRemoteEntityChanges([
+              WorkshopEntityChange(
+                entityType: change.entityType,
+                entityId: change.entityId,
+                deleted: change.deleted,
+                fields:
+                    database.readEntityPayload(
+                      change.entityType,
+                      change.entityId,
+                    ) ??
+                    {},
+              ),
+            ]);
           }
-          final change = WorkshopEntityChange(entityType: row['entityType'], entityId: row['entityId'],
-            deleted: field == '(remote deleted)',
-            fields: field == '(remote deleted)' ? {} : field == '(deleted)'
-              ? Map<String, dynamic>.from(row['remote'] as Map) : {field: row['remote']});
-          database.applyAndQueueWorkshopChanges([change]);
-          _applyRemoteEntityChanges([WorkshopEntityChange(entityType: change.entityType, entityId: change.entityId,
-            deleted: change.deleted, fields: database.readEntityPayload(change.entityType, change.entityId) ?? {})]);
-        }
-        final rows = store.load()..removeWhere((r) => jsonEncode(r) == jsonEncode(row));
-        store.save(rows);
-        _recordAudit('sync_conflict_resolved', row['entityType'], row['entityId'], {row['field']: remote ? 'Selected remote value' : 'Kept current local value'});
-        if (mounted) setState(() {});
-        _scheduleAutomaticSync();
-      }));
+          final rows = store.load()
+            ..removeWhere((r) => jsonEncode(r) == jsonEncode(row));
+          store.save(rows);
+          _recordAudit(
+            'sync_conflict_resolved',
+            row['entityType'],
+            row['entityId'],
+            {
+              row['field']: remote
+                  ? 'Selected remote value'
+                  : 'Kept current local value',
+            },
+          );
+          if (mounted) setState(() {});
+          _scheduleAutomaticSync();
+        },
+      ),
+    );
   }
 
   Future<void> _openAuditLog() => showDialog<void>(
@@ -18066,8 +20447,23 @@ class _InventoryHomeState extends State<InventoryHome> {
       ),
       actions: [
         if (_conflictStore != null)
-          TextButton.icon(onPressed: () { Navigator.pop(dialogContext); _openSyncConflicts(); }, icon: const Icon(Icons.sync_problem), label: Text('Sync conflicts (${_conflictStore!.load().length})')),
-        FilledButton.icon(key: const Key('workshop-reports'), onPressed: () { Navigator.pop(dialogContext); _openReports(); }, icon: const Icon(Icons.assessment_outlined), label: const Text('Reports / printable lists')),
+          TextButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _openSyncConflicts();
+            },
+            icon: const Icon(Icons.sync_problem),
+            label: Text('Sync conflicts (${_conflictStore!.load().length})'),
+          ),
+        FilledButton.icon(
+          key: const Key('workshop-reports'),
+          onPressed: () {
+            Navigator.pop(dialogContext);
+            _openReports();
+          },
+          icon: const Icon(Icons.assessment_outlined),
+          label: const Text('Reports / printable lists'),
+        ),
         TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(),
           child: const Text('Close'),
@@ -18462,24 +20858,24 @@ class _InventoryHomeState extends State<InventoryHome> {
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
             if (metricsPanelExpanded) ...[
-            _metricsTypeTracker(palette),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final stat in stats) _metricStatTile(stat, palette),
-              ],
-            ),
-            if (filamentTracked &&
-                (metrics.topFilamentMaterials.isNotEmpty ||
-                    metrics.topFilamentColors.isNotEmpty ||
-                    metrics.topFilamentBrands.isNotEmpty)) ...[
+              _metricsTypeTracker(palette),
               const SizedBox(height: 12),
-              _metricsFilamentBreakdown(metrics, palette),
-            ],
-            const SizedBox(height: 16),
-            _metricsCharts(palette),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  for (final stat in stats) _metricStatTile(stat, palette),
+                ],
+              ),
+              if (filamentTracked &&
+                  (metrics.topFilamentMaterials.isNotEmpty ||
+                      metrics.topFilamentColors.isNotEmpty ||
+                      metrics.topFilamentBrands.isNotEmpty)) ...[
+                const SizedBox(height: 12),
+                _metricsFilamentBreakdown(metrics, palette),
+              ],
+              const SizedBox(height: 16),
+              _metricsCharts(palette),
             ],
           ],
         ),
@@ -20168,6 +22564,7 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                     final line = kit.bom[index];
                     final lineStock = stock[index];
                     final missing = lineStock?.isMissing ?? false;
+                    final colors = Theme.of(context).colorScheme;
                     final nestedKit = kits
                         .where((candidate) => candidate.id == line.productId)
                         .firstOrNull;
@@ -20193,14 +22590,20 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                           ? Icons.inventory_2_outlined
                           : Icons.account_tree_outlined,
                       color: missing
-                          ? const Color(0xffff7b8e)
+                          ? colors.error
                           : nestedKit == null
-                          ? const Color(0xff929aac)
-                          : Theme.of(context).colorScheme.primary,
+                          ? colors.onSurfaceVariant
+                          : colors.primary,
                     );
                     final title = Text(
                       _lineName(line),
                       key: Key('kit-line-title-$index'),
+                      style: missing
+                          ? TextStyle(
+                              color: colors.onErrorContainer,
+                              fontWeight: FontWeight.w700,
+                            )
+                          : null,
                     );
                     final subtitle = nestedKit == null
                         ? Column(
@@ -20224,8 +22627,8 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                                 key: Key('kit-stock-$index'),
                                 style: TextStyle(
                                   color: missing
-                                      ? const Color(0xffff9cab)
-                                      : const Color(0xff929aac),
+                                      ? colors.onErrorContainer
+                                      : colors.onSurfaceVariant,
                                   fontWeight: missing
                                       ? FontWeight.w700
                                       : FontWeight.w400,
@@ -20239,7 +22642,10 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                       children: [
                         Text(
                           '× ${_formatBomQuantity(line.quantity)}',
-                          style: const TextStyle(
+                          style: TextStyle(
+                            color: missing
+                                ? colors.onErrorContainer
+                                : colors.onSurface,
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
                           ),
@@ -20259,6 +22665,7 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                             icon: const _ShoppingCartIcon(
                               key: Key('bom-shopping-cart-glyph'),
                             ),
+                            color: colors.error,
                           ),
                         ],
                         if (nestedKit == null &&
@@ -20273,6 +22680,7 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                                 : 'Change inventory match',
                             onPressed: () => _matchBomLine(context, index),
                             icon: const Icon(Icons.link_rounded),
+                            color: colors.error,
                           ),
                         ],
                         if (nestedKit != null) ...[
@@ -20305,14 +22713,12 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                             ? 'kit-detail-line-${line.productId}-$index'
                             : 'kit-detail-line-${line.productId}',
                       ),
-                      color: missing ? const Color(0xff351a22) : null,
+                      color: missing ? colors.errorContainer : null,
                       clipBehavior: Clip.antiAlias,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
                         side: BorderSide(
-                          color: missing
-                              ? const Color(0xffe45f72)
-                              : Theme.of(context).colorScheme.outlineVariant,
+                          color: missing ? colors.error : colors.outlineVariant,
                         ),
                       ),
                       child: compact
@@ -20832,18 +23238,17 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
   Widget _buildLine(BuildLine line, _LineStockStatus stock) {
     final complete = line.usedQuantity >= line.requiredQuantity;
     final multiple = line.requiredQuantity > 1;
+    final colors = Theme.of(context).colorScheme;
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 180),
       opacity: complete ? .42 : 1,
       child: Card(
         key: Key('build-stock-${line.id}'),
-        color: stock.isMissing ? const Color(0xff351a22) : null,
+        color: stock.isMissing ? colors.errorContainer : null,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-            color: stock.isMissing
-                ? const Color(0xffe45f72)
-                : Theme.of(context).colorScheme.outlineVariant,
+            color: stock.isMissing ? colors.error : colors.outlineVariant,
           ),
         ),
         child: LayoutBuilder(
@@ -20858,7 +23263,7 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
               color: complete
                   ? const Color(0xff42d8c7)
                   : stock.isMissing
-                  ? const Color(0xffff7b8e)
+                  ? colors.error
                   : null,
             );
             final details = Text.rich(
@@ -20871,8 +23276,8 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
                   if (stock.isMissing)
                     TextSpan(
                       text: ' · ${_formatBomQuantity(stock.missing)} missing',
-                      style: const TextStyle(
-                        color: Color(0xffff9cab),
+                      style: TextStyle(
+                        color: colors.onErrorContainer,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -24980,9 +27385,19 @@ class _PersonalizationSettingsDialogState
                 key: const Key('resume-latest-item-draft'),
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Resume latest item draft'),
-                subtitle: const Text('Automatically reopen your latest unfinished item.'),
-                value: widget.database!.loadBoolPreference(resumeLatestItemDraftPreference, fallback: true),
-                onChanged: (value) => setState(() => widget.database!.saveBoolPreference(resumeLatestItemDraftPreference, value)),
+                subtitle: const Text(
+                  'Automatically reopen your latest unfinished item.',
+                ),
+                value: widget.database!.loadBoolPreference(
+                  resumeLatestItemDraftPreference,
+                  fallback: true,
+                ),
+                onChanged: (value) => setState(
+                  () => widget.database!.saveBoolPreference(
+                    resumeLatestItemDraftPreference,
+                    value,
+                  ),
+                ),
               ),
 
             const Text(
@@ -25128,6 +27543,39 @@ class _PersonalizationSettingsDialogState
                 widget.onHideZeroQuantityItemsChanged(value);
               },
             ),
+            if (widget.database != null) ...[
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                key: const Key('location-default-tab'),
+                initialValue: widget.database!.loadStringPreference(
+                  'location_default_tab',
+                  fallback: 'inventory',
+                ),
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Location opens to',
+                  helperText:
+                      'Choose the first tab shown when opening a location.',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'inventory',
+                    child: Text('Inventory'),
+                  ),
+                  DropdownMenuItem(value: 'layout', child: Text('Layout')),
+                  DropdownMenuItem(value: 'qr', child: Text('QR Code')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(
+                    () => widget.database!.saveStringPreference(
+                      'location_default_tab',
+                      value,
+                    ),
+                  );
+                },
+              ),
+            ],
             const SizedBox(height: 4),
             Text(
               'Main view scrollbar · ${mainScrollbarWidth.round()} px',
@@ -26425,7 +28873,9 @@ class AddItemDialog extends StatefulWidget {
   State<AddItemDialog> createState() => _AddItemDialogState();
 }
 
-class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserver {
+class _AddItemDialogState extends State<AddItemDialog>
+    with WidgetsBindingObserver {
+  bool fullscreen = false;
   static const _maximumProductPageBytes = 8 * 1024 * 1024;
   static const _maximumProductImageBytes = 12 * 1024 * 1024;
   static const _maximumProductImageRequests = 2;
@@ -26499,7 +28949,7 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
   Timer? _draftTimer;
   bool _draftReady = false, _draftCommitted = false, _restoringDraft = false;
   String _lastDraftPayload = '';
-  late Map<String,dynamic> _emptyDraft;
+  late Map<String, dynamic> _emptyDraft;
   Map<String, TextEditingController> get _draftControllers => {
     'nameController': nameController,
     'compatibilityController': compatibilityController,
@@ -26530,7 +28980,7 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
     'itemColorController': itemColorController,
     'itemColorLabelController': itemColorLabelController,
   };
-  Map<String,dynamic> _captureDraft() => {
+  Map<String, dynamic> _captureDraft() => {
     'fields': {for (final e in _draftControllers.entries) e.key: e.value.text},
     'storageLocationId': storageLocationId,
     'type': type.name,
@@ -26552,27 +29002,46 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
     'masterSpoolMaterialId': masterSpoolMaterialId,
     '_supplierTypeNeedsReview': _supplierTypeNeedsReview,
     '_typeChosenByUser': _typeChosenByUser,
-    'customFields': {for (final e in customFieldControllers.entries) e.key: e.value.text},
+    'customFields': {
+      for (final e in customFieldControllers.entries) e.key: e.value.text,
+    },
     'supplier': _supplierMetadata,
     'machines': compatibleMachineIds.toList(),
     'styles': styleEntryDrafts.map((e) => e.toJson()).toList(),
-    'image': _bytesToJson(itemImage), 'thumbnail': _bytesToJson(itemThumbnail),
-    'labelImage': _bytesToJson(labelImage), 'barcodeImage': _bytesToJson(barcodeImage),
+    'image': _bytesToJson(itemImage),
+    'thumbnail': _bytesToJson(itemThumbnail),
+    'labelImage': _bytesToJson(labelImage),
+    'barcodeImage': _bytesToJson(barcodeImage),
   };
   void _queueDraft() {
-    if (!_draftReady || _draftCommitted || _restoringDraft || _draftStore == null) return;
+    if (!_draftReady ||
+        _draftCommitted ||
+        _restoringDraft ||
+        _draftStore == null)
+      return;
     _draftTimer?.cancel();
     _draftTimer = Timer(const Duration(milliseconds: 300), _flushDraft);
   }
+
   void _flushDraft() {
     _draftTimer?.cancel();
-    if (!_draftReady || _draftCommitted || _restoringDraft || widget.database?.isClosed != false) return;
+    if (!_draftReady ||
+        _draftCommitted ||
+        _restoringDraft ||
+        widget.database?.isClosed != false)
+      return;
     final data = _captureDraft();
     final payload = jsonEncode(data);
     if (payload == _lastDraftPayload) return;
-    _draftId = _draftStore!.save(_draftId, data, itemId: widget.initialItem?.id, title: nameController.text);
+    _draftId = _draftStore!.save(
+      _draftId,
+      data,
+      itemId: widget.initialItem?.id,
+      title: nameController.text,
+    );
     _lastDraftPayload = payload;
   }
+
   void _saveDraftAndClose() {
     // Explicit draft saving accepts incomplete and invalid field values.
     _lastDraftPayload = '';
@@ -26585,76 +29054,215 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
     super.setState(fn);
     _queueDraft();
   }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) _flushDraft();
   }
-  void _restoreDraft(Map<String,dynamic> data) {
+
+  void _restoreDraft(Map<String, dynamic> data) {
     _restoringDraft = true;
     try {
-      final values = Map<String,dynamic>.from(data['fields'] as Map);
-      for (final e in _draftControllers.entries) { e.value.text = values[e.key] as String? ?? ''; }
+      final values = Map<String, dynamic>.from(data['fields'] as Map);
+      for (final e in _draftControllers.entries) {
+        e.value.text = values[e.key] as String? ?? '';
+      }
       storageLocationId = data['storageLocationId'] as String?;
       type = InventoryType.values.byName(data['type'] as String);
       deployed = data['deployed'] == true;
       drying = data['drying'] == true;
       moistureAlertEnabled = data['moistureAlertEnabled'] == true;
-      moistureTimeUnit = MoistureTimeUnit.values.byName(data['moistureTimeUnit'] as String);
+      moistureTimeUnit = MoistureTimeUnit.values.byName(
+        data['moistureTimeUnit'] as String,
+      );
       vendorId = data['vendorId'] as String?;
       brandId = data['brandId'] as String?;
       productId = data['productId'] as String?;
       spoolTypeId = data['spoolTypeId'] as String;
-      filamentWeightManuallyEdited = data['filamentWeightManuallyEdited'] == true;
+      filamentWeightManuallyEdited =
+          data['filamentWeightManuallyEdited'] == true;
       amsCompatible = data['amsCompatible'] == true;
       refill = data['refill'] == true;
-      searchProvider = ProductSearchProvider.values.byName(data['searchProvider'] as String);
+      searchProvider = ProductSearchProvider.values.byName(
+        data['searchProvider'] as String,
+      );
       customTypeId = data['customTypeId'] as String?;
       materialId = data['materialId'] as String?;
       spoolMaterialId = data['spoolMaterialId'] as String?;
       masterSpoolMaterialId = data['masterSpoolMaterialId'] as String?;
       _supplierTypeNeedsReview = data['_supplierTypeNeedsReview'] == true;
       _typeChosenByUser = data['_typeChosenByUser'] == true;
-      _supplierMetadata = Map<String,String>.from(data['supplier'] as Map);
-      compatibleMachineIds..clear()..addAll((data['machines'] as List).cast<String>());
-      styleEntryDrafts = (data['styles'] as List).map((e) => FilamentStyleEntry.fromJson(Map<String,dynamic>.from(e as Map))).toList();
-      itemImage = _bytesFromJson(data['image']); itemThumbnail = _bytesFromJson(data['thumbnail']);
-      labelImage = _bytesFromJson(data['labelImage']); barcodeImage = _bytesFromJson(data['barcodeImage']);
-      _configureCustomFields(Map<String,String>.from(data['customFields'] as Map));
+      _supplierMetadata = Map<String, String>.from(data['supplier'] as Map);
+      compatibleMachineIds
+        ..clear()
+        ..addAll((data['machines'] as List).cast<String>());
+      styleEntryDrafts = (data['styles'] as List)
+          .map(
+            (e) => FilamentStyleEntry.fromJson(
+              Map<String, dynamic>.from(e as Map),
+            ),
+          )
+          .toList();
+      itemImage = _bytesFromJson(data['image']);
+      itemThumbnail = _bytesFromJson(data['thumbnail']);
+      labelImage = _bytesFromJson(data['labelImage']);
+      barcodeImage = _bytesFromJson(data['barcodeImage']);
+      _configureCustomFields(
+        Map<String, String>.from(data['customFields'] as Map),
+      );
       formKey = GlobalKey<FormState>();
       saveError = null;
       _lastDraftPayload = jsonEncode(_captureDraft());
-    } finally { _restoringDraft = false; }
+    } finally {
+      _restoringDraft = false;
+    }
   }
+
   Future<void> _chooseDraft() async {
     _flushDraft();
-    final choice = await showDialog<String>(context: context, builder: (context) => StatefulBuilder(
-      builder: (context, refresh) {
-        final drafts = _draftStore!.list(itemId: widget.initialItem?.id);
-        return AlertDialog(
-          title: const Text('Item drafts'),
-          content: SizedBox(width: 420, height: 320, child: drafts.isEmpty
-            ? const Center(child: Text('No saved drafts'))
-            : ListView.builder(itemCount: drafts.length, itemBuilder: (context, index) {
-                final draft = drafts[index];
-                return ListTile(title: Text(draft['title'] as String),
-                  subtitle: Text(DateTime.parse(draft['updated'] as String).toLocal().toString().split('.').first),
-                  onTap: () => Navigator.pop(context, draft['id'] as String),
-                  trailing: IconButton(tooltip: 'Delete draft', icon: const Icon(Icons.delete_outline),
-                    onPressed: () => refresh(() {
-                      _draftStore!.delete(draft['id'] as String);
-                      if (_draftId == draft['id']) { _draftId = null; }
-                    })),
-                );
-              })),
-          actions: [TextButton(onPressed: () => Navigator.pop(context, '__new__'), child: const Text('Start new')),
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-        );
-      },
-    ));
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, refresh) {
+          final drafts = _draftStore!.list(itemId: widget.initialItem?.id);
+          return AlertDialog(
+            title: const Text('Item drafts'),
+            content: SizedBox(
+              width: 420,
+              height: 320,
+              child: drafts.isEmpty
+                  ? const Center(child: Text('No saved drafts'))
+                  : ListView.builder(
+                      itemCount: drafts.length,
+                      itemBuilder: (context, index) {
+                        final draft = drafts[index];
+                        return ListTile(
+                          title: Text(draft['title'] as String),
+                          subtitle: Text(
+                            DateTime.parse(draft['updated'] as String)
+                                .toLocal()
+                                .toString()
+                                .split('.')
+                                .first,
+                          ),
+                          onTap: () =>
+                              Navigator.pop(context, draft['id'] as String),
+                          trailing: IconButton(
+                            tooltip: 'Delete draft',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => refresh(() {
+                              _draftStore!.delete(draft['id'] as String);
+                              if (_draftId == draft['id']) {
+                                _draftId = null;
+                              }
+                            }),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, '__new__'),
+                child: const Text('Start new'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
     if (!mounted || choice == null) return;
     final data = choice == '__new__' ? _emptyDraft : _draftStore!.load(choice);
     if (data == null) return;
-    setState(() { _draftId = choice == '__new__' ? null : choice; _restoreDraft(data); });
+    setState(() {
+      _draftId = choice == '__new__' ? null : choice;
+      _restoreDraft(data);
+    });
+  }
+
+  Future<void> _showProductUrlImportDialog() async {
+    final urlController = TextEditingController(
+      text: productUrlController.text,
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        var importing = false;
+        String? error;
+
+        Future<void> submit(StateSetter refresh) async {
+          final uri = Uri.tryParse(urlController.text.trim());
+          if (uri == null ||
+              !uri.hasScheme ||
+              !{'http', 'https'}.contains(uri.scheme)) {
+            refresh(() => error = 'Paste a valid HTTP or HTTPS product URL.');
+            return;
+          }
+          productUrlController.text = uri.toString();
+          refresh(() {
+            error = null;
+            importing = true;
+          });
+          await _importProductPage();
+          if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+        }
+
+        return StatefulBuilder(
+          builder: (context, refresh) => Dialog(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Import from URL',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      key: const Key('product-url-import-field'),
+                      controller: urlController,
+                      autofocus: true,
+                      keyboardType: TextInputType.url,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => importing ? null : submit(refresh),
+                      decoration: InputDecoration(
+                        labelText: 'Product page URL',
+                        hintText: 'https://vendor.example/product…',
+                        errorText: error,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      key: const Key('import-product-url'),
+                      onPressed: importing ? null : () => submit(refresh),
+                      icon: importing
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.download_rounded),
+                      label: Text(importing ? 'Importing…' : 'Import'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    urlController.dispose();
   }
 
   @override
@@ -26669,7 +29277,8 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
         );
     final item = widget.initialItem ?? widget.productTemplate;
     _supplierMetadata = {
-      for (final entry in (item?.customFieldValues ?? <String, String>{}).entries)
+      for (final entry
+          in (item?.customFieldValues ?? <String, String>{}).entries)
         if (entry.key.startsWith('supplier.')) entry.key: entry.value,
     };
     final label = widget.labelDraft;
@@ -26866,26 +29475,51 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
     }
     if (widget.database != null) {
       final raw = widget.database!.loadSyncConfig();
-      final config = raw == null ? <String,dynamic>{} : jsonDecode(raw) as Map<String,dynamic>;
-      _draftStore = ItemDraftStore(widget.database!, digiKeyScope(config['url'] as String? ?? '', config['workspaceId'] as String?));
-      _emptyDraft = jsonDecode(jsonEncode(_captureDraft())) as Map<String,dynamic>;
+      final config = raw == null
+          ? <String, dynamic>{}
+          : jsonDecode(raw) as Map<String, dynamic>;
+      _draftStore = ItemDraftStore(
+        widget.database!,
+        digiKeyScope(
+          config['url'] as String? ?? '',
+          config['workspaceId'] as String?,
+        ),
+      );
+      _emptyDraft =
+          jsonDecode(jsonEncode(_captureDraft())) as Map<String, dynamic>;
       _lastDraftPayload = jsonEncode(_emptyDraft);
-      final hasSeed = widget.productTemplate != null || widget.labelDraft != null || widget.initialFilamentColor != null || widget.initialBarcode.isNotEmpty;
-      if (!hasSeed && widget.database!.loadBoolPreference(resumeLatestItemDraftPreference, fallback: true)) {
-        final latest = _draftStore!.list(itemId: widget.initialItem?.id).firstOrNull;
+      final hasSeed =
+          widget.productTemplate != null ||
+          widget.labelDraft != null ||
+          widget.initialFilamentColor != null ||
+          widget.initialBarcode.isNotEmpty;
+      if (!hasSeed &&
+          widget.database!.loadBoolPreference(
+            resumeLatestItemDraftPreference,
+            fallback: true,
+          )) {
+        final latest = _draftStore!
+            .list(itemId: widget.initialItem?.id)
+            .firstOrNull;
         if (latest != null) {
           _draftId = latest['id'] as String;
           final data = _draftStore!.load(_draftId!);
           if (data != null) _restoreDraft(data);
         }
       }
-      for (final controller in [..._draftControllers.values, ...customFieldControllers.values]) {
+      for (final controller in [
+        ..._draftControllers.values,
+        ...customFieldControllers.values,
+      ]) {
         controller.removeListener(_queueDraft);
         controller.addListener(_queueDraft);
       }
       _draftReady = true;
       WidgetsBinding.instance.addObserver(this);
-      if (hasSeed) { _lastDraftPayload = ''; _queueDraft(); }
+      if (hasSeed) {
+        _lastDraftPayload = '';
+        _queueDraft();
+      }
     }
   }
 
@@ -27281,10 +29915,24 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
   bool _supplierTypeNeedsReview = false;
   bool _typeChosenByUser = false;
   void _matchSupplierType(String category) {
-    final normalized = category.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
-    bool exact(String name) => name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim() == normalized;
-    final custom = widget.customItemTypes.where((entry) => exact(entry.name)).toList();
-    final builtIn = InventoryType.values.where((entry) => entry != InventoryType.custom && entry != InventoryType.other && exact(_displayTypeLabel(entry))).toList();
+    final normalized = category
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    bool exact(String name) =>
+        name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim() ==
+        normalized;
+    final custom = widget.customItemTypes
+        .where((entry) => exact(entry.name))
+        .toList();
+    final builtIn = InventoryType.values
+        .where(
+          (entry) =>
+              entry != InventoryType.custom &&
+              entry != InventoryType.other &&
+              exact(_displayTypeLabel(entry)),
+        )
+        .toList();
     _supplierTypeNeedsReview = false;
     if (_typeChosenByUser) return;
     if (normalized.isNotEmpty && custom.length == 1) {
@@ -27334,8 +29982,19 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
   Future<void> _searchLdo() => _searchStorefront(Storefront.ldo);
 
   Future<void> _searchStorefront(Storefront store) async {
-    final part = await showDialog<West3DPart>(context: context,
-      builder: (_) => West3DSearchDialog(store: store, client: widget.storefrontClients[store] ?? (store == Storefront.west3d ? widget.west3dClient : store == Storefront.ldo ? widget.ldoClient : null)));
+    final part = await showDialog<West3DPart>(
+      context: context,
+      builder: (_) => West3DSearchDialog(
+        store: store,
+        client:
+            widget.storefrontClients[store] ??
+            (store == Storefront.west3d
+                ? widget.west3dClient
+                : store == Storefront.ldo
+                ? widget.ldoClient
+                : null),
+      ),
+    );
     if (part == null || !mounted) return;
     setState(() {
       nameController.text = part.itemName;
@@ -27363,12 +30022,25 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
     final db = widget.database;
     client.persistCooldown = null;
     if (db != null) {
-      client.restoreCooldown(DateTime.tryParse(db.loadStringPreference(
-        'adafruit_next_request', fallback: '')));
-      client.persistCooldown = (next) => db.saveStringPreference('adafruit_next_request', next.toIso8601String());
+      client.restoreCooldown(
+        DateTime.tryParse(
+          db.loadStringPreference('adafruit_next_request', fallback: ''),
+        ),
+      );
+      client.persistCooldown = (next) => db.saveStringPreference(
+        'adafruit_next_request',
+        next.toIso8601String(),
+      );
     }
-    final part = await showDialog<AdafruitPart>(context: context,
-      builder: (_) => AdafruitSearchDialog(client: client, catalogPath: db == null ? null : '${File(db.path).parent.path}/adafruit-catalog.sqlite3'));
+    final part = await showDialog<AdafruitPart>(
+      context: context,
+      builder: (_) => AdafruitSearchDialog(
+        client: client,
+        catalogPath: db == null
+            ? null
+            : '${File(db.path).parent.path}/adafruit-catalog.sqlite3',
+      ),
+    );
     if (part == null || !mounted) return;
     setState(() {
       nameController.text = part.itemName;
@@ -27557,13 +30229,24 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
       visualDensity: VisualDensity.standard,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
+    final saveBarActionStyle = OutlinedButton.styleFrom(
+      fixedSize: const Size.square(48),
+      minimumSize: const Size.square(48),
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.standard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
     return Dialog(
-      insetPadding: EdgeInsets.all(compact ? 8 : 20),
+      insetPadding: fullscreen
+          ? EdgeInsets.zero
+          : EdgeInsets.all(compact ? 8 : 20),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 820),
+        constraints: fullscreen
+            ? const BoxConstraints()
+            : const BoxConstraints(maxWidth: 560, maxHeight: 820),
         child: SizedBox(
-          width: 560,
-          height: 820,
+          width: fullscreen ? MediaQuery.sizeOf(context).width : 560,
+          height: fullscreen ? MediaQuery.sizeOf(context).height : 820,
           child: Form(
             key: formKey,
             child: Column(
@@ -27577,30 +30260,76 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                   ),
                   child: Row(
                     children: [
-                      Expanded(child: Text(
-                        widget.initialItem == null ? 'Add an item' : 'Edit item',
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-                      )),
+                      Expanded(
+                        child: Text(
+                          widget.initialItem == null
+                              ? 'Add an item'
+                              : 'Edit item',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
                       const SizedBox(width: 12),
-                      Tooltip(message: 'Close', child: OutlinedButton(
-                        style: headerActionStyle,
-                        onPressed: () => Navigator.pop(context),
-                        child: const Icon(Icons.close_rounded, semanticLabel: 'Close'),
-                      )),
+                      Tooltip(
+                        message: fullscreen
+                            ? 'Exit full screen'
+                            : 'Full screen',
+                        child: OutlinedButton(
+                          onPressed: () =>
+                              setState(() => fullscreen = !fullscreen),
+                          style: headerActionStyle,
+                          child: _FullscreenIcon(expanded: fullscreen),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: 'Close',
+                        child: OutlinedButton(
+                          style: headerActionStyle,
+                          onPressed: () => Navigator.pop(context),
+                          child: const Icon(
+                            Icons.close_rounded,
+                            semanticLabel: 'Close',
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
                 const Divider(height: 1),
                 if (widget.initialItem == null)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    child: SupplierSearchMenu(
-                      onDigiKey: _searchDigiKey,
-                      onMouser: _searchMouser,
-                      onWest3D: _searchWest3D,
-                      onLdo: _searchLdo,
-                      onAdafruit: _searchAdafruit,
-                      onStorefront: _searchStorefront,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Expanded(
+                          child: SupplierSearchMenu(
+                            onDigiKey: _searchDigiKey,
+                            onMouser: _searchMouser,
+                            onWest3D: _searchWest3D,
+                            onLdo: _searchLdo,
+                            onAdafruit: _searchAdafruit,
+                            onStorefront: _searchStorefront,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: 'Import from URL',
+                          child: OutlinedButton.icon(
+                            key: const Key('open-product-url-import'),
+                            onPressed: _showProductUrlImportDialog,
+                            style: headerActionStyle,
+                            icon: const Icon(Icons.public_rounded),
+                            label: const Text('URL'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 Expanded(
@@ -27611,26 +30340,31 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (_supplierMetadata['supplier.digikey.partNumber'] != null)
+                        if (_supplierMetadata['supplier.digikey.partNumber'] !=
+                            null)
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             child: Text(
                               'DigiKey: ${_supplierMetadata['supplier.digikey.partNumber']} · '
                               '${_supplierMetadata['supplier.digikey.packaging']}\n'
-
                               '${widget.existingDigiKeyPartNumbers.contains(_supplierMetadata['supplier.digikey.partNumber']) ? '\nThis DigiKey part is already in your inventory. Saving adds a separate record.' : ''}',
                             ),
                           ),
-                        if (_supplierMetadata['supplier.west3d.variantId'] != null)
-                          Padding(padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text('West3D: ${_supplierMetadata['supplier.west3d.partNumber']} · ${_supplierMetadata['supplier.west3d.variant']}')),
-                        if (_supplierMetadata['supplier.mouser.partNumber'] != null)
+                        if (_supplierMetadata['supplier.west3d.variantId'] !=
+                            null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              'West3D: ${_supplierMetadata['supplier.west3d.partNumber']} · ${_supplierMetadata['supplier.west3d.variant']}',
+                            ),
+                          ),
+                        if (_supplierMetadata['supplier.mouser.partNumber'] !=
+                            null)
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             child: Text(
                               'Mouser: ${_supplierMetadata['supplier.mouser.partNumber']} · '
                               '${_supplierMetadata['supplier.mouser.packaging']}\n'
-
                               '${widget.existingMouserPartNumbers.contains(_supplierMetadata['supplier.mouser.partNumber']) ? '\nThis Mouser part is already in your inventory. Saving adds a separate record.' : ''}',
                             ),
                           ),
@@ -27802,9 +30536,12 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                           DropdownButtonFormField<String>(
                             key: const Key('item-type'),
                             isExpanded: true,
-                            initialValue: _supplierTypeNeedsReview ? null : _selectedTypeChoice,
+                            initialValue: _supplierTypeNeedsReview
+                                ? null
+                                : _selectedTypeChoice,
                             hint: const Text('Choose type'),
-                            validator: (value) => value == null ? 'Choose an item type' : null,
+                            validator: (value) =>
+                                value == null ? 'Choose an item type' : null,
                             decoration: const InputDecoration(
                               labelText: 'Type',
                             ),
@@ -28197,7 +30934,7 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                             ),
                             if (compact)
                               const Text(
-                                'Choose the correct product page, then paste its address below.',
+                                'Choose the correct product page, then import its URL from the link button above.',
                                 style: TextStyle(
                                   color: Color(0xff929aac),
                                   fontSize: 12,
@@ -28206,7 +30943,7 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                             else
                               const Expanded(
                                 child: Text(
-                                  'Choose the correct product page, then paste its address below.',
+                                  'Choose the correct product page, then import its URL from the link button above.',
                                   style: TextStyle(
                                     color: Color(0xff929aac),
                                     fontSize: 12,
@@ -28228,64 +30965,6 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                             ),
                           ),
                         ],
-                        const SizedBox(height: 14),
-                        const Divider(key: Key('search-url-divider')),
-                        const SizedBox(height: 8),
-                        const Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            'Import from a product URL',
-                            style: TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Flex(
-                          direction: compact ? Axis.vertical : Axis.horizontal,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (compact)
-                              TextFormField(
-                                key: const Key('product-page-url'),
-                                controller: productUrlController,
-                                keyboardType: TextInputType.url,
-                                decoration: const InputDecoration(
-                                  labelText: 'Product page URL',
-                                  hintText: 'https://vendor.example/product…',
-                                ),
-                              )
-                            else
-                              Expanded(
-                                child: TextFormField(
-                                  key: const Key('product-page-url'),
-                                  controller: productUrlController,
-                                  keyboardType: TextInputType.url,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Product page URL',
-                                    hintText: 'https://vendor.example/product…',
-                                  ),
-                                ),
-                              ),
-                            SizedBox(
-                              width: compact ? 0 : 10,
-                              height: compact ? 12 : 0,
-                            ),
-                            FilledButton.icon(
-                              key: const Key('import-product-page'),
-                              onPressed: importingProductPage
-                                  ? null
-                                  : _importProductPage,
-                              icon: importingProductPage
-                                  ? const SizedBox.square(
-                                      dimension: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Icon(Icons.download_rounded),
-                              label: const Text('Import'),
-                            ),
-                          ],
-                        ),
                         const SizedBox(height: 14),
                         _ImagePickerButton(
                           key: const Key('item-image-picker'),
@@ -28844,41 +31523,57 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
                     borderRadius: BorderRadius.circular(16),
                     child: Padding(
                       padding: const EdgeInsets.all(8),
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        if (saveError != null)
-                          Padding(padding: const EdgeInsets.only(bottom: 8),
-                            child: Text(saveError!, key: const Key('item-save-error'),
-                              style: const TextStyle(color: Color(0xffffcf4d)))),
-                        if (_draftStore != null)
-                          Align(alignment: Alignment.centerLeft, child: TextButton.icon(
-                            key: const Key('item-drafts'), onPressed: _chooseDraft,
-                            icon: const _DraftActionIcon(), label: const Text('Drafts'),
-                          )),
-                        LayoutBuilder(builder: (context, constraints) {
-                          final save = OutlinedButton.icon(
-                            key: const Key('save-item'), onPressed: _save,
-                            style: headerActionStyle,
-                            icon: const Icon(Icons.save_rounded), label: const Text('Save'),
-                          );
-                          if (_draftStore == null) {
-                            return SizedBox(width: double.infinity, child: save);
-                          }
-                          final draft = OutlinedButton.icon(
-                            key: const Key('save-item-draft'),
-                            onPressed: _saveDraftAndClose,
-                            style: headerActionStyle,
-                            icon: const _DraftActionIcon(edit: true),
-                            label: const Text('Save Draft'),
-                          );
-                          if (constraints.maxWidth < 340 ||
-                              MediaQuery.textScalerOf(context).scale(14) > 21) {
-                            return Column(crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [draft, const SizedBox(height: 8), save]);
-                          }
-                          return Row(children: [Expanded(child: draft),
-                            const SizedBox(width: 8), Expanded(child: save)]);
-                        }),
-                      ]),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (saveError != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                saveError!,
+                                key: const Key('item-save-error'),
+                                style: const TextStyle(
+                                  color: Color(0xffffcf4d),
+                                ),
+                              ),
+                            ),
+                          Row(
+                            children: [
+                              if (_draftStore != null) ...[
+                                Tooltip(
+                                  message: 'Drafts',
+                                  child: OutlinedButton(
+                                    key: const Key('item-drafts'),
+                                    onPressed: _chooseDraft,
+                                    style: saveBarActionStyle,
+                                    child: const _DraftActionIcon(),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Tooltip(
+                                  message: 'Save draft',
+                                  child: OutlinedButton(
+                                    key: const Key('save-item-draft'),
+                                    onPressed: _saveDraftAndClose,
+                                    style: saveBarActionStyle,
+                                    child: const _DraftActionIcon(edit: true),
+                                  ),
+                                ),
+                              ],
+                              const Spacer(),
+                              Tooltip(
+                                message: 'Save item',
+                                child: OutlinedButton(
+                                  key: const Key('save-item'),
+                                  onPressed: _save,
+                                  style: saveBarActionStyle,
+                                  child: const Icon(Icons.save_rounded),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -28929,133 +31624,133 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
         .toSet()
         .toList();
     final savedItem = InventoryItem(
-        id: widget.initialItem?.id ?? _newInventoryId(),
-        name: nameController.text.trim(),
-        type: type,
-        compatibility: compatibility,
-        purposeTags: type == InventoryType.filament ? purposeTags : const [],
-        styleEntries: type == InventoryType.filament
-            ? styleEntryDrafts.where((entry) => entry.style.isNotEmpty).toList()
-            : const [],
-        added: widget.initialItem?.added ?? DateTime.now(),
-        cost: double.parse(costController.text),
-        quantity: double.parse(quantityController.text),
-        quantityAlertThreshold: double.tryParse(
-          quantityAlertThresholdController.text,
-        ),
-        color: _typeColor(type),
-        itemColorName: _normalizeItemColorValue(itemColorController.text),
-        itemColorLabel: itemColorLabelController.text.trim(),
-        dryingMinutes: type == InventoryType.filament
-            ? int.tryParse(dryingController.text)
-            : null,
-        dryingRemaining: type == InventoryType.filament
-            ? drying
-                  ? widget.initialItem?.dryingRemaining ??
-                        int.tryParse(dryingController.text)
-                  : 0
-            : null,
-        dryingStartedAt: type == InventoryType.filament && drying
-            ? widget.initialItem?.dryingStartedAt ?? DateTime.now()
-            : null,
-        moistureLifespanMinutes: type == InventoryType.filament
-            ? _minutesFromAmount(
-                double.tryParse(moistureLifespanController.text),
-                moistureTimeUnit,
-              )
-            : null,
-        moistureTimeUnit: moistureTimeUnit,
-        moistureAlertEnabled:
-            type == InventoryType.filament && moistureAlertEnabled,
-        moistureAlertThresholdMinutes:
-            type == InventoryType.filament && moistureAlertEnabled
-            ? _minutesFromAmount(
-                double.tryParse(moistureAlertThresholdController.text),
-                moistureTimeUnit,
-              )
-            : null,
-        deployed: deployed,
-        vendor: vendorController.text.trim(),
-        printingInstructions: type.supportsPrinting
-            ? printingController.text.trim()
-            : '',
-        dryingInstructions:
-            type.supportsDrying &&
-                dryingTemperatureController.text.trim().isNotEmpty
-            ? 'Dry at ${dryingTemperatureController.text.trim()}°C for ${dryingController.text.trim()} minutes.'
-            : type.supportsDrying
-            ? dryingInstructionsController.text.trim()
-            : '',
-        storageInstructions: storageController.text.trim(),
-        archived: widget.initialItem?.archived ?? false,
-        filamentStatus:
-            widget.initialItem?.filamentStatus ?? FilamentStatus.ready,
-        brand: brandController.text.trim(),
-        storageLocation: storageLocationController.text.trim(),
-        storageLocationId: storageLocationId ?? '',
-        deploymentLocation: deploymentLocationController.text.trim(),
-        lastDriedAt:
-            widget.initialItem?.lastDriedAt ??
-            (type == InventoryType.filament ? DateTime.now() : null),
-        imageBytes: itemImage,
-        thumbnailBytes: itemThumbnail,
-        labelImageBytes: labelImage,
-        barcode: barcodeController.text.trim(),
-        productUrl: productUrlController.text.trim(),
-        compatibleMachineIds: compatibleMachineIds.toList(),
-        spoolTypeId: type == InventoryType.filament
-            ? spoolTypeId
-            : defaultSpoolTypeId,
-        filamentWeightGrams: type == InventoryType.filament
-            ? double.tryParse(filamentWeightController.text.trim())
-            : null,
-        amsCompatible: type == InventoryType.filament && amsCompatible,
-        spoolTareWeightGrams: type == InventoryType.filament
-            ? double.tryParse(spoolTareWeightController.text.trim())
-            : null,
-        spoolOuterDiameterMm: type == InventoryType.filament
-            ? double.tryParse(spoolOuterDiameterController.text.trim())
-            : null,
-        spoolWidthMm: type == InventoryType.filament
-            ? double.tryParse(spoolWidthController.text.trim())
-            : null,
-        spoolHoleDiameterMm: type == InventoryType.filament
-            ? double.tryParse(spoolHoleDiameterController.text.trim())
-            : null,
-        refill: type == InventoryType.filament && refill,
-        masterSpool: type == InventoryType.filament && refill
-            ? masterSpoolController.text.trim()
-            : '',
-        catalogProductId: productId,
-        customTypeId: type == InventoryType.custom ? customTypeId ?? '' : '',
-        customTypeName: type == InventoryType.custom
-            ? _selectedCustomType?.name ?? ''
-            : '',
-        customFieldValues: {
-          if (type == InventoryType.custom)
-            for (final entry in customFieldControllers.entries)
-              entry.key: entry.value.text.trim(),
-          ..._supplierMetadata,
-        },
-        materialId: materialId ?? '',
-        materialName: _selectedMaterial?.name ?? '',
-        spoolMaterialId: type == InventoryType.filament
-            ? spoolMaterialId ?? ''
-            : '',
-        spoolMaterialName: type == InventoryType.filament
-            ? _materialById(spoolMaterialId, 'component:spool')?.name ?? ''
-            : '',
-        masterSpoolMaterialId: type == InventoryType.filament && refill
-            ? masterSpoolMaterialId ?? ''
-            : '',
-        masterSpoolMaterialName: type == InventoryType.filament && refill
-            ? _materialById(
-                    masterSpoolMaterialId,
-                    'component:master-spool',
-                  )?.name ??
-                  ''
-            : '',
-      );
+      id: widget.initialItem?.id ?? _newInventoryId(),
+      name: nameController.text.trim(),
+      type: type,
+      compatibility: compatibility,
+      purposeTags: type == InventoryType.filament ? purposeTags : const [],
+      styleEntries: type == InventoryType.filament
+          ? styleEntryDrafts.where((entry) => entry.style.isNotEmpty).toList()
+          : const [],
+      added: widget.initialItem?.added ?? DateTime.now(),
+      cost: double.parse(costController.text),
+      quantity: double.parse(quantityController.text),
+      quantityAlertThreshold: double.tryParse(
+        quantityAlertThresholdController.text,
+      ),
+      color: _typeColor(type),
+      itemColorName: _normalizeItemColorValue(itemColorController.text),
+      itemColorLabel: itemColorLabelController.text.trim(),
+      dryingMinutes: type == InventoryType.filament
+          ? int.tryParse(dryingController.text)
+          : null,
+      dryingRemaining: type == InventoryType.filament
+          ? drying
+                ? widget.initialItem?.dryingRemaining ??
+                      int.tryParse(dryingController.text)
+                : 0
+          : null,
+      dryingStartedAt: type == InventoryType.filament && drying
+          ? widget.initialItem?.dryingStartedAt ?? DateTime.now()
+          : null,
+      moistureLifespanMinutes: type == InventoryType.filament
+          ? _minutesFromAmount(
+              double.tryParse(moistureLifespanController.text),
+              moistureTimeUnit,
+            )
+          : null,
+      moistureTimeUnit: moistureTimeUnit,
+      moistureAlertEnabled:
+          type == InventoryType.filament && moistureAlertEnabled,
+      moistureAlertThresholdMinutes:
+          type == InventoryType.filament && moistureAlertEnabled
+          ? _minutesFromAmount(
+              double.tryParse(moistureAlertThresholdController.text),
+              moistureTimeUnit,
+            )
+          : null,
+      deployed: deployed,
+      vendor: vendorController.text.trim(),
+      printingInstructions: type.supportsPrinting
+          ? printingController.text.trim()
+          : '',
+      dryingInstructions:
+          type.supportsDrying &&
+              dryingTemperatureController.text.trim().isNotEmpty
+          ? 'Dry at ${dryingTemperatureController.text.trim()}°C for ${dryingController.text.trim()} minutes.'
+          : type.supportsDrying
+          ? dryingInstructionsController.text.trim()
+          : '',
+      storageInstructions: storageController.text.trim(),
+      archived: widget.initialItem?.archived ?? false,
+      filamentStatus:
+          widget.initialItem?.filamentStatus ?? FilamentStatus.ready,
+      brand: brandController.text.trim(),
+      storageLocation: storageLocationController.text.trim(),
+      storageLocationId: storageLocationId ?? '',
+      deploymentLocation: deploymentLocationController.text.trim(),
+      lastDriedAt:
+          widget.initialItem?.lastDriedAt ??
+          (type == InventoryType.filament ? DateTime.now() : null),
+      imageBytes: itemImage,
+      thumbnailBytes: itemThumbnail,
+      labelImageBytes: labelImage,
+      barcode: barcodeController.text.trim(),
+      productUrl: productUrlController.text.trim(),
+      compatibleMachineIds: compatibleMachineIds.toList(),
+      spoolTypeId: type == InventoryType.filament
+          ? spoolTypeId
+          : defaultSpoolTypeId,
+      filamentWeightGrams: type == InventoryType.filament
+          ? double.tryParse(filamentWeightController.text.trim())
+          : null,
+      amsCompatible: type == InventoryType.filament && amsCompatible,
+      spoolTareWeightGrams: type == InventoryType.filament
+          ? double.tryParse(spoolTareWeightController.text.trim())
+          : null,
+      spoolOuterDiameterMm: type == InventoryType.filament
+          ? double.tryParse(spoolOuterDiameterController.text.trim())
+          : null,
+      spoolWidthMm: type == InventoryType.filament
+          ? double.tryParse(spoolWidthController.text.trim())
+          : null,
+      spoolHoleDiameterMm: type == InventoryType.filament
+          ? double.tryParse(spoolHoleDiameterController.text.trim())
+          : null,
+      refill: type == InventoryType.filament && refill,
+      masterSpool: type == InventoryType.filament && refill
+          ? masterSpoolController.text.trim()
+          : '',
+      catalogProductId: productId,
+      customTypeId: type == InventoryType.custom ? customTypeId ?? '' : '',
+      customTypeName: type == InventoryType.custom
+          ? _selectedCustomType?.name ?? ''
+          : '',
+      customFieldValues: {
+        if (type == InventoryType.custom)
+          for (final entry in customFieldControllers.entries)
+            entry.key: entry.value.text.trim(),
+        ..._supplierMetadata,
+      },
+      materialId: materialId ?? '',
+      materialName: _selectedMaterial?.name ?? '',
+      spoolMaterialId: type == InventoryType.filament
+          ? spoolMaterialId ?? ''
+          : '',
+      spoolMaterialName: type == InventoryType.filament
+          ? _materialById(spoolMaterialId, 'component:spool')?.name ?? ''
+          : '',
+      masterSpoolMaterialId: type == InventoryType.filament && refill
+          ? masterSpoolMaterialId ?? ''
+          : '',
+      masterSpoolMaterialName: type == InventoryType.filament && refill
+          ? _materialById(
+                  masterSpoolMaterialId,
+                  'component:master-spool',
+                )?.name ??
+                ''
+          : '',
+    );
     _draftCommitted = true;
     _draftTimer?.cancel();
     if (_draftId != null) _draftStore?.delete(_draftId!);
@@ -29589,7 +32284,8 @@ class _AddItemDialogState extends State<AddItemDialog> with WidgetsBindingObserv
       customFieldControllers[field] = TextEditingController(
         text: values[field] ?? '',
       );
-      if (_draftStore != null) customFieldControllers[field]!.addListener(_queueDraft);
+      if (_draftStore != null)
+        customFieldControllers[field]!.addListener(_queueDraft);
     }
   }
 
@@ -30490,6 +33186,8 @@ class ItemDetailsPanel extends StatefulWidget {
     this.typeIconImageBytes,
     this.initialWidth = 520,
     this.onWidthChanged,
+    this.fullscreen = false,
+    this.onFullscreenChanged,
     this.canEdit = true,
     this.canArchive = true,
     this.canMarkDepleted = true,
@@ -30513,6 +33211,8 @@ class ItemDetailsPanel extends StatefulWidget {
   final Uint8List? typeIconImageBytes;
   final double initialWidth;
   final ValueChanged<double>? onWidthChanged;
+  final bool fullscreen;
+  final ValueChanged<bool>? onFullscreenChanged;
   final bool canEdit;
   final bool canArchive;
   final bool canMarkDepleted;
@@ -30596,6 +33296,9 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+    titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+    contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+    actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
     title: const Text('Log filament usage'),
     content: SingleChildScrollView(
       child: Column(
@@ -30603,7 +33306,14 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
         children: [
           DropdownButtonFormField<SpoolPrintOutcome>(
             initialValue: outcome,
-            decoration: const InputDecoration(labelText: 'Print outcome'),
+            decoration: const InputDecoration(
+              labelText: 'Print outcome',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+            ),
             items: const [
               DropdownMenuItem(
                 value: SpoolPrintOutcome.successful,
@@ -30616,7 +33326,7 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
             ],
             onChanged: (value) => setState(() => outcome = value!),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           TextField(
             controller: usedController,
             autofocus: true,
@@ -30624,38 +33334,65 @@ class _SpoolUsageDialogState extends State<_SpoolUsageDialog> {
             decoration: const InputDecoration(
               labelText: 'Filament used (g)',
               suffixText: 'g',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           TextField(
             controller: wasteController,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(
               labelText: 'Waste (g)',
               suffixText: 'g',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           TextField(
             controller: projectController,
             decoration: const InputDecoration(
               labelText: 'Project / build (optional)',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
             ),
           ),
           if (outcome == SpoolPrintOutcome.failed) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
               controller: reasonController,
               decoration: const InputDecoration(
                 labelText: 'Waste reason (optional)',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
               ),
             ),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           TextField(
             controller: notesController,
             maxLines: 2,
-            decoration: const InputDecoration(labelText: 'Notes (optional)'),
+            decoration: const InputDecoration(
+              labelText: 'Notes (optional)',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+            ),
           ),
         ],
       ),
@@ -30770,6 +33507,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   );
 
   Widget _sidebarColorCard({required bool overlay}) {
+    final colorScheme = Theme.of(context).colorScheme;
     final swatch = _itemColorSwatch(item.itemColorName);
     final gradientColors = _itemGradientColors(item);
     final coextrudedColors = _itemCoextrudedColors(item);
@@ -30822,9 +33560,11 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: _themeCanvas(context).withValues(alpha: overlay ? .82 : .7),
+            color: colorScheme.surface.withValues(alpha: overlay ? .9 : .82),
             border: Border.all(
-              color: Colors.white.withValues(alpha: overlay ? .2 : .1),
+              color: colorScheme.outlineVariant.withValues(
+                alpha: overlay ? .7 : .5,
+              ),
             ),
             borderRadius: BorderRadius.circular(14),
           ),
@@ -30845,16 +33585,16 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                       colorLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     Text(
                       colorDetail,
-                      style: const TextStyle(
-                        color: Color(0xffc5c9d4),
+                      style: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
                         fontFamily: 'monospace',
                         fontSize: 12,
                       ),
@@ -30885,45 +33625,50 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     );
   }
 
-  Widget _sidebarImageTitleCard() => ClipRRect(
-    key: const Key('sidebar-item-title-overlay'),
-    borderRadius: BorderRadius.circular(14),
-    child: BackdropFilter(
-      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: _themeCanvas(context).withValues(alpha: .82),
-          border: Border.all(color: Colors.white.withValues(alpha: .2)),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Text(
-                item.name,
-                key: const Key('sidebar-item-name'),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 21,
-                  height: 1.12,
-                  fontWeight: FontWeight.w800,
+  Widget _sidebarImageTitleCard() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      key: const Key('sidebar-item-title-overlay'),
+      borderRadius: BorderRadius.circular(14),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: colorScheme.surface.withValues(alpha: .9),
+            border: Border.all(
+              color: colorScheme.outlineVariant.withValues(alpha: .7),
+            ),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  item.name,
+                  key: const Key('sidebar-item-name'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colorScheme.onSurface,
+                    fontSize: 21,
+                    height: 1.12,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            KeyedSubtree(
-              key: const Key('sidebar-item-quantity'),
-              child: _QuantityBadge(item: item),
-            ),
-          ],
+              const SizedBox(width: 10),
+              KeyedSubtree(
+                key: const Key('sidebar-item-quantity'),
+                child: _QuantityBadge(item: item),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _sidebarTypeHeader() => Column(
     key: const Key('sidebar-type-indicator'),
@@ -30946,6 +33691,14 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                 letterSpacing: 1.2,
               ),
             ),
+          ),
+          IconButton(
+            key: const Key('toggle-item-details-fullscreen'),
+            tooltip: widget.fullscreen ? 'Exit full screen' : 'Full screen',
+            onPressed: widget.onFullscreenChanged == null
+                ? null
+                : () => widget.onFullscreenChanged!(!widget.fullscreen),
+            icon: _FullscreenIcon(expanded: widget.fullscreen),
           ),
           IconButton(
             tooltip: 'Close',
@@ -31011,7 +33764,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                 size: 17,
                 color: selected
                     ? Theme.of(context).colorScheme.primary
-                    : const Color(0xff929aac),
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 6),
               Flexible(
@@ -31022,7 +33775,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                   style: TextStyle(
                     color: selected
                         ? const Color(0xfff1edff)
-                        : const Color(0xffa2a9b9),
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 13,
                     fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                   ),
@@ -31480,7 +34233,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     final maximumWidth = desktopResizable
         ? math.max(minimumWidth, availableWidth - 48)
         : availableWidth;
-    final effectivePanelWidth = desktopResizable
+    final effectivePanelWidth = widget.fullscreen
+        ? availableWidth
+        : desktopResizable
         ? panelWidth.clamp(minimumWidth, maximumWidth).toDouble()
         : availableWidth;
     return Material(
@@ -31826,6 +34581,12 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                                     ),
                             ),
                           ),
+                        ),
+                      if (item.locationHistory.isNotEmpty)
+                        _DetailSection(
+                          icon: Icons.history_rounded,
+                          title: 'Recent storage locations',
+                          text: item.locationHistory.take(5).join('\n'),
                         ),
                       if (item.type == InventoryType.filament) ...[
                         const Divider(height: 40),
@@ -32413,8 +35174,8 @@ class _DetailSection extends StatelessWidget {
               valueWidget ??
                   Text(
                     text.isEmpty ? 'No instructions recorded.' : text,
-                    style: const TextStyle(
-                      color: Color(0xffa2a9b9),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       height: 1.45,
                     ),
                   ),
@@ -32478,8 +35239,8 @@ class _FilamentStyleDetailSection extends StatelessWidget {
                     children: [
                       Text(
                         _filamentStyleEntryLabel(entry),
-                        style: const TextStyle(
-                          color: Color(0xffa2a9b9),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           height: 1.45,
                         ),
                       ),
@@ -33009,25 +35770,28 @@ class _MaterialBadge extends StatelessWidget {
   final InventoryItem item;
 
   @override
-  Widget build(BuildContext context) => Container(
-    key: Key('item-material-${item.id}'),
-    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-    decoration: BoxDecoration(
-      color: _itemCardChromeColor.withValues(alpha: .14),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: _itemCardChromeColor.withValues(alpha: .65)),
-    ),
-    child: Text(
-      item.materialName,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 14,
-        fontWeight: FontWeight.w900,
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      key: Key('item-material-${item.id}'),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        color: colors.primary.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.primary.withValues(alpha: .65)),
       ),
-    ),
-  );
+      child: Text(
+        item.materialName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: colors.onSurface,
+          fontSize: 14,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
 }
 
 bool _isLowStock(InventoryItem item) =>
@@ -33660,34 +36424,33 @@ class _PurposeTagPill extends StatelessWidget {
   final bool overlay;
 
   @override
-  Widget build(BuildContext context) => Container(
-    height: 18,
-    alignment: Alignment.center,
-    padding: const EdgeInsets.symmetric(horizontal: 7),
-    decoration: BoxDecoration(
-      color: overlay
-          ? Colors.black.withValues(alpha: .5)
-          : Theme.of(context).colorScheme.primary.withValues(alpha: .12),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(
-        color: overlay
-            ? Colors.white.withValues(alpha: .85)
-            : Theme.of(context).colorScheme.primary.withValues(alpha: .8),
-        width: 1.2,
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      height: 18,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      decoration: BoxDecoration(
+        color: colors.primary.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: colors.primary.withValues(alpha: overlay ? .65 : .8),
+          width: 1.2,
+        ),
       ),
-    ),
-    child: Text(
-      label,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: overlay ? Colors.white : Theme.of(context).colorScheme.onSurface,
-        fontSize: 10,
-        height: 1,
-        fontWeight: FontWeight.w700,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: colors.onSurface,
+          fontSize: 10,
+          height: 1,
+          fontWeight: FontWeight.w700,
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 List<String> _itemDisplayTags(InventoryItem item) =>
@@ -33737,9 +36500,7 @@ class _CardTagMetadataRow extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: overlay
-                  ? const Color(0xffc3c8d3)
-                  : const Color(0xff929aac),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
             ),
           ),
@@ -33771,6 +36532,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     final swatch = _itemColorSwatch(item.itemColorName);
     final gradientColors = _itemGradientColors(item);
     final coextrudedColors = _itemCoextrudedColors(item);
@@ -33850,10 +36612,10 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                   Container(
                     padding: EdgeInsets.all(compact ? 9 : 12),
                     decoration: BoxDecoration(
-                      color: _themeCanvas(context).withValues(alpha: .84),
+                      color: colors.surface.withValues(alpha: .92),
                       borderRadius: BorderRadius.circular(15),
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: .18),
+                        color: colors.outlineVariant.withValues(alpha: .8),
                       ),
                     ),
                     child: Column(
@@ -33930,8 +36692,8 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                                       inlineColorLabel,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Colors.white,
+                                      style: TextStyle(
+                                        color: colors.onSurface,
                                         fontWeight: FontWeight.w700,
                                       ),
                                     ),
@@ -34381,7 +37143,7 @@ class _CardNameAndType extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: overlay ? Colors.white : null,
+                color: overlay ? Theme.of(context).colorScheme.onSurface : null,
                 fontSize: compact ? 15 : 17,
                 height: 1.15,
                 fontWeight: FontWeight.w800,
@@ -34395,9 +37157,7 @@ class _CardNameAndType extends StatelessWidget {
             child: Text(
               '\$${item.cost.toStringAsFixed(2)}',
               style: TextStyle(
-                color: overlay
-                    ? Colors.white
-                    : Theme.of(context).colorScheme.onSurface,
+                color: Theme.of(context).colorScheme.onSurface,
                 fontSize: compact ? 15 : 17,
                 height: 1.15,
                 fontWeight: FontWeight.w800,

@@ -63,8 +63,10 @@ jobs:
           verify_dir="$(mktemp -d)"
           tar -C "$verify_dir" -xzf "$archive"
           test -x "$verify_dir/$package_name/install-or-update.sh"
+          test -x "$verify_dir/$package_name/apply-migrations.sh"
           test -x "$verify_dir/$package_name/connector/entrypoint.sh"
           test "$(find "$verify_dir/$package_name/migrations" -maxdepth 1 -name '*.sql' | wc -l)" -eq "$schema_version"
+          test "$(find "$verify_dir/$package_name/migrations" -maxdepth 1 -name "$(printf '%03d' "$schema_version")_*.sql" | wc -l)" -eq 1
           ! find "$verify_dir/$package_name" -type f \( -name '*.pyc' -o -name '*secret*' -o -name '*.env' \) | grep .
           rm -rf "$verify_dir" "$package_dir"
       - uses: actions/upload-artifact@v7

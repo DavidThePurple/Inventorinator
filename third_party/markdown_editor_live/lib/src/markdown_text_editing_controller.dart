@@ -1,6 +1,16 @@
 import 'package:flutter/material.dart';
 
 class MarkdownEditingController extends TextEditingController {
+  static const _codeSurface = Color(0xFF21142F);
+  static const _codeText = Color(0xFFF0E8F6);
+  static const _codeKeyword = Color(0xFF71C7EC);
+  static const _codeString = Color(0xFFF2B880);
+  static const _codeNumber = Color(0xFFC7A4FF);
+  static const _codeComment = Color(0xFF91B98C);
+  static const _codeFunction = Color(0xFFE6C27A);
+  static const _codeType = Color(0xFFB69CFF);
+  static const _codePunctuation = Color(0xFFBDB0CA);
+
   MarkdownEditingController({
     super.text,
     this.onLinkTap,
@@ -55,7 +65,10 @@ class MarkdownEditingController extends TextEditingController {
         _sourceText = _removeVirtualNewlines(super.text);
       }
       // Map display offset to source offset first, then calculate line number from source text
-      final sourceOffset = _displayToSourceOffset(selection.baseOffset, super.text);
+      final sourceOffset = _displayToSourceOffset(
+        selection.baseOffset,
+        super.text,
+      );
       focusedLine = _getLineNumber(sourceOffset, _sourceText);
     }
   }
@@ -69,27 +82,6 @@ class MarkdownEditingController extends TextEditingController {
       }
     }
     return null;
-  }
-
-  /// Maps a source text offset to a display text offset.
-  /// The display text may contain virtual newline markers (\u200B\n)
-  /// which are 2 display characters that represent 0 source characters.
-  int _sourceToDisplayOffset(int sourceOffset, String displayText) {
-    int displayOffset = 0;
-    int sourcePos = 0;
-
-    for (int i = 0; i < displayText.length && sourcePos < sourceOffset; i++) {
-      if (displayText.startsWith(_virtualNewlineMarker, i)) {
-        // Virtual newline marker - counts as 0 in source, 2 in display
-        displayOffset += _virtualNewlineMarker.length;
-        i += _virtualNewlineMarker.length - 1;
-      } else {
-        sourcePos++;
-        displayOffset++;
-      }
-    }
-
-    return displayOffset;
   }
 
   /// Maps a display text offset to a source text offset.
@@ -176,7 +168,9 @@ class MarkdownEditingController extends TextEditingController {
       );
     } else {
       // Unknown scheme - show error placeholder directly
-      return _buildImageError(altText.isNotEmpty ? altText : 'Unsupported URL: $url');
+      return _buildImageError(
+        altText.isNotEmpty ? altText : 'Unsupported URL: $url',
+      );
     }
   }
 
@@ -218,86 +212,27 @@ class MarkdownEditingController extends TextEditingController {
     }
   }
 
-  /// Internal method that performs the actual newline update logic.
-  /// Must be called within an _isUpdatingText guard to prevent recursion.
+  /// Keeps the editable buffer as the original Markdown source.
+  ///
+  /// Earlier versions injected zero-width markers and real newlines around
+  /// image previews. That made the TextField's buffer differ from the note
+  /// source, which caused IME edits and cursor moves to replay removed text.
+  /// Image previews already have their own WidgetSpan height, so the source
+  /// buffer never needs synthetic characters.
   void _updateTextWithNewlinesInternal() {
-    // First, clean any existing virtual newlines from the current text
-    String cleanText = _removeVirtualNewlines(super.text);
-
-    // Store the clean source text
+    final cleanText = _removeVirtualNewlines(super.text);
     _sourceText = cleanText;
-
-    if (cleanText.isEmpty) {
-      return;
-    }
-
-    // Determine which line range is "focused" (where we show raw syntax)
-    // When _focusedLine is null, ALL images should have newlines (all rendered as widgets)
-    // When _focusedLine is set, only images NOT on that line should have newlines
-    (int, int)? focusedLineRange;
-    if (_focusedLine != null) {
-      focusedLineRange = _getLineRange(_focusedLine!, cleanText);
-    }
-
-    // Build new text with virtual newlines around images that will be rendered as widgets
-    final buffer = StringBuffer();
-    int lastEnd = 0;
-
-    for (final match in _imagePattern.allMatches(cleanText)) {
-      // Add text before this match
-      buffer.write(cleanText.substring(lastEnd, match.start));
-
-      // Check if this image should show raw syntax (on focused line) or rendered widget
-      final bool isOnFocusedLine = focusedLineRange != null &&
-          match.start >= focusedLineRange.$1 &&
-          match.start < focusedLineRange.$2;
-
-      if (!isOnFocusedLine) {
-        // This image will be rendered as a widget - add virtual newlines for spacing
-        final linesAbove = (imageHeightLines - 1) ~/ 2;
-        if (linesAbove > 0) {
-          buffer.write(_virtualNewlineMarker * linesAbove);
-        }
-
-        // Add the image syntax
-        buffer.write(match.group(0));
-
-        // Add virtual newlines after the image
-        final linesBelow = (imageHeightLines - 1) - linesAbove;
-        if (linesBelow > 0) {
-          buffer.write(_virtualNewlineMarker * linesBelow);
-        }
-      } else {
-        // Image is on focused line - show raw syntax, no newlines needed
-        buffer.write(match.group(0));
-      }
-
-      lastEnd = match.end;
-    }
-
-    // Add remaining text
-    buffer.write(cleanText.substring(lastEnd));
-
-    final newText = buffer.toString();
-    
-    if (super.text != newText) {
-      // Preserve cursor position relative to source text
-      final oldSelection = selection;
-      // Map selection from display to source offsets before text change
-      final sourceBase = _displayToSourceOffset(oldSelection.baseOffset, super.text);
-      final sourceExtent = _displayToSourceOffset(oldSelection.extentOffset, super.text);
-      super.text = newText;
-      // Restore selection with offsets mapped from source to display
-      if (oldSelection.isValid) {
-        final newBase = _sourceToDisplayOffset(sourceBase, newText);
-        final newExtent = _sourceToDisplayOffset(sourceExtent, newText);
-        selection = TextSelection(
-          baseOffset: newBase.clamp(0, newText.length),
-          extentOffset: newExtent.clamp(0, newText.length),
-          affinity: oldSelection.affinity,
-        );
-      }
-    }
+    if (super.text == cleanText) return;
+    final oldSelection = selection;
+    super.value = super.value.copyWith(
+      text: cleanText,
+      selection: TextSelection(
+        baseOffset: oldSelection.baseOffset.clamp(0, cleanText.length),
+        extentOffset: oldSelection.extentOffset.clamp(0, cleanText.length),
+        affinity: oldSelection.affinity,
+      ),
+      composing: TextRange.empty,
+    );
   }
 
   /// Remove virtual newlines from text
@@ -305,20 +240,24 @@ class MarkdownEditingController extends TextEditingController {
     return text.replaceAll(_virtualNewlineMarker, '');
   }
 
-  /// Override text setter to update source text and add newlines for image spacing
+  /// Override text setter so externally loaded notes retain exact source text.
   @override
   set text(String value) {
     if (_isUpdatingText) {
       super.text = value;
       return;
     }
-
-    // Clean any virtual newlines from incoming text
     final cleanValue = _removeVirtualNewlines(value);
-    _sourceText = cleanValue;
-
-    // Always update with newlines for image spacing, regardless of focus state
-    _updateTextWithNewlines();
+    _isUpdatingText = true;
+    try {
+      _sourceText = cleanValue;
+      super.value = TextEditingValue(
+        text: cleanValue,
+        selection: TextSelection.collapsed(offset: cleanValue.length),
+      );
+    } finally {
+      _isUpdatingText = false;
+    }
   }
 
   /// Override value setter to handle paste operations
@@ -338,15 +277,33 @@ class MarkdownEditingController extends TextEditingController {
       return;
     }
 
-    // Text has changed - clean virtual newlines and update source text
-    final cleanText = _removeVirtualNewlines(newValue.text);
-    _sourceText = cleanText;
+    // Text has changed - clean virtual newlines and update source text.
+    final previousSource = _removeVirtualNewlines(super.text);
+    var cleanText = _removeVirtualNewlines(newValue.text);
 
     // Map selection from display coordinates (in newValue.text) to source coordinates
     // This is critical because newValue.selection is relative to newValue.text which
     // contains virtual newlines, but we're about to set cleanText which has none.
-    final mappedSourceBase = _displayToSourceOffset(newValue.selection.baseOffset, newValue.text);
-    final mappedSourceExtent = _displayToSourceOffset(newValue.selection.extentOffset, newValue.text);
+    var mappedSourceBase = _displayToSourceOffset(
+      newValue.selection.baseOffset,
+      newValue.text,
+    );
+    var mappedSourceExtent = _displayToSourceOffset(
+      newValue.selection.extentOffset,
+      newValue.text,
+    );
+
+    final continuation = _numberedListContinuation(
+      previousSource,
+      cleanText,
+      mappedSourceExtent,
+    );
+    if (continuation != null) {
+      cleanText = continuation.text;
+      mappedSourceBase = continuation.selectionOffset;
+      mappedSourceExtent = continuation.selectionOffset;
+    }
+    _sourceText = cleanText;
 
     // Update with cleaned text AND mapped selection (source coordinates)
     _isUpdatingText = true;
@@ -356,8 +313,12 @@ class MarkdownEditingController extends TextEditingController {
         extentOffset: mappedSourceExtent.clamp(0, cleanText.length),
         affinity: newValue.selection.affinity,
       );
-      super.value = newValue.copyWith(text: cleanText, selection: sourceSelection);
-      // Always add newlines for image spacing, regardless of focus state
+      super.value = newValue.copyWith(
+        text: cleanText,
+        selection: sourceSelection,
+      );
+      // Keep the backing TextField value as exact Markdown source. Rendering
+      // is handled in buildTextSpan and must not rewrite the edit buffer.
       _updateTextWithNewlinesInternal();
     } finally {
       _isUpdatingText = false;
@@ -366,6 +327,96 @@ class MarkdownEditingController extends TextEditingController {
 
   /// Get the source text (without virtual newlines)
   String get sourceText => _sourceText;
+
+  ({String text, int selectionOffset})? _numberedListContinuation(
+    String previousSource,
+    String updatedSource,
+    int selectionOffset,
+  ) {
+    // Only react to one Enter keypress, never to a pasted multi-line block.
+    if (updatedSource.length != previousSource.length + 1 ||
+        selectionOffset <= 0 ||
+        selectionOffset > updatedSource.length ||
+        updatedSource[selectionOffset - 1] != '\n') {
+      return null;
+    }
+    final withoutNewline =
+        updatedSource.substring(0, selectionOffset - 1) +
+        updatedSource.substring(selectionOffset);
+    if (withoutNewline != previousSource) return null;
+
+    final previousLineStart =
+        updatedSource.lastIndexOf('\n', selectionOffset - 2) + 1;
+    final previousLine = updatedSource.substring(
+      previousLineStart,
+      selectionOffset - 1,
+    );
+    final match = RegExp(r'^([ \t]*)(\d+)\.\s+\S').firstMatch(previousLine);
+    if (match == null) return null;
+
+    final prefix = '${match.group(1)}${int.parse(match.group(2)!) + 1}. ';
+    return (
+      text:
+          updatedSource.substring(0, selectionOffset) +
+          prefix +
+          updatedSource.substring(selectionOffset),
+      selectionOffset: selectionOffset + prefix.length,
+    );
+  }
+
+  List<InlineSpan> _buildCodeSpans(
+    String code,
+    TextStyle style,
+    String language,
+  ) {
+    final keywords = switch (language) {
+      'dart' =>
+        r'abstract|as|async|await|bool|break|case|catch|class|const|continue|default|do|double|else|enum|extends|false|final|finally|for|if|implements|import|in|int|is|late|new|null|on|return|static|String|super|switch|this|throw|true|try|var|void|while|with',
+      'js' || 'javascript' || 'ts' || 'typescript' =>
+        r'async|await|break|case|catch|class|const|continue|default|else|export|false|finally|for|from|function|if|import|in|let|new|null|return|switch|this|throw|true|try|typeof|var|while',
+      'python' || 'py' =>
+        r'and|as|async|await|break|class|continue|def|elif|else|except|False|finally|for|from|if|import|in|is|lambda|None|not|or|pass|return|True|try|while|with|yield',
+      'json' => r'null|false|true',
+      _ =>
+        r'abstract|async|await|class|const|false|final|for|function|if|import|let|null|return|true|var|void|while',
+    };
+    final keywordPattern = RegExp('^(?:$keywords)\$');
+    final tokenPattern = RegExp(
+      "//[^\\n]*|#[^\\n]*|\"(?:\\\\.|[^\"])*\"|'(?:\\\\.|[^'])*'|\\b(?:$keywords)\\b|\\b\\d+(?:\\.\\d+)?\\b|\\b[A-Za-z_]\\w*(?=\\s*\\()|\\b[A-Z][A-Za-z0-9_]*\\b|[(){}\\[\\],.;:=+*/<>!-]+",
+    );
+    final spans = <InlineSpan>[];
+    var offset = 0;
+    for (final match in tokenPattern.allMatches(code)) {
+      if (match.start > offset) {
+        spans.add(
+          TextSpan(text: code.substring(offset, match.start), style: style),
+        );
+      }
+      final token = match.group(0)!;
+      final isFunction = RegExp(r'^\s*\(').hasMatch(code.substring(match.end));
+      final tokenStyle = token.startsWith('//') || token.startsWith('#')
+          ? style.copyWith(color: _codeComment)
+          : token.startsWith('"') || token.startsWith("'")
+          ? style.copyWith(color: _codeString)
+          : RegExp(r'^\d').hasMatch(token)
+          ? style.copyWith(color: _codeNumber)
+          : keywordPattern.hasMatch(token)
+          ? style.copyWith(color: _codeKeyword, fontWeight: FontWeight.w600)
+          : RegExp(r'^[(){}\[\],.;:=+*/<>!-]+$').hasMatch(token)
+          ? style.copyWith(color: _codePunctuation)
+          : isFunction
+          ? style.copyWith(color: _codeFunction, fontWeight: FontWeight.w600)
+          : RegExp(r'^[A-Z]').hasMatch(token)
+          ? style.copyWith(color: _codeType)
+          : style.copyWith(color: _codeFunction, fontWeight: FontWeight.w600);
+      spans.add(TextSpan(text: token, style: tokenStyle));
+      offset = match.end;
+    }
+    if (offset < code.length) {
+      spans.add(TextSpan(text: code.substring(offset), style: style));
+    }
+    return spans;
+  }
 
   @override
   TextSpan buildTextSpan({
@@ -385,6 +436,13 @@ class MarkdownEditingController extends TextEditingController {
     BuildContext context,
   ) {
     final List<InlineSpan> spans = [];
+    final colors = Theme.of(context).colorScheme;
+    final light = Theme.of(context).brightness == Brightness.light;
+    final codeSurface = light ? const Color(0xffe7e1ed) : _codeSurface;
+    final codeText = light ? const Color(0xff211a2d) : _codeText;
+    final inlineCodeSurface = light
+        ? const Color(0xffd7cfe2)
+        : Colors.grey.shade200.withValues(alpha: .5);
 
     // Calculate focused line range in SOURCE text coordinates
     // This is critical because _focusedLine is tracked in source coordinates,
@@ -396,6 +454,30 @@ class MarkdownEditingController extends TextEditingController {
 
     // Pattern definitions
     final patterns = <_MarkdownPattern>[
+      // Escaped Markdown markers render as literal text. Give these the
+      // highest priority so a later inline matcher cannot consume them.
+      _MarkdownPattern(
+        RegExp(r'\\([\\`*_~\[\](){}#+.!-])'),
+        (match) => const TextStyle(),
+        type: _PatternType.escape,
+        priority: 20,
+      ),
+      // Fenced code must be matched before inline code. While the cursor is
+      // anywhere in the block, keep both fences visible so typing never jumps
+      // between hidden syntax and rendered content.
+      _MarkdownPattern(
+        RegExp(
+          r'(^[ \t]*(?:```|~~~)[^\n]*\n?)([\s\S]*?)(^[ \t]*(?:```|~~~)[ \t]*$)',
+          multiLine: true,
+        ),
+        (match) => TextStyle(
+          fontFamily: 'monospace',
+          backgroundColor: codeSurface,
+          color: codeText,
+        ),
+        type: _PatternType.fencedCode,
+        priority: 10,
+      ),
       // Headers: show # only on focused line
       _MarkdownPattern(RegExp(r'^(#{1,6}\s+)(.*)$', multiLine: true), (match) {
         final headingLevel = match.group(1)!.trim().length;
@@ -409,9 +491,16 @@ class MarkdownEditingController extends TextEditingController {
       }, type: _PatternType.header),
       // Blockquote: keep the marker while editing, render a quote rail otherwise.
       _MarkdownPattern(
-        RegExp(r'^(>\s?)(.*(?:\n(?!\s*$)[^\n]+)*)', multiLine: true),
+        RegExp(r'^(>\s?)(.*(?:\n>\s?.*)*)', multiLine: true),
         (match) => const TextStyle(),
         type: _PatternType.blockquote,
+      ),
+      // GitHub-flavored task lists: - [ ] todo / - [x] done.
+      _MarkdownPattern(
+        RegExp(r'^([ \t]*)([*+-])([ \t]+)(\[[ xX]\])([ \t]+)', multiLine: true),
+        (match) => const TextStyle(fontWeight: FontWeight.w500),
+        type: _PatternType.taskList,
+        priority: 5,
       ),
       // Unordered List
       _MarkdownPattern(
@@ -457,19 +546,12 @@ class MarkdownEditingController extends TextEditingController {
       ),
       // Inline code `text`
       _MarkdownPattern(
-        RegExp(r'(`)([^`]+)(`)'),
+        RegExp(r'(?<!`)(`)(?!`)([^`\n]+)(`)(?!`)'),
         (match) => TextStyle(
           fontFamily: 'monospace',
-          backgroundColor: Colors.grey.shade200.withValues(alpha: 0.5),
-        ),
-        type: _PatternType.inline,
-      ),
-      // Block code ```text```
-      _MarkdownPattern(
-        RegExp(r'(```)([\s\S]*?)(```)'),
-        (match) => TextStyle(
-          fontFamily: 'monospace',
-          backgroundColor: Colors.grey.shade200.withValues(alpha: 0.5),
+          backgroundColor: inlineCodeSurface,
+          color: colors.onSurface,
+          fontWeight: FontWeight.w600,
         ),
         type: _PatternType.inline,
       ),
@@ -513,14 +595,19 @@ class MarkdownEditingController extends TextEditingController {
     for (final pattern in patterns) {
       for (final match in pattern.exp.allMatches(displayText)) {
         // Convert display position to source position for accurate line comparison
-        final matchStartSource = _displayToSourceOffset(match.start, displayText);
+        final matchStartSource = _displayToSourceOffset(
+          match.start,
+          displayText,
+        );
         final matchEndSource = _displayToSourceOffset(match.end, displayText);
-        final isOnFocusedLine = focusedLineRangeSource != null &&
-            (pattern.type == _PatternType.blockquote
+        final isOnFocusedLine =
+            focusedLineRangeSource != null &&
+            (pattern.type == _PatternType.blockquote ||
+                    pattern.type == _PatternType.fencedCode
                 ? matchStartSource < focusedLineRangeSource.$2 &&
-                    matchEndSource >= focusedLineRangeSource.$1
+                      matchEndSource >= focusedLineRangeSource.$1
                 : matchStartSource >= focusedLineRangeSource.$1 &&
-                    matchStartSource < focusedLineRangeSource.$2);
+                      matchStartSource < focusedLineRangeSource.$2);
 
         final rangeStyle = pattern.styleBuilder(match);
         final List<InlineSpan> matchSpans = [];
@@ -532,29 +619,56 @@ class MarkdownEditingController extends TextEditingController {
 
         if (pattern.type == _PatternType.virtualNewline) {
           // Hide zero-width markers with zero-size text
+          matchSpans.add(TextSpan(text: match.group(0), style: hiddenStyle));
+        } else if (pattern.type == _PatternType.escape) {
+          // Hide only the escape slash; leave the escaped punctuation visible.
+          matchSpans.add(TextSpan(text: '\\', style: hiddenStyle));
+          matchSpans.add(TextSpan(text: match.group(1), style: combinedStyle));
+        } else if (pattern.type == _PatternType.fencedCode) {
+          final openingFence = match.group(1)!;
+          final content = match.group(2)!;
+          final closingFence = match.group(3)!;
+          final language =
+              RegExp(
+                r'(?:```|~~~)\s*([\w+-]+)',
+              ).firstMatch(openingFence)?.group(1)?.toLowerCase() ??
+              '';
           matchSpans.add(
             TextSpan(
-              text: match.group(0),
-              style: hiddenStyle,
+              text: openingFence,
+              style: isOnFocusedLine ? combinedStyle : hiddenStyle,
+            ),
+          );
+          matchSpans.addAll(_buildCodeSpans(content, combinedStyle, language));
+          matchSpans.add(
+            TextSpan(
+              text: closingFence,
+              style: isOnFocusedLine ? combinedStyle : hiddenStyle,
             ),
           );
         } else if (pattern.type == _PatternType.blockquote) {
           // Group 1: marker, Group 2: quoted content.
           final marker = match.group(1)!;
-          final content = match.group(2)!;
+          final rawContent = match.group(2)!;
+          final renderedContent = rawContent.replaceAll(
+            RegExp(r'\n>\s?'),
+            '\n',
+          );
           if (isOnFocusedLine) {
             matchSpans.add(TextSpan(text: marker, style: combinedStyle));
-            matchSpans.add(TextSpan(text: content, style: combinedStyle));
+            matchSpans.add(TextSpan(text: rawContent, style: combinedStyle));
           } else {
             final quoteRail = defaultStyle.copyWith(
-              color: Colors.deepPurpleAccent,
+              color: Theme.of(context).colorScheme.primary,
               fontWeight: FontWeight.bold,
             );
             matchSpans.add(TextSpan(text: '▌ ', style: quoteRail));
             matchSpans.add(
               TextSpan(
-                text: content.replaceAll('\n', '\n▌ '),
-                style: combinedStyle.copyWith(color: Colors.grey.shade300),
+                text: renderedContent.replaceAll('\n', '\n▌ '),
+                style: combinedStyle.copyWith(
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
               ),
             );
           }
@@ -570,6 +684,47 @@ class MarkdownEditingController extends TextEditingController {
             ),
           );
           matchSpans.add(TextSpan(text: content, style: combinedStyle));
+        } else if (pattern.type == _PatternType.taskList) {
+          final indent = match.group(1)!;
+          final bullet = match.group(2)!;
+          final spacing = match.group(3)!;
+          final state = match.group(4)!;
+          final trailingSpace = match.group(5)!;
+          matchSpans.add(TextSpan(text: indent, style: defaultStyle));
+          if (isOnFocusedLine) {
+            matchSpans.add(
+              TextSpan(
+                text: '$bullet$spacing$state$trailingSpace',
+                style: combinedStyle.copyWith(color: Colors.blueAccent),
+              ),
+            );
+          } else {
+            final checked = state.toLowerCase() == '[x]';
+            final sourceMarker = '$bullet$spacing$state$trailingSpace';
+            // `☑` falls back to Android's emoji font while `☐` does not,
+            // making checked tasks visibly larger. `☒` is a monochrome text
+            // glyph with the same metrics as the empty ballot box.
+            final renderedMarker = checked ? '☒ ' : '☐ ';
+            matchSpans.add(
+              TextSpan(
+                text: renderedMarker,
+                style: combinedStyle.copyWith(
+                  color: checked ? Colors.greenAccent : Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            );
+            matchSpans.add(
+              TextSpan(
+                // Keep the rendered span exactly as long as the underlying
+                // Markdown marker. The previous code emitted both the visual
+                // checkbox and the full hidden marker, which shifted the rest
+                // of the line and made the following space behave like a wrap.
+                text: '\u200B' * (sourceMarker.length - renderedMarker.length),
+                style: hiddenStyle,
+              ),
+            );
+          }
         } else if (pattern.type == _PatternType.list) {
           // Group 1: Leading indent, Group 2: Bullet/Number, Group 3: Space
           final indent = match.group(1)!;
@@ -686,7 +841,9 @@ class MarkdownEditingController extends TextEditingController {
             // WidgetSpan occupies 1 position, so we need (syntaxLength - 1) more
             final int zwspCount = syntaxLength - 1;
             if (zwspCount > 0) {
-              matchSpans.add(TextSpan(text: '\u200B' * zwspCount, style: hiddenStyle));
+              matchSpans.add(
+                TextSpan(text: '\u200B' * zwspCount, style: hiddenStyle),
+              );
             }
           }
         } else if (pattern.type == _PatternType.inline) {
@@ -769,7 +926,19 @@ class MarkdownEditingController extends TextEditingController {
   }
 }
 
-enum _PatternType { header, blockquote, list, inline, link, thematicBreak, image, virtualNewline }
+enum _PatternType {
+  header,
+  blockquote,
+  taskList,
+  list,
+  inline,
+  link,
+  thematicBreak,
+  image,
+  virtualNewline,
+  fencedCode,
+  escape,
+}
 
 class _MarkdownPattern {
   final RegExp exp;

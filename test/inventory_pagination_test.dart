@@ -128,4 +128,63 @@ void main() {
       dir.deleteSync(recursive: true);
     },
   );
+
+  testWidgets(
+    'inventory search clears restrictive filters for newly saved items',
+    (tester) async {
+      final dir = Directory.systemTemp.createTempSync('paging-search-db-');
+      final db = (await tester.runAsync(
+        () => LocalDatabase.open(overridePath: '${dir.path}/test.sqlite3'),
+      ))!;
+      db.saveState(
+        jsonEncode({
+          'schemaVersion': 8,
+          'inventory': [
+            {
+              'id': 'NEW-ITEM',
+              'name': 'Fuzzy searchable widget',
+              'type': 'other',
+              'compatibility': <String>[],
+              'added': '2026-01-01T00:00:00.000',
+              'cost': 0,
+              'quantity': 0,
+              'color': 0xff888888,
+              'archived': false,
+            },
+          ],
+        }),
+      );
+      db.saveSyncConfig(jsonEncode({'syncMode': 'local'}));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: InventoryHome(
+            database: db,
+            persistedState: db.loadState(
+              includeFullImages: false,
+              includeInventory: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final dynamic home = tester.state(find.byType(InventoryHome));
+      home.setState(() {
+        home.type = InventoryType.filament;
+        home.hideZeroQuantityItems = true;
+      });
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('inventory-search')),
+        'searchable widget',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Fuzzy searchable widget'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      db.close();
+      dir.deleteSync(recursive: true);
+    },
+  );
 }

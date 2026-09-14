@@ -171,6 +171,12 @@ class LocalDatabase {
   }
 
   void _createSchema() {
+    // UI edits and remote sync share this database. WAL keeps a short sync
+    // read from blocking an item save, while the timeout lets the next writer
+    // wait for the current transaction instead of immediately failing.
+    _database.execute('PRAGMA journal_mode = WAL');
+    _database.execute('PRAGMA busy_timeout = 10000');
+    _database.execute('PRAGMA synchronous = NORMAL');
     final normalization = RegExp(r'[^a-z0-9]');
     _database.createFunction(
       functionName: 'inventory_normalize',

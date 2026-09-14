@@ -11000,6 +11000,18 @@ class _InventoryHomeState extends State<InventoryHome> {
     setState(() {
       query = value;
       currentPage = 0;
+      // A direct search is an intent to find an item, including a newly
+      // created zero-quantity record or one outside the last selected type.
+      // Keeping those filters silently active makes saved items appear lost.
+      if (value.trim().isNotEmpty) {
+        hideZeroQuantityItems = false;
+        type = null;
+        customTypeFilterId = null;
+        itemColorFilter = null;
+        filamentMaterialFilter = null;
+        filamentBrandFilter = null;
+        filamentPurposeTagFilter = null;
+      }
       if (_similarItemIds.isNotEmpty) {
         _similarItemIds = <String>{};
         _similarSourceName = null;

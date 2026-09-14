@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 CONNECTOR_VERSION = 2
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 28
 PUBLIC_URL = os.environ["SUPABASE_PUBLIC_URL"].rstrip("/")
 PUBLISHABLE_KEY = os.environ["SUPABASE_PUBLISHABLE_KEY"]
 

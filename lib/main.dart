@@ -14071,28 +14071,25 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _backfillInventoryThumbnails() async {
-    if (_diskInventory != null ||
-        _thumbnailBackfillRunning ||
-        widget.database == null) {
+    if (_thumbnailBackfillRunning || widget.database == null) {
       return;
     }
     _thumbnailBackfillRunning = true;
+    final database = widget.database!;
+    final disk = _diskInventory;
     var changed = false;
     try {
-      final idsWithImages = widget.database!.inventoryIdsWithFullImages();
-      final candidates = inventory
-          .where(
-            (item) =>
-                item.thumbnailBytes == null && idsWithImages.contains(item.id),
-          )
-          .map((item) => item.id)
-          .toList();
+      final candidates = database.inventoryIdsWithFullImages();
       for (final id in candidates) {
         if (!mounted) return;
-        final current = inventory.where((item) => item.id == id).firstOrNull;
+        final index = disk?.indexOfId(id) ?? -1;
+        final current = disk == null
+            ? inventory.where((item) => item.id == id).firstOrNull
+            : index < 0
+            ? null
+            : disk[index];
         final source =
-            current?.imageBytes ??
-            widget.database!.loadInventoryImages(id).imageBytes;
+            current?.imageBytes ?? database.loadInventoryImages(id).imageBytes;
         if (current == null ||
             source == null ||
             current.thumbnailBytes != null) {
@@ -14104,24 +14101,36 @@ class _InventoryHomeState extends State<InventoryHome> {
           await Future<void>.delayed(const Duration(milliseconds: 250));
         }
         if (!mounted) return;
-        final latest = inventory.where((item) => item.id == id).firstOrNull;
+        final latest = disk == null
+            ? inventory.where((item) => item.id == id).firstOrNull
+            : index < 0
+            ? null
+            : disk[index];
         final latestSource =
-            latest?.imageBytes ??
-            widget.database!.loadInventoryImages(id).imageBytes;
+            latest?.imageBytes ?? database.loadInventoryImages(id).imageBytes;
         if (latest == null || !listEquals(latestSource, source)) continue;
         final updated = latest.copyWith(thumbnailBytes: thumbnail);
-        _publishInventoryItem(updated);
-        _queueInventoryEntity(widget.database!, updated, previous: latest);
-        _persistedEntityReferences.putIfAbsent(
-          'inventory',
-          () => {},
-        )[updated.id] = updated;
+        if (disk == null) {
+          _publishInventoryItem(updated);
+          _queueInventoryEntity(database, updated, previous: latest);
+          _persistedEntityReferences.putIfAbsent(
+            'inventory',
+            () => {},
+          )[updated.id] = updated;
+        } else {
+          disk[index] = updated;
+        }
         changed = true;
       }
     } finally {
       _thumbnailBackfillRunning = false;
     }
     if (changed && mounted) {
+      if (disk != null) {
+        _flushDiskInventory();
+        _invalidateSearchCaches();
+        setState(() {});
+      }
       _localStateRevision++;
       _scheduleAutomaticSync();
     }

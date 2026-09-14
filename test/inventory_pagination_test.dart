@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:inventorinator/main.dart';
 import 'package:inventorinator/local_database.dart';
 import 'package:inventorinator/disk_inventory_list.dart';
@@ -185,6 +186,70 @@ void main() {
       await tester.pump();
       db.close();
       dir.deleteSync(recursive: true);
+    },
+  );
+
+  testWidgets(
+    'home generates a card thumbnail for an existing lazy product photo',
+    (tester) async {
+      final dir = Directory.systemTemp.createTempSync('paging-thumbnail-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final db = (await tester.runAsync(
+        () => LocalDatabase.open(overridePath: '${dir.path}/test.sqlite3'),
+      ))!;
+      final productImage = base64Encode(
+        img.encodePng(img.Image(width: 12, height: 12)),
+      );
+      db.saveState(
+        jsonEncode({
+          'schemaVersion': 8,
+          'inventory': [
+            {
+              'id': 'PHOTO-ITEM',
+              'name': 'Existing product photo',
+              'type': 'filament',
+              'compatibility': <String>[],
+              'added': '2026-01-01T00:00:00.000',
+              'cost': 0,
+              'quantity': 1,
+              'color': 0xff888888,
+              'archived': false,
+              'image': productImage,
+            },
+          ],
+          'kits': [],
+          'builds': [],
+          'machines': [],
+          'products': [],
+        }),
+      );
+      db.saveSyncConfig(jsonEncode({'syncMode': 'local'}));
+      expect(db.loadInventoryImages('PHOTO-ITEM').imageBytes, isNotNull);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: InventoryHome(
+            database: db,
+            persistedState: db.loadState(
+              includeFullImages: false,
+              includeInventory: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        db.inventoryPayload('PHOTO-ITEM', thumbnail: true)!['thumbnail'],
+        isNotNull,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      db.close();
     },
   );
 }

@@ -31380,7 +31380,9 @@ class _AddItemDialogState extends State<AddItemDialog>
                             hintText: '0.00',
                           ),
                           validator: (value) {
-                            final cost = double.tryParse(value ?? '');
+                            final source = value?.trim() ?? '';
+                            if (source.isEmpty) return null;
+                            final cost = double.tryParse(source);
                             return cost == null || cost < 0
                                 ? 'Enter a valid cost'
                                 : null;
@@ -31675,7 +31677,7 @@ class _AddItemDialogState extends State<AddItemDialog>
           ? styleEntryDrafts.where((entry) => entry.style.isNotEmpty).toList()
           : const [],
       added: widget.initialItem?.added ?? DateTime.now(),
-      cost: double.parse(costController.text),
+      cost: double.tryParse(costController.text.trim()) ?? 0,
       quantity: double.parse(quantityController.text),
       quantityAlertThreshold: double.tryParse(
         quantityAlertThresholdController.text,

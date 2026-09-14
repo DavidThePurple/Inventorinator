@@ -5904,7 +5904,7 @@ Bed Temperature: 80°C
     expect(find.text('Kit / BOM'), findsNothing);
     expect(find.byKey(const Key('bulk-edit-toolbar')), findsNothing);
   });
-  testWidgets('adds a validated inventory item', (tester) async {
+  testWidgets('adds an inventory item without a cost', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -5921,7 +5921,6 @@ Bed Temperature: 80°C
       find.byKey(const Key('item-compatibility')),
       'E3D V6, 1.75 mm',
     );
-    await tester.enterText(find.byKey(const Key('item-cost')), '29.50');
     await tester.ensureVisible(find.byKey(const Key('item-color')));
     await tester.enterText(
       find.byKey(const Key('item-color-name')),

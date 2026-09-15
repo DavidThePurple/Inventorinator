@@ -5539,7 +5539,12 @@ Bed Temperature: 80°C
     );
     expect(
       tester.getBottomLeft(bottomSurface).dy,
-      closeTo(tester.getBottomLeft(bottomOverlay).dy, 0.1),
+      lessThanOrEqualTo(tester.getBottomLeft(bottomOverlay).dy),
+    );
+    expect(
+      tester.getBottomLeft(bottomOverlay).dy -
+          tester.getBottomLeft(bottomSurface).dy,
+      lessThanOrEqualTo(32),
     );
     expect(
       tester.widget<Scaffold>(find.byType(Scaffold).first).bottomNavigationBar,

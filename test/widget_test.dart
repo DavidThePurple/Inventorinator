@@ -2968,18 +2968,11 @@ Bed Temperature: 80°C
 
     await tester.pumpWidget(card(original, 0));
     final arrow = find.byKey(const Key('remote-quantity-arrow-INV-REMOTE-QTY'));
-    expect(arrow, findsOneWidget);
-    expect(
-      tester
-          .widget<Opacity>(
-            find.ancestor(of: arrow, matching: find.byType(Opacity)).first,
-          )
-          .opacity,
-      0,
-    );
+    expect(arrow, findsNothing);
 
     await tester.pumpWidget(card(changed, 1));
     await tester.pump(const Duration(milliseconds: 350));
+    expect(arrow, findsOneWidget);
     expect(find.byIcon(Icons.south_east_rounded), findsOneWidget);
     expect(
       tester
@@ -3585,6 +3578,21 @@ Bed Temperature: 80°C
         persistedState: database.loadState(),
       ),
     );
+    for (final barKey in const [
+      'floating-header-actions',
+      'bottom-action-surface',
+    ]) {
+      final decoration =
+          tester.widget<AnimatedContainer>(find.byKey(Key(barKey))).decoration!
+              as BoxDecoration;
+      expect(decoration.color!.computeLuminance(), greaterThan(.85));
+      expect(decoration.color!.a, greaterThan(.65));
+    }
+    for (final label in const ['Sort', 'Page', 'Card', 'View', 'Hide Zeroes']) {
+      final color = tester.widget<Text>(find.text(label)).style!.color!;
+      expect(color.computeLuminance(), lessThan(.1));
+      expect(color.a, greaterThan(.65));
+    }
     await tester.tap(find.byKey(const Key('sort-menu')));
     await tester.pumpAndSettle();
 
@@ -3864,6 +3872,28 @@ Bed Temperature: 80°C
     }
     expect(recurred, isTrue);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('idle cards skip effect wrappers', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ItemCardEffects(
+          itemId: 'IDLE-EFFECTS',
+          quantitySyncVersion: 0,
+          lowStockVersion: 0,
+          moistureVersion: 0,
+          lowStockActive: false,
+          moistureActive: false,
+          durationPercent: 100,
+          recurrenceSeconds: 5,
+          child: SizedBox(width: 200, height: 200),
+        ),
+      ),
+    );
+
+    expect(find.byType(RemoteQuantityChangeEffect), findsNothing);
+    expect(find.byType(LowStockPulseEffect), findsNothing);
+    expect(find.byType(MoistureDropletWaveEffect), findsNothing);
   });
 
   testWidgets('card effect layers are removed while inventory is scrolling', (
@@ -4933,8 +4963,12 @@ Bed Temperature: 80°C
         sliderThemes.any(
           (theme) =>
               theme.data.thumbShape?.getPreferredSize(true, false) ==
-              const Size(92, 32),
+              const Size(14, 30),
         ),
+        isTrue,
+      );
+      expect(
+        sliderThemes.any((theme) => theme.data.trackShape?.isRounded ?? false),
         isTrue,
       );
     }
@@ -5553,6 +5587,15 @@ Bed Temperature: 80°C
 
     double opacity(String key) =>
         tester.widget<AnimatedOpacity>(find.byKey(Key(key))).opacity;
+    double renderedOpacity(String key) => tester
+        .widget<FadeTransition>(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.byType(FadeTransition),
+          ),
+        )
+        .opacity
+        .value;
 
     expect(opacity('floating-header-visibility'), 1);
     expect(opacity('bottom-action-visibility'), 1);
@@ -5567,17 +5610,37 @@ Bed Temperature: 80°C
     );
     await tester.pump();
 
-    expect(find.byKey(const Key('floating-header-hidden')), findsOneWidget);
+    expect(opacity('floating-header-visibility'), 0);
+    expect(opacity('bottom-action-visibility'), 0);
     expect(
       tester
-          .widget<Opacity>(find.byKey(const Key('floating-header-hidden')))
-          .opacity,
-      0,
+          .widget<BackdropFilter>(find.byKey(const Key('floating-header-blur')))
+          .enabled,
+      isFalse,
     );
-    expect(opacity('bottom-action-visibility'), 0);
+    expect(
+      tester
+          .widget<BackdropFilter>(find.byKey(const Key('bottom-action-blur')))
+          .enabled,
+      isFalse,
+    );
+    expect(
+      tester
+          .widget<AnimatedSlide>(
+            find.byKey(const Key('floating-header-motion')),
+          )
+          .offset,
+      const Offset(0, -.24),
+    );
+    expect(
+      tester
+          .widget<AnimatedSlide>(find.byKey(const Key('bottom-action-motion')))
+          .offset,
+      const Offset(0, .24),
+    );
 
     await tester.pump(const Duration(milliseconds: 250));
-    expect(find.byKey(const Key('floating-header-hidden')), findsOneWidget);
+    expect(opacity('floating-header-visibility'), 0);
     expect(opacity('bottom-action-visibility'), 0);
 
     final scrollable = find.descendant(
@@ -5589,8 +5652,20 @@ Bed Temperature: 80°C
     );
     tester.state<ScrollableState>(scrollable).position.pointerScroll(0);
     await tester.pump(const Duration(milliseconds: 500));
+    expect(opacity('floating-header-visibility'), 0);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(opacity('floating-header-visibility'), 1);
+    await tester.pump(const Duration(milliseconds: 180));
+    expect(
+      renderedOpacity('floating-header-visibility'),
+      isA<double>().having(
+        (value) => value,
+        'in-progress fade',
+        inInclusiveRange(.05, .95),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('floating-header-hidden')), findsNothing);
+    expect(opacity('floating-header-visibility'), 1);
     expect(opacity('bottom-action-visibility'), 1);
   });
 
@@ -5621,7 +5696,9 @@ Bed Temperature: 80°C
         scrollDelta: const Offset(0, 120),
       ),
     );
-    expect(position.pixels, 0);
+    // The first wheel pulse advances the viewport immediately; the remaining
+    // distance still glides over subsequent frames.
+    expect(position.pixels, greaterThan(0));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 1));
     expect(position.pixels, greaterThan(0));
@@ -5631,6 +5708,87 @@ Bed Temperature: 80°C
     expect(position.pixels, lessThan(120));
     await tester.pumpAndSettle();
     expect(position.pixels, closeTo(120, 1));
+  });
+
+  testWidgets('desktop primary drag pans the inventory', (tester) async {
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
+
+    final view = find.byKey(const Key('inventory-scroll-view'));
+    final scrollable = find.descendant(
+      of: view,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    final gesture = await tester.startGesture(
+      tester.getCenter(view),
+      kind: PointerDeviceKind.mouse,
+    );
+    // The visibility target changes on the first held-pointer movement, before
+    // Flutter needs to resolve the drag as a scroll gesture.
+    await gesture.moveBy(const Offset(0, -1));
+    await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const Key('floating-header-visibility')),
+          )
+          .opacity,
+      0,
+    );
+    await gesture.moveBy(const Offset(0, -3));
+    await tester.pump();
+    expect(position.pixels, greaterThan(0));
+    await gesture.moveBy(const Offset(0, -180));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(position.pixels, greaterThan(120));
+  });
+
+  testWidgets('desktop drag immediately takes over an active wheel glide', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
+
+    final view = find.byKey(const Key('inventory-scroll-view'));
+    final scrollable = find.descendant(
+      of: view,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    await tester.sendEventToBinding(
+      PointerScrollEvent(
+        position: tester.getCenter(view),
+        kind: PointerDeviceKind.mouse,
+        scrollDelta: const Offset(0, 120),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 8));
+    final gesture = await tester.startGesture(
+      tester.getCenter(view),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, -180));
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(position.pixels, greaterThan(180));
   });
 
   testWidgets('repeated desktop wheel input keeps continuous forward motion', (
@@ -7761,6 +7919,63 @@ Bed Temperature: 80°C
       greaterThan(tester.getBottomLeft(photo).dy),
     );
   });
+  testWidgets(
+    'sidebar keeps a material-only footer without a fabricated color',
+    (tester) async {
+      tester.view.physicalSize = const Size(700, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final item = sampleInventory.first.copyWith(
+        imageBytes: Uint8List.fromList(
+          img.encodePng(img.Image(width: 320, height: 240)),
+        ),
+        materialName: 'PETG',
+        itemColorName: '',
+        itemColorLabel: '',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ItemDetailsPanel(
+              item: item,
+              onChanged: (_) {},
+              machines: const [],
+              machineTypes: const [],
+              spoolTypes: starterSpoolTypes,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('sidebar-color-lower-third')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('sidebar-color-swatch')), findsNothing);
+      expect(find.text('Color not specified'), findsNothing);
+      expect(find.byKey(Key('item-material-${item.id}')), findsOneWidget);
+      expect(find.text('PETG'), findsOneWidget);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ItemDetailsPanel(
+              key: const ValueKey('no-color-no-material'),
+              item: item.copyWith(materialName: ''),
+              onChanged: (_) {},
+              machines: const [],
+              machineTypes: const [],
+              spoolTypes: starterSpoolTypes,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('sidebar-color-lower-third')), findsNothing);
+    },
+  );
+
   testWidgets('sidebar renders gradient and coextruded color chicklets', (
     tester,
   ) async {

@@ -672,12 +672,11 @@ class _EdgeLitSearchField extends StatefulWidget {
   State<_EdgeLitSearchField> createState() => _EdgeLitSearchFieldState();
 }
 
-class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _edgeAnimation = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 11),
-  );
+class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
+  static const _edgePaintInterval = Duration(milliseconds: 50);
+  final ValueNotifier<double> _edgeProgress = ValueNotifier(0);
+  final Stopwatch _edgeClock = Stopwatch();
+  Timer? _edgeTimer;
 
   @override
   void initState() {
@@ -702,16 +701,28 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
     if (!widget.enabled ||
         widget.focusNode.hasFocus ||
         Platform.environment.containsKey('FLUTTER_TEST')) {
-      _edgeAnimation.stop();
+      _edgeTimer?.cancel();
+      _edgeTimer = null;
+      _edgeClock.stop();
     } else {
-      _edgeAnimation.repeat();
+      if (_edgeTimer != null) return;
+      _edgeClock
+        ..reset()
+        ..start();
+      _edgeProgress.value = 0;
+      _edgeTimer = Timer.periodic(_edgePaintInterval, (_) {
+        const cycle = Duration(seconds: 11);
+        final elapsed = _edgeClock.elapsedMicroseconds % cycle.inMicroseconds;
+        _edgeProgress.value = elapsed / cycle.inMicroseconds;
+      });
     }
   }
 
   @override
   void dispose() {
     widget.focusNode.removeListener(_handleFocusChanged);
-    _edgeAnimation.dispose();
+    _edgeTimer?.cancel();
+    _edgeProgress.dispose();
     super.dispose();
   }
 
@@ -755,19 +766,23 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField>
       ),
     );
 
-    return AnimatedBuilder(
-      animation: Listenable.merge([_edgeAnimation, widget.focusNode]),
-      child: Padding(padding: const EdgeInsets.all(1.5), child: field),
-      builder: (context, child) => CustomPaint(
-        foregroundPainter: widget.enabled
-            ? _EdgeLightPainter(
-                progress: _edgeAnimation.value,
-                accent: accent,
-                light: light,
-                focused: widget.focusNode.hasFocus,
-              )
-            : null,
-        child: child,
+    // The rim intentionally animates at idle. Keep that repaint local: without
+    // this boundary, each tick also repaints the inventory and its glass bars.
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: Listenable.merge([_edgeProgress, widget.focusNode]),
+        child: Padding(padding: const EdgeInsets.all(1.5), child: field),
+        builder: (context, child) => CustomPaint(
+          foregroundPainter: widget.enabled
+              ? _EdgeLightPainter(
+                  progress: _edgeProgress.value,
+                  accent: accent,
+                  light: light,
+                  focused: widget.focusNode.hasFocus,
+                )
+              : null,
+          child: child,
+        ),
       ),
     );
   }
@@ -5914,10 +5929,19 @@ class _GlassTopHighlightPainter extends CustomPainter {
 List<Color> themedGlassRestingColors(
   InventorinatorColors palette, {
   required bool light,
-}) => [
-  palette.base.withValues(alpha: .34),
-  palette.container.withValues(alpha: .24),
-];
+}) => light
+    ? [
+        Color.lerp(
+          palette.surface,
+          palette.canvas,
+          .12,
+        )!.withValues(alpha: .78),
+        Color.lerp(palette.surface, palette.panel, .52)!.withValues(alpha: .68),
+      ]
+    : [
+        palette.base.withValues(alpha: .34),
+        palette.container.withValues(alpha: .24),
+      ];
 
 class _GlassFilterChip extends StatefulWidget {
   const _GlassFilterChip({
@@ -5993,25 +6017,122 @@ class _GlassFilterChipState extends State<_GlassFilterChip> {
   }
 }
 
-class _GlassSliderThumbShape extends SliderComponentShape {
-  _GlassSliderThumbShape();
+class _NotchedSliderTrackShape extends SliderTrackShape {
+  _NotchedSliderTrackShape(this.palette);
 
-  // Native min/max buttons are 40px controls with 3px horizontal and 5px
-  // vertical margins, leaving a 34x30 glass surface.
-  static const bodyWidth = 34.0;
-  static const bodyHeight = 30.0;
-  static const preferredWidth = 92.0;
-  InventorinatorColors? _palette;
-  double? _lastValue;
-  double _motionBias = 0;
+  final InventorinatorColors palette;
 
-  void updatePalette(InventorinatorColors palette) {
-    _palette = palette;
+  // Keep the endpoint centers inside the capsule by its radius. Without this,
+  // Flutter places a zero/max thumb at the track edge and half the handle
+  // hangs outside the rail.
+  @override
+  bool get isRounded => true;
+
+  @override
+  Rect getPreferredRect({
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    Offset offset = Offset.zero,
+    bool isEnabled = false,
+    bool isDiscrete = false,
+  }) {
+    const horizontalInset = 8.0;
+    const height = 26.0;
+    return Rect.fromLTWH(
+      offset.dx + horizontalInset,
+      offset.dy + (parentBox.size.height - height) / 2,
+      parentBox.size.width - horizontalInset * 2,
+      height,
+    );
   }
 
   @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
-      const Size(preferredWidth, 32);
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required Offset thumbCenter,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    required TextDirection textDirection,
+    Offset? secondaryOffset,
+  }) {
+    final canvas = context.canvas;
+    final rect = getPreferredRect(
+      parentBox: parentBox,
+      sliderTheme: sliderTheme,
+      offset: offset,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    final track = RRect.fromRectAndRadius(rect, const Radius.circular(13));
+    final interior = track.deflate(1);
+    final activeRight = thumbCenter.dx.clamp(rect.left, rect.right);
+
+    canvas.drawShadow(
+      Path()..addRRect(track),
+      Colors.black.withValues(alpha: .28),
+      5,
+      false,
+    );
+    canvas.drawRRect(track, Paint()..color = palette.input);
+    canvas.drawRRect(
+      interior,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          interior.outerRect.topLeft,
+          interior.outerRect.bottomLeft,
+          [
+            Colors.black.withValues(alpha: .34),
+            palette.surface.withValues(alpha: .52),
+          ],
+        ),
+    );
+    final active = RRect.fromRectAndRadius(
+      Rect.fromLTRB(rect.left, rect.top, activeRight, rect.bottom),
+      const Radius.circular(13),
+    );
+    canvas.drawRRect(
+      active,
+      Paint()..color = palette.accent.withValues(alpha: .18),
+    );
+    canvas.drawRRect(
+      track,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = palette.outline,
+    );
+
+    canvas.save();
+    canvas.clipRRect(interior);
+    const spacing = 5.0;
+    for (var x = interior.left + 7; x < interior.right - 5; x += spacing) {
+      final selected = x <= activeRight;
+      canvas.drawLine(
+        Offset(x, interior.top + 6),
+        Offset(x, interior.bottom - 6),
+        Paint()
+          ..strokeWidth = .8
+          ..strokeCap = StrokeCap.round
+          ..color = (selected ? palette.accent : palette.outline).withValues(
+            alpha: selected ? .72 : .62,
+          ),
+      );
+    }
+    canvas.restore();
+  }
+}
+
+class _NotchedSliderThumbShape extends SliderComponentShape {
+  const _NotchedSliderThumbShape();
+
+  static const _size = Size(14, 30);
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) => _size;
 
   @override
   void paint(
@@ -6030,132 +6151,52 @@ class _GlassSliderThumbShape extends SliderComponentShape {
   }) {
     final canvas = context.canvas;
     final pressed = activationAnimation.value;
-    final enabled = enableAnimation.value;
-    final accent = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
-    final base = sliderTheme.thumbColor ?? const Color(0xff755da5);
-    final palette = _palette;
-    final surface = palette?.surface ?? const Color(0xff1b1726);
-    final container = palette?.container ?? Color.lerp(base, Colors.black, .4)!;
-    final outline = palette?.outline ?? const Color(0xff5d5970);
-    if (pressed > .01 && _lastValue != null) {
-      final delta = value - _lastValue!;
-      if (delta.abs() > .00001) {
-        final target = delta > 0 ? 1.0 : -1.0;
-        _motionBias = ui.lerpDouble(_motionBias, target, .55)!;
-      }
-    } else if (pressed <= .01) {
-      _motionBias = 0;
-    }
-    _lastValue = value;
-
-    final stretching = math.max(0.0, _motionBias);
-    final tapering = math.max(0.0, -_motionBias);
     final rect = Rect.fromCenter(
       center: center,
-      width: bodyWidth,
-      height: bodyHeight,
+      width: _size.width,
+      height: _size.height - (pressed * 2),
     );
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(10));
-    final bodyPath = Path()..addRRect(rrect);
-    final borderRect = rect.deflate(.5);
-    final borderPath = Path()
-      ..addRRect(
-        RRect.fromRectAndRadius(borderRect, const Radius.circular(9.5)),
-      );
-    final direction = textDirection == TextDirection.ltr ? -1.0 : 1.0;
-    final tailLength = 26 + stretching * 18 - tapering * 14;
-    final tailHalfHeight = 8 + stretching * 4 - tapering * 4;
-    final tip = Offset(center.dx + direction * tailLength, center.dy);
-    final joinX = center.dx + direction * (bodyWidth / 2 - 6);
-    final tailPath = Path()
-      ..moveTo(tip.dx, tip.dy)
-      ..cubicTo(
-        tip.dx - direction * 12,
-        tip.dy - 1,
-        joinX + direction * 10,
-        center.dy - tailHalfHeight,
-        joinX,
-        center.dy - tailHalfHeight,
-      )
-      ..lineTo(joinX, center.dy + tailHalfHeight)
-      ..cubicTo(
-        joinX + direction * 10,
-        center.dy + tailHalfHeight,
-        tip.dx - direction * 12,
-        tip.dy + 1,
-        tip.dx,
-        tip.dy,
-      )
-      ..close();
-    // Keep the melt tail from contaminating the anti-aliased button rim.
-    final visibleTailPath = Path.combine(
-      PathOperation.difference,
-      tailPath,
-      bodyPath,
-    );
+    final thumb = RRect.fromRectAndRadius(rect, const Radius.circular(6));
+    final foreground = sliderTheme.thumbColor ?? const Color(0xfff1eff7);
+    final rim = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
 
-    canvas.drawPath(
-      visibleTailPath,
-      Paint()
-        ..color = base.withValues(
-          alpha: ui.lerpDouble(.1, .3 + stretching * .12, pressed)!,
-        )
-        ..maskFilter = MaskFilter.blur(
-          BlurStyle.normal,
-          ui.lerpDouble(3, 8 + stretching * 3, pressed)!,
-        ),
-    );
-    canvas.drawPath(
-      visibleTailPath,
-      Paint()
-        ..shader = ui.Gradient.linear(tip, center, [
-          accent.withValues(alpha: .72),
-          base.withValues(alpha: .78),
-        ]),
-    );
-
-    // These layers intentionally mirror #inventorinator-window-button in the
-    // Linux runner: surface fill, base/container gradient, rim, inset line,
-    // and 2px/7px black shadow.
     canvas.drawShadow(
-      bodyPath,
-      Colors.black.withValues(alpha: .20 * enabled),
-      7,
+      Path()..addRRect(thumb),
+      Colors.black.withValues(alpha: .38),
+      4,
       false,
     );
-    canvas.drawPath(bodyPath, Paint()..color = surface);
-    final top = pressed > .01
-        ? container.withValues(alpha: .78)
-        : base.withValues(alpha: .34);
-    final bottom = pressed > .01
-        ? base.withValues(alpha: .48)
-        : container.withValues(alpha: .24);
-    canvas.drawPath(
-      bodyPath,
+    canvas.drawRRect(
+      thumb,
       Paint()
         ..shader = ui.Gradient.linear(
-          bodyPath.getBounds().topLeft,
-          bodyPath.getBounds().bottomRight,
-          [top, bottom],
+          thumb.outerRect.topLeft,
+          thumb.outerRect.bottomRight,
+          [
+            Colors.white.withValues(alpha: .95),
+            foreground.withValues(alpha: .92),
+            rim.withValues(alpha: .55),
+          ],
+          [0, .62, 1],
         ),
     );
-    canvas.drawPath(
-      borderPath,
+    canvas.drawRRect(
+      thumb.deflate(.5),
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = outline,
+        ..color = Colors.white.withValues(alpha: .72),
     );
-    canvas.drawLine(
-      Offset(rect.left + 7, rect.top + 1.5),
-      Offset(rect.right - 7, rect.top + 1.5),
-      Paint()
-        ..strokeWidth = 1
-        ..strokeCap = StrokeCap.round
-        ..color = pressed > .01
-            ? const Color(0x57000000)
-            : const Color(0x75ffffff),
-    );
+    for (var y = rect.top + 6; y < rect.bottom - 4; y += 3.2) {
+      canvas.drawLine(
+        Offset(rect.left + 3, y),
+        Offset(rect.right - 3, y),
+        Paint()
+          ..strokeWidth = .75
+          ..strokeCap = StrokeCap.round
+          ..color = Colors.black.withValues(alpha: .34),
+      );
+    }
   }
 }
 
@@ -6618,6 +6659,37 @@ class _CenteredSquareGridLayout extends SliverGridLayout {
   }
 }
 
+class _ScrollAwareBackdropFilter extends StatelessWidget {
+  const _ScrollAwareBackdropFilter({
+    required this.scrolling,
+    required this.sigmaX,
+    required this.sigmaY,
+    required this.child,
+    this.filterKey,
+  });
+
+  final ValueListenable<bool> scrolling;
+  final double sigmaX;
+  final double sigmaY;
+  final Widget child;
+  final Key? filterKey;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: scrolling,
+    child: child,
+    builder: (context, isScrolling, cachedChild) => BackdropFilter(
+      key: filterKey,
+      // A backdrop blur must sample every pixel behind the rail. Turn it off
+      // while content moves; the rail is simultaneously fading away, and this
+      // avoids a wide, repeated GPU filter on maximized desktop windows.
+      enabled: !isScrolling,
+      filter: ui.ImageFilter.blur(sigmaX: sigmaX, sigmaY: sigmaY),
+      child: cachedChild,
+    ),
+  );
+}
+
 class _SmoothWheelScrollController extends ScrollController {
   _SmoothWheelScrollController({required this.enabled});
 
@@ -6657,6 +6729,40 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
   double _wheelVelocity = 0;
   Duration? _lastWheelTick;
   bool _wheelScrollActive = false;
+  final Stopwatch _dragVelocityClock = Stopwatch()..start();
+  int? _lastDragOffsetMicros;
+  double _lastDragVelocity = 0;
+
+  @override
+  void applyUserOffset(double delta) {
+    super.applyUserOffset(delta);
+    final now = _dragVelocityClock.elapsedMicroseconds;
+    final previous = _lastDragOffsetMicros;
+    _lastDragOffsetMicros = now;
+    if (previous == null || delta == 0) return;
+    final elapsed = (now - previous) / 1e6;
+    final instantaneous = -delta / (elapsed > 0 ? elapsed : 1 / 60);
+    _lastDragVelocity = ui.lerpDouble(
+      _lastDragVelocity,
+      instantaneous,
+      .5,
+    )!;
+  }
+
+  @override
+  void goBallistic(double velocity) {
+    // Some desktop mouse releases report zero primary velocity even after a
+    // real drag. Preserve the velocity that actually moved this position.
+    if (!_wheelScrollActive &&
+        _lastDragOffsetMicros != null &&
+        velocity.abs() < 60 &&
+        _lastDragVelocity.abs() >= 60) {
+      velocity = _lastDragVelocity.sign * _lastDragVelocity.abs().clamp(260, 2400);
+    }
+    _lastDragOffsetMicros = null;
+    _lastDragVelocity = 0;
+    super.goBallistic(velocity);
+  }
 
   @override
   void pointerScroll(double delta) {
@@ -6664,6 +6770,9 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
       super.pointerScroll(delta);
       return;
     }
+    // A mouse drag owns the position until it ends. Do not let an in-flight
+    // wheel ticker dispatch a non-drag update through that drag activity.
+    if (activity is DragScrollActivity) return;
     if (delta == 0) {
       if (_wheelTicker.isActive) {
         _finishWheelScroll();
@@ -6695,19 +6804,19 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
     isScrollingNotifier.value = true;
     didStartScroll();
     _wheelScrollActive = true;
+    // A Ticker's first callback has a zero elapsed duration. Advance one
+    // small decay-consistent step now so a wheel pulse moves the viewport in
+    // the input frame instead of waiting through that dead first frame.
+    if (!_advanceWheel(1 / 120)) {
+      _finishWheelScroll();
+      return;
+    }
     _lastWheelTick = null;
     _wheelTicker.start();
   }
 
-  void _tickWheel(Duration elapsed) {
-    final previousTick = _lastWheelTick;
-    _lastWheelTick = elapsed;
-    if (previousTick == null) return;
-    final elapsedSeconds = (elapsed - previousTick).inMicroseconds / 1000000;
-    if (elapsedSeconds <= 0) return;
-    // A delayed desktop frame should extend the glide, not turn all of the
-    // missed time into one large, visible jump when scheduling resumes.
-    final seconds = math.min(elapsedSeconds, 1 / 30);
+  bool _advanceWheel(double seconds) {
+    if (seconds <= 0) return true;
     final decay = math.exp(-seconds / _wheelDecaySeconds);
     final oldPixels = pixels;
     final distance = _wheelVelocity * _wheelDecaySeconds * (1 - decay);
@@ -6717,12 +6826,52 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
     forcePixels(next);
     didUpdateScrollPositionBy(pixels - oldPixels);
     _wheelVelocity *= decay;
-    if (next == oldPixels || _wheelVelocity.abs() < 4) {
+    return next != oldPixels && _wheelVelocity.abs() >= 4;
+  }
+
+  void _tickWheel(Duration elapsed) {
+    if (activity is DragScrollActivity) {
+      _cancelWheelForDrag();
+      return;
+    }
+    final previousTick = _lastWheelTick;
+    _lastWheelTick = elapsed;
+    if (previousTick == null) return;
+    final elapsedSeconds = (elapsed - previousTick).inMicroseconds / 1000000;
+    if (elapsedSeconds <= 0) return;
+    // A delayed desktop frame should extend the glide, not turn all of the
+    // missed time into one large, visible jump when scheduling resumes.
+    if (!_advanceWheel(math.min(elapsedSeconds, 1 / 30))) {
       _finishWheelScroll();
     }
   }
 
+  @override
+  void beginActivity(ScrollActivity? newActivity) {
+    // A drag can begin between ticker frames. Stop the synthetic wheel
+    // activity before Scrollable transfers control to the drag, rather than
+    // waiting for the next ticker callback to discover it.
+    if (newActivity is DragScrollActivity && _wheelScrollActive) {
+      _cancelWheelForDrag();
+    }
+    super.beginActivity(newActivity);
+  }
+
+  void _cancelWheelForDrag() {
+    _wheelTicker.stop();
+    _lastWheelTick = null;
+    _wheelVelocity = 0;
+    if (_wheelScrollActive) {
+      _wheelScrollActive = false;
+      didEndScroll();
+    }
+  }
+
   void _finishWheelScroll() {
+    if (activity is DragScrollActivity) {
+      _cancelWheelForDrag();
+      return;
+    }
     _wheelTicker.stop();
     _lastWheelTick = null;
     _wheelVelocity = 0;
@@ -6871,12 +7020,14 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _maximumMainScrollbarWidth = 32.0;
   static const _defaultDesktopScrollbarWidth = 16.0;
   static const _defaultMobileScrollbarWidth = 8.0;
+  static const _inventoryActionBarFadeOutDuration = Duration(milliseconds: 120);
+  static const _inventoryActionBarFadeInDuration = Duration(milliseconds: 360);
+  static const _inventoryActionBarRestoreDelay = Duration(milliseconds: 650);
   static const _defaultRemotePurgeAfterDays = 3;
   // Thumbnail backfills can make a single changed-record patch tens of KiB.
   // Keep remote transactions short enough for conservative PostgREST limits.
   static const _syncUploadBatchSize = 1;
-  final _pageSizeThumbShape = _GlassSliderThumbShape();
-  final _cardSizeThumbShape = _GlassSliderThumbShape();
+  static const _notchedSliderThumbShape = _NotchedSliderThumbShape();
   final ValueNotifier<double> _pageSizeSliderValue = ValueNotifier(0);
   final ValueNotifier<double> _cardSizeSliderValue = ValueNotifier(100);
   Timer? _pageSizeCommitTimer;
@@ -6893,6 +7044,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _mainSearchCollapseStartOffset = 120.0;
   static const _compactHeaderScrollThreshold = 220.0;
   Timer? _inventoryOverlayRestore;
+  static const bool _profileScrollProbe = bool.fromEnvironment(
+    'INVENTORINATOR_PROFILE_SCROLL_PROBE',
+  );
+  final List<FrameTiming> _profileScrollFrameTimings = [];
+  bool _profileScrollProbeCapturing = false;
+  Timer? _profileScrollProbeTimer;
   final ExpansibleController typeFilterExpansionController =
       ExpansibleController();
   final ExpansibleController colorFilterExpansionController =
@@ -6928,8 +7085,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     LocalSaveFeedback.idle,
   );
   Timer? _localSaveFeedbackTimer;
-  bool _thumbnailBackfillRunning = false;
-  Timer? _thumbnailBackfillStartTimer;
   Timer? _clockTick;
   bool _syncing = false;
   bool _autoSyncPausedForAuthentication = false;
@@ -6975,6 +7130,13 @@ class _InventoryHomeState extends State<InventoryHome> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
+    if (kProfileMode && _profileScrollProbe) {
+      WidgetsBinding.instance.addTimingsCallback(_recordProfileScrollTimings);
+      _profileScrollProbeTimer = Timer(
+        const Duration(seconds: 5),
+        _runProfileScrollProbe,
+      );
+    }
     _ownsFilamentColorsClient = widget.filamentColorsClient == null;
     _filamentColorsClient =
         widget.filamentColorsClient ??
@@ -7227,6 +7389,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                 defaultScrollbarWidth)
             .clamp(_minimumMainScrollbarWidth, _maximumMainScrollbarWidth)
             .toDouble();
+    if (kProfileMode && _profileScrollProbe) {
+      pageSizeIndex = _pageSizes.length - 1;
+    }
     _pageSizeSliderValue.value = pageSizeIndex.toDouble();
     _cardSizeSliderValue.value = cardSizePercent;
     animationDurationPercent =
@@ -7362,9 +7527,6 @@ class _InventoryHomeState extends State<InventoryHome> {
       const Duration(seconds: 10),
       (_) => _advanceDryingTimers(),
     );
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_startThumbnailBackfillWhenIdle()),
-    );
     if (initializedDryingTimers ||
         initializedKitSections ||
         initializedMaterials ||
@@ -7393,6 +7555,49 @@ class _InventoryHomeState extends State<InventoryHome> {
         _startAutoSync();
       });
     }
+  }
+
+  void _recordProfileScrollTimings(List<FrameTiming> timings) {
+    if (_profileScrollProbeCapturing) _profileScrollFrameTimings.addAll(timings);
+  }
+
+  Future<void> _runProfileScrollProbe() async {
+    if (!mounted || !inventoryScrollController.hasClients) return;
+    final position = inventoryScrollController.position;
+    final travel = math.min(1800.0, position.maxScrollExtent * .35);
+    if (travel < 200) return;
+    _profileScrollFrameTimings.clear();
+    _profileScrollProbeCapturing = true;
+    await inventoryScrollController.animateTo(
+      math.min(position.maxScrollExtent, position.pixels + travel),
+      duration: const Duration(milliseconds: 1100),
+      curve: Curves.linear,
+    );
+    await inventoryScrollController.animateTo(
+      math.max(position.minScrollExtent, position.pixels - travel),
+      duration: const Duration(milliseconds: 1100),
+      curve: Curves.linear,
+    );
+    _profileScrollProbeCapturing = false;
+    if (_profileScrollFrameTimings.isEmpty) return;
+    final frames = _profileScrollFrameTimings;
+    final buildMicros = frames
+        .map((timing) => timing.buildDuration.inMicroseconds)
+        .toList()
+      ..sort();
+    final rasterMicros = frames
+        .map((timing) => timing.rasterDuration.inMicroseconds)
+        .toList()
+      ..sort();
+    int percentile(List<int> values, double amount) =>
+        values[(values.length - 1) * amount ~/ 1];
+    debugPrint(
+      'PROFILE_SCROLL frames=${frames.length} '
+      'build_p50=${percentile(buildMicros, .5) / 1000}ms '
+      'build_p95=${percentile(buildMicros, .95) / 1000}ms '
+      'raster_p50=${percentile(rasterMicros, .5) / 1000}ms '
+      'raster_p95=${percentile(rasterMicros, .95) / 1000}ms',
+    );
   }
 
   Future<void> _refreshWorkspaceRoleOnStartup() async {
@@ -7747,7 +7952,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     _syncPoll?.cancel();
     _offlinePurgeTimer?.cancel();
     _clockTick?.cancel();
-    _thumbnailBackfillStartTimer?.cancel();
     _pageSizeCommitTimer?.cancel();
     _cardSizeCommitTimer?.cancel();
     pageSizeIndex = _pageSizeSliderValue.value.round();
@@ -7780,6 +7984,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       }
     }
     _inventoryOverlayRestore?.cancel();
+    _profileScrollProbeTimer?.cancel();
+    if (kProfileMode && _profileScrollProbe) {
+      WidgetsBinding.instance.removeTimingsCallback(_recordProfileScrollTimings);
+    }
     _inventoryIsScrolling.dispose();
     floatingSearchFocusNode.dispose();
     bottomSearchFocusNode.dispose();
@@ -9116,106 +9324,144 @@ class _InventoryHomeState extends State<InventoryHome> {
                 child: SafeArea(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _handleInventoryScrollNotification,
-                    child: ScrollConfiguration(
-                      behavior: ScrollConfiguration.of(context)
-                          .copyWith(scrollbars: false),
-                      child: Scrollbar(
-                        key: const Key('main-inventory-scrollbar'),
-                        controller: inventoryScrollController,
-                        thickness: mainScrollbarWidth,
-                        radius: Radius.circular(mainScrollbarWidth / 2),
-                        child: CustomScrollView(
-                          key: const Key('inventory-scroll-view'),
+                    child: Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerMove: _handleInventoryPointerMove,
+                      onPointerSignal: _handleInventoryPointerSignal,
+                      onPointerUp: _handleInventoryPointerUp,
+                      onPointerCancel: _handleInventoryPointerCancel,
+                      child: ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(
+                          scrollbars: false,
+                          // Match the Scratch Pad canvas: a held primary mouse
+                          // drag pans the desktop inventory without needing to
+                          // catch the scrollbar thumb.
+                          dragDevices: const {
+                            PointerDeviceKind.mouse,
+                            PointerDeviceKind.touch,
+                            PointerDeviceKind.stylus,
+                            PointerDeviceKind.trackpad,
+                          },
+                        ),
+                        child: Scrollbar(
+                          key: const Key('main-inventory-scrollbar'),
                           controller: inventoryScrollController,
-                          scrollCacheExtent:
-                              Platform.isAndroid ||
-                                  Platform.isLinux ||
-                                  Platform.isWindows
-                              ? ScrollCacheExtent.viewport(
-                                  pageSize >= 250 ? .25 : .75,
-                                )
-                              : null,
-                          slivers: [
-                            SliverToBoxAdapter(child: _titleHeader()),
-                            SliverPersistentHeader(
-                              pinned: true,
-                              delegate: _PinnedActionBarDelegate(
-                                height: 80,
-                                child: _floatingHeaderActionBar(),
-                              ),
+                          thickness: mainScrollbarWidth,
+                          radius: Radius.circular(mainScrollbarWidth / 2),
+                          child: MediaQuery(
+                            data: MediaQuery.of(context).copyWith(
+                              // Desktop mouse drags should start as soon as
+                              // they are intentional, rather than waiting for
+                              // the touch-oriented default slop distance.
+                              gestureSettings:
+                                  Platform.isLinux || Platform.isWindows
+                                  ? const DeviceGestureSettings(touchSlop: 2)
+                                  : MediaQuery.gestureSettingsOf(context),
                             ),
-                            SliverToBoxAdapter(child: _header()),
-                            SliverPadding(
-                              padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
-                              sliver: resultCount == 0
-                                  ? const SliverFillRemaining(
-                                      hasScrollBody: false,
-                                      child: Center(
-                                        child: Text(
-                                          'Nothing matches those filters.',
-                                        ),
-                                      ),
+                            child: CustomScrollView(
+                              key: const Key('inventory-scroll-view'),
+                              controller: inventoryScrollController,
+                              scrollCacheExtent:
+                                  Platform.isAndroid ||
+                                      Platform.isLinux ||
+                                      Platform.isWindows
+                                  ? ScrollCacheExtent.viewport(
+                                      pageSize >= 100 ? .25 : .75,
                                     )
-                                  : gridView
-                                  ? ValueListenableBuilder<double>(
-                                      valueListenable: _cardSizeSliderValue,
-                                      builder:
-                                          (
-                                            context,
-                                            liveCardSizePercent,
-                                            _,
-                                          ) => SliverLayoutBuilder(
-                                            builder: (context, constraints) {
-                                              const spacing = 14.0;
-                                              return SliverGrid.builder(
-                                                itemCount: records.length,
-                                                addAutomaticKeepAlives: false,
-                                                addSemanticIndexes: false,
-                                                gridDelegate:
-                                                    _CenteredSquareGridDelegate(
-                                                      cardExtent:
-                                                          274.0 *
-                                                          (liveCardSizePercent /
-                                                              100),
-                                                      spacing: spacing,
-                                                    ),
-                                                itemBuilder: (_, index) =>
-                                                    _recordWidget(
-                                                      records[index],
-                                                    ),
-                                              );
-                                            },
-                                          ),
-                                    )
-                                  : SliverList.separated(
-                                      itemCount: records.length,
-                                      addAutomaticKeepAlives: false,
-                                      addSemanticIndexes: false,
-                                      separatorBuilder: (_, _) =>
-                                          const SizedBox(height: 10),
-                                      itemBuilder: (_, index) => _recordWidget(
-                                        records[index],
-                                        list: true,
-                                      ),
-                                    ),
-                            ),
-                            if (resultCount > 0)
-                              SliverToBoxAdapter(
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    20,
-                                    8,
-                                    20,
-                                    110,
-                                  ),
-                                  child: _pageNavigation(
-                                    page,
-                                    pageCount,
-                                    resultCount,
+                                  : null,
+                              dragStartBehavior: DragStartBehavior.down,
+                              slivers: [
+                                SliverToBoxAdapter(child: _titleHeader()),
+                                SliverPersistentHeader(
+                                  pinned: true,
+                                  delegate: _PinnedActionBarDelegate(
+                                    height: 80,
+                                    child: _floatingHeaderActionBar(),
                                   ),
                                 ),
-                              ),
-                          ],
+                                SliverToBoxAdapter(child: _header()),
+                                SliverPadding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    20,
+                                    6,
+                                    20,
+                                    24,
+                                  ),
+                                  sliver: resultCount == 0
+                                      ? const SliverFillRemaining(
+                                          hasScrollBody: false,
+                                          child: Center(
+                                            child: Text(
+                                              'Nothing matches those filters.',
+                                            ),
+                                          ),
+                                        )
+                                      : gridView
+                                      ? ValueListenableBuilder<double>(
+                                          valueListenable: _cardSizeSliderValue,
+                                          builder:
+                                              (
+                                                context,
+                                                liveCardSizePercent,
+                                                _,
+                                              ) => SliverLayoutBuilder(
+                                                builder: (context, constraints) {
+                                                  const spacing = 14.0;
+                                                  return SliverGrid.builder(
+                                                    itemCount: records.length,
+                                                    addAutomaticKeepAlives:
+                                                        false,
+                                                    addRepaintBoundaries: true,
+                                                    addSemanticIndexes: false,
+                                                    gridDelegate:
+                                                        _CenteredSquareGridDelegate(
+                                                          cardExtent:
+                                                              274.0 *
+                                                              (liveCardSizePercent /
+                                                                  100),
+                                                          spacing: spacing,
+                                                        ),
+                                                    itemBuilder: (_, index) =>
+                                                        _recordWidget(
+                                                          records[index],
+                                                        ),
+                                                  );
+                                                },
+                                              ),
+                                        )
+                                      : SliverList.separated(
+                                          itemCount: records.length,
+                                          addAutomaticKeepAlives: false,
+                                          addRepaintBoundaries: true,
+                                          addSemanticIndexes: false,
+                                          separatorBuilder: (_, _) =>
+                                              const SizedBox(height: 10),
+                                          itemBuilder: (_, index) =>
+                                              _recordWidget(
+                                                records[index],
+                                                list: true,
+                                              ),
+                                        ),
+                                ),
+                                if (resultCount > 0)
+                                  SliverToBoxAdapter(
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        20,
+                                        8,
+                                        20,
+                                        110,
+                                      ),
+                                      child: _pageNavigation(
+                                        page,
+                                        pageCount,
+                                        resultCount,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -9246,26 +9492,57 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  void _beginInventoryScrollInteraction() {
+    _inventoryOverlayRestore?.cancel();
+    if (!_inventoryIsScrolling.value) {
+      _inventoryIsScrolling.value = true;
+    }
+  }
+
+  void _scheduleInventoryOverlayRestore() {
+    _inventoryOverlayRestore?.cancel();
+    _inventoryOverlayRestore = Timer(_inventoryActionBarRestoreDelay, () {
+      if (!mounted || !_inventoryIsScrolling.value) return;
+      _inventoryIsScrolling.value = false;
+    });
+  }
+
+  void _handleInventoryPointerMove(PointerMoveEvent event) {
+    if ((event.buttons & kPrimaryButton) != 0) {
+      _beginInventoryScrollInteraction();
+    }
+  }
+
+  void _handleInventoryPointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
+      _beginInventoryScrollInteraction();
+    }
+  }
+
+  void _handleInventoryPointerUp(PointerUpEvent event) {
+    _scheduleInventoryOverlayRestore();
+  }
+
+  void _handleInventoryPointerCancel(PointerCancelEvent event) {
+    _scheduleInventoryOverlayRestore();
+  }
+
   bool _handleInventoryScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
-    _inventoryScrollOffset.value = notification.metrics.pixels;
+    // Header visuals only change through the collapse range. Keeping the
+    // notifier pinned once that range is complete avoids rebuilding the
+    // blurred rails on every pixel of a long desktop scroll.
+    _inventoryScrollOffset.value = notification.metrics.pixels
+        .clamp(0.0, _compactHeaderScrollThreshold)
+        .toDouble();
     if (notification is ScrollEndNotification ||
         (notification is UserScrollNotification &&
             notification.direction == ScrollDirection.idle)) {
-      _inventoryOverlayRestore?.cancel();
-      _inventoryOverlayRestore = Timer(const Duration(milliseconds: 500), () {
-        if (!mounted || !_inventoryIsScrolling.value) return;
-        _inventoryIsScrolling.value = false;
-      });
+      _scheduleInventoryOverlayRestore();
     } else if (notification is ScrollStartNotification ||
         notification is ScrollUpdateNotification ||
         notification is OverscrollNotification) {
-      _inventoryOverlayRestore?.cancel();
-      if (!_inventoryIsScrolling.value) {
-        _inventoryIsScrolling.value = true;
-      }
-    } else {
-      return false;
+      _beginInventoryScrollInteraction();
     }
     return false;
   }
@@ -14070,81 +14347,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
-  Future<void> _backfillInventoryThumbnails() async {
-    if (_thumbnailBackfillRunning || widget.database == null) {
-      return;
-    }
-    _thumbnailBackfillRunning = true;
-    final database = widget.database!;
-    final disk = _diskInventory;
-    var changed = false;
-    try {
-      final candidates = database.inventoryIdsWithFullImages();
-      for (final id in candidates) {
-        if (!mounted) return;
-        final index = disk?.indexOfId(id) ?? -1;
-        final current = disk == null
-            ? inventory.where((item) => item.id == id).firstOrNull
-            : index < 0
-            ? null
-            : disk[index];
-        final source =
-            current?.imageBytes ?? database.loadInventoryImages(id).imageBytes;
-        if (current == null ||
-            source == null ||
-            current.thumbnailBytes != null) {
-          continue;
-        }
-        final thumbnail = await compute(_createCardThumbnail, source);
-        if (thumbnail == null || !mounted) continue;
-        while (mounted && _inventoryIsScrolling.value) {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-        }
-        if (!mounted) return;
-        final latest = disk == null
-            ? inventory.where((item) => item.id == id).firstOrNull
-            : index < 0
-            ? null
-            : disk[index];
-        final latestSource =
-            latest?.imageBytes ?? database.loadInventoryImages(id).imageBytes;
-        if (latest == null || !listEquals(latestSource, source)) continue;
-        final updated = latest.copyWith(thumbnailBytes: thumbnail);
-        if (disk == null) {
-          _publishInventoryItem(updated);
-          _queueInventoryEntity(database, updated, previous: latest);
-          _persistedEntityReferences.putIfAbsent(
-            'inventory',
-            () => {},
-          )[updated.id] = updated;
-        } else {
-          disk[index] = updated;
-        }
-        changed = true;
-      }
-    } finally {
-      _thumbnailBackfillRunning = false;
-    }
-    if (changed && mounted) {
-      if (disk != null) {
-        _flushDiskInventory();
-        _invalidateSearchCaches();
-        setState(() {});
-      }
-      _localStateRevision++;
-      _scheduleAutomaticSync();
-    }
-  }
-
-  Future<void> _startThumbnailBackfillWhenIdle() async {
-    // Let the first screen settle before opening image rows and spawning
-    // thumbnail workers. On Android this keeps first interaction responsive.
-    _thumbnailBackfillStartTimer?.cancel();
-    _thumbnailBackfillStartTimer = Timer(const Duration(milliseconds: 750), () {
-      if (mounted) unawaited(_backfillInventoryThumbnails());
-    });
-  }
-
   void _scheduleAutomaticSync({
     Duration delay = const Duration(milliseconds: 700),
   }) {
@@ -16215,12 +16417,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _floatingHeaderActionBar() => ValueListenableBuilder<bool>(
-    valueListenable: _inventoryIsScrolling,
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+  Widget _floatingHeaderActionBar() => ValueListenableBuilder<double>(
+    valueListenable: _inventoryScrollOffset,
+    child: _withFloatingActionBarGlow(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: _ScrollAwareBackdropFilter(
+          filterKey: const Key('floating-header-blur'),
+        scrolling: _inventoryIsScrolling,
+        sigmaX: 8,
+        sigmaY: 8,
         child: AnimatedContainer(
           key: const Key('floating-header-actions'),
           duration: Duration.zero,
@@ -16245,28 +16451,26 @@ class _InventoryHomeState extends State<InventoryHome> {
             },
           ),
         ),
+        ),
       ),
     ),
-    builder: (context, scrolling, child) => ValueListenableBuilder<double>(
-      valueListenable: _inventoryScrollOffset,
-      builder: (context, offset, _) {
+    builder: (context, offset, normalHeader) => ValueListenableBuilder<bool>(
+      valueListenable: _inventoryIsScrolling,
+      child: normalHeader,
+      builder: (context, scrolling, normalHeader) {
         final compactSearch =
+            !scrolling &&
             !Platform.isAndroid &&
-            offset >= _compactHeaderScrollThreshold &&
-            !scrolling;
-        final Widget content = scrolling
-            ? IgnorePointer(
-                child: Opacity(
-                  key: const Key('floating-header-hidden'),
-                  opacity: 0,
-                  child: child,
-                ),
-              )
-            : compactSearch
-            ? ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            offset >= _compactHeaderScrollThreshold;
+        final content = compactSearch
+            ? _withFloatingActionBarGlow(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: _ScrollAwareBackdropFilter(
+                  filterKey: const Key('floating-header-compact-blur'),
+                  scrolling: _inventoryIsScrolling,
+                  sigmaX: 8,
+                  sigmaY: 8,
                   child: AnimatedContainer(
                     key: const Key('floating-header-compact-search'),
                     duration: Duration.zero,
@@ -16282,25 +16486,32 @@ class _InventoryHomeState extends State<InventoryHome> {
                       ),
                     ),
                   ),
+                  ),
                 ),
               )
-            : AnimatedOpacity(
-                key: const Key('floating-header-visibility'),
-                duration: Duration.zero,
-                opacity: 1,
-                child: child,
-              );
+            : normalHeader!;
         return Padding(
           key: const Key('floating-header-shell'),
-          // Keep a visible, symmetric breathing space around the top rail.
-          // Its pinned slot is 80px tall, so this mirrors the bottom rail's
-          // 8px vertical inset without letting the controls touch the edge.
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            child: content,
+          child: IgnorePointer(
+            ignoring: scrolling,
+            child: AnimatedSlide(
+              key: const Key('floating-header-motion'),
+              duration: scrolling
+                  ? _inventoryActionBarFadeOutDuration
+                  : _inventoryActionBarFadeInDuration,
+              curve: scrolling ? Curves.easeOutCubic : Curves.easeInOutCubic,
+              offset: scrolling ? const Offset(0, -.24) : Offset.zero,
+              child: AnimatedOpacity(
+                key: const Key('floating-header-visibility'),
+                duration: scrolling
+                    ? _inventoryActionBarFadeOutDuration
+                    : _inventoryActionBarFadeInDuration,
+                curve: scrolling ? Curves.easeOutCubic : Curves.easeInOutCubic,
+                opacity: scrolling ? 0 : 1,
+                child: content,
+              ),
+            ),
           ),
         );
       },
@@ -16392,10 +16603,26 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) =>
       BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withValues(alpha: .42),
+        color: () {
+          final theme = Theme.of(context);
+          final palette =
+              theme.extension<InventorinatorColors>() ??
+              InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+          if (theme.brightness != Brightness.light) {
+            return theme.colorScheme.surface.withValues(alpha: .42);
+          }
+          return Color.lerp(
+            palette.surface,
+            palette.canvas,
+            .22,
+          )!.withValues(alpha: .70);
+        }(),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: .55),
+          color: Theme.of(context).brightness == Brightness.light
+              ? Theme.of(context).colorScheme.outlineVariant
+                    .withValues(alpha: .86)
+              : Theme.of(context).colorScheme.primary.withValues(alpha: .55),
         ),
         boxShadow: reduceEffects
             ? const []
@@ -16407,12 +16634,40 @@ class _InventoryHomeState extends State<InventoryHome> {
                   spreadRadius: 1,
                 ),
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: .46),
+                  color: Colors.black.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.light
+                        ? .14
+                        : .46,
+                  ),
                   blurRadius: 5,
                   offset: Offset(0, 2),
                 ),
               ],
       );
+
+  Widget _withFloatingActionBarGlow({required Widget child}) {
+    final colors = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: colors.primary.withValues(alpha: .28),
+            blurRadius: 24,
+            spreadRadius: 1.5,
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: Theme.of(context).brightness == Brightness.light ? .12 : .38,
+            ),
+            blurRadius: 7,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
 
   Widget _resultCount() {
     if (catalogFilter == null) return const SizedBox.shrink();
@@ -16438,6 +16693,33 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
         ],
       ],
+    );
+  }
+
+  TextStyle _inventoryControlLabelStyle(
+    BuildContext context, {
+    double fontSize = 14,
+  }) {
+    final theme = Theme.of(context);
+    return TextStyle(
+      color: theme.brightness == Brightness.light
+          ? theme.colorScheme.onSurface.withValues(alpha: .72)
+          : const Color(0xffa7adbd),
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+    );
+  }
+
+  TextStyle _inventoryControlSummaryStyle(
+    BuildContext context, {
+    double? fontSize,
+  }) {
+    final theme = Theme.of(context);
+    return TextStyle(
+      color: theme.brightness == Brightness.light
+          ? theme.colorScheme.onSurface.withValues(alpha: .62)
+          : const Color(0xff9da5b7),
+      fontSize: fontSize,
     );
   }
 
@@ -16576,14 +16858,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Sort',
-          style: TextStyle(
-            color: Color(0xffa7adbd),
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        Text('Sort', style: _inventoryControlLabelStyle(context)),
         const SizedBox(height: 2),
         controls,
       ],
@@ -16599,15 +16874,16 @@ class _InventoryHomeState extends State<InventoryHome> {
       final palette =
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-      _pageSizeThumbShape.updatePalette(palette);
       final previewIndex = previewValue.round().clamp(0, _pageSizes.length - 1);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
-          thumbShape: _pageSizeThumbShape,
-          thumbColor: palette.base,
+          trackShape: _NotchedSliderTrackShape(palette),
+          trackHeight: 26,
+          thumbShape: _notchedSliderThumbShape,
+          thumbColor: Theme.of(context).colorScheme.onSurface,
           activeTrackColor: palette.accent,
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-          overlayColor: palette.base.withValues(alpha: .16),
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+          overlayColor: palette.accent.withValues(alpha: .16),
           showValueIndicator: ShowValueIndicator.onDrag,
         ),
         child: Slider(
@@ -16628,11 +16904,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             children: [
               Text(
                 compactLabel ? 'Page' : 'Page size',
-                style: const TextStyle(
-                  color: Color(0xffa7adbd),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: _inventoryControlLabelStyle(context),
               ),
               const SizedBox(height: 2),
               if (expandSlider)
@@ -16721,14 +16993,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       final palette =
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-      _cardSizeThumbShape.updatePalette(palette);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
-          thumbShape: _cardSizeThumbShape,
-          thumbColor: palette.base,
+          trackShape: _NotchedSliderTrackShape(palette),
+          trackHeight: 26,
+          thumbShape: _notchedSliderThumbShape,
+          thumbColor: Theme.of(context).colorScheme.onSurface,
           activeTrackColor: palette.accent,
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-          overlayColor: palette.base.withValues(alpha: .16),
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+          overlayColor: palette.accent.withValues(alpha: .16),
           showValueIndicator: ShowValueIndicator.onDrag,
         ),
         child: Slider(
@@ -16748,11 +17021,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             children: [
               Text(
                 compactLabel ? 'Card' : 'Card size',
-                style: const TextStyle(
-                  color: Color(0xffa7adbd),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: _inventoryControlLabelStyle(context),
               ),
               const SizedBox(height: 2),
               if (expandSlider)
@@ -18590,6 +18859,22 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
+  Offset _layoutPanDeltaInCanvasSpace(Offset screenDelta) {
+    // The pan listener sits outside Transform.rotate, while the translation is
+    // applied inside it. Convert the screen-space drag back through the active
+    // quarter turn so the canvas follows the cursor in every orientation.
+    switch (_layoutQuarterTurns % 4) {
+      case 1:
+        return Offset(screenDelta.dy, -screenDelta.dx);
+      case 2:
+        return Offset(-screenDelta.dx, -screenDelta.dy);
+      case 3:
+        return Offset(-screenDelta.dy, screenDelta.dx);
+      default:
+        return screenDelta;
+    }
+  }
+
   void _frameLayoutToLocations({
     required List<StockLocationRecord> locationsToFrame,
     required Size viewport,
@@ -18797,13 +19082,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                               if (event.buttons & kMiddleMouseButton == 0) {
                                 return;
                               }
+                              final delta = _layoutPanDeltaInCanvasSpace(
+                                event.delta,
+                              );
                               transform.value = transform.value.clone()
-                                ..translateByDouble(
-                                  event.delta.dx,
-                                  event.delta.dy,
-                                  0,
-                                  1,
-                                );
+                                ..translateByDouble(delta.dx, delta.dy, 0, 1);
                             },
                             child: Transform.rotate(
                               angle: _layoutQuarterTurns * math.pi / 2,
@@ -19818,59 +20101,66 @@ class _InventoryHomeState extends State<InventoryHome> {
     tight: tight,
   );
 
-  Widget _androidBottomSearchDock() => ValueListenableBuilder<bool>(
-    valueListenable: _inventoryIsScrolling,
-    builder: (context, scrolling, _) => ValueListenableBuilder<double>(
-      valueListenable: _inventoryScrollOffset,
-      builder: (context, offset, _) {
-        final progress = Platform.isAndroid && !scrolling
-            ? ((offset - _mainSearchCollapseStartOffset) /
-                      (_compactHeaderScrollThreshold -
-                          _mainSearchCollapseStartOffset))
-                  .clamp(0.0, 1.0)
-            : 0.0;
-        final dockHeight = ui.lerpDouble(0, 62, progress)!;
-        return ClipRect(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            curve: Curves.easeOutCubic,
-            height: dockHeight,
-            child: Opacity(
-              opacity: progress,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _EdgeLitSearchField(
-                        fieldKey: const Key('bottom-inventory-search'),
-                        controller: inventorySearchController,
-                        focusNode: bottomSearchFocusNode,
-                        compact: true,
-                        enabled: searchGlowEnabled,
-                        onChanged: _handleInventorySearchChanged,
-                        hintText: 'Search inventory…',
+  Widget _androidBottomSearchDock() {
+    if (!Platform.isAndroid) return const SizedBox.shrink();
+    return ValueListenableBuilder<bool>(
+      valueListenable: _inventoryIsScrolling,
+      builder: (context, scrolling, _) => ValueListenableBuilder<double>(
+        valueListenable: _inventoryScrollOffset,
+        builder: (context, offset, _) {
+          final progress = !scrolling
+              ? ((offset - _mainSearchCollapseStartOffset) /
+                        (_compactHeaderScrollThreshold -
+                            _mainSearchCollapseStartOffset))
+                    .clamp(0.0, 1.0)
+              : 0.0;
+          final dockHeight = ui.lerpDouble(0, 62, progress)!;
+          return ClipRect(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOutCubic,
+              height: dockHeight,
+              child: Opacity(
+                opacity: progress,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _EdgeLitSearchField(
+                          fieldKey: const Key('bottom-inventory-search'),
+                          controller: inventorySearchController,
+                          focusNode: bottomSearchFocusNode,
+                          compact: true,
+                          enabled: searchGlowEnabled,
+                          onChanged: _handleInventorySearchChanged,
+                          hintText: 'Search inventory…',
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    _jumpToTopButton(),
-                  ],
+                      const SizedBox(width: 8),
+                      _jumpToTopButton(),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      },
-    ),
-  );
+          );
+        },
+      ),
+    );
+  }
 
   Widget _bottomActionBar() {
     return ValueListenableBuilder<bool>(
       valueListenable: _inventoryIsScrolling,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: _withFloatingActionBarGlow(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: _ScrollAwareBackdropFilter(
+            filterKey: const Key('bottom-action-blur'),
+          scrolling: _inventoryIsScrolling,
+          sigmaX: 8,
+          sigmaY: 8,
           child: AnimatedContainer(
             key: const Key('bottom-action-surface'),
             duration: Duration.zero,
@@ -20075,6 +20365,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -20085,11 +20376,26 @@ class _InventoryHomeState extends State<InventoryHome> {
           minimum: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: IgnorePointer(
             ignoring: hideForScroll,
-            child: AnimatedOpacity(
-              key: const Key('bottom-action-visibility'),
-              duration: const Duration(milliseconds: 180),
-              opacity: hideForScroll ? 0 : 1,
-              child: child,
+            child: AnimatedSlide(
+              key: const Key('bottom-action-motion'),
+              duration: hideForScroll
+                  ? _inventoryActionBarFadeOutDuration
+                  : _inventoryActionBarFadeInDuration,
+              curve: hideForScroll
+                  ? Curves.easeOutCubic
+                  : Curves.easeInOutCubic,
+              offset: hideForScroll ? const Offset(0, .24) : Offset.zero,
+              child: AnimatedOpacity(
+                key: const Key('bottom-action-visibility'),
+                duration: hideForScroll
+                    ? _inventoryActionBarFadeOutDuration
+                    : _inventoryActionBarFadeInDuration,
+                curve: hideForScroll
+                    ? Curves.easeOutCubic
+                    : Curves.easeInOutCubic,
+                opacity: hideForScroll ? 0 : 1,
+                child: child,
+              ),
             ),
           ),
         );
@@ -20804,18 +21110,14 @@ class _InventoryHomeState extends State<InventoryHome> {
           padding: const EdgeInsets.only(top: 20),
           child: _viewOptionsControls(gap: gap),
         ),
-        const Positioned(
+        Positioned(
           left: 0,
           top: 0,
           width: _inventorySquareControlSize * 2 + 4,
           child: Text(
             'View',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xffa7adbd),
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-            ),
+            style: _inventoryControlLabelStyle(context),
           ),
         ),
         Positioned(
@@ -20828,11 +21130,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             maxLines: 1,
             softWrap: false,
             overflow: TextOverflow.visible,
-            style: TextStyle(
-              color: Color(0xffa7adbd),
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
+            style: _inventoryControlLabelStyle(context, fontSize: 12),
           ),
         ),
       ],
@@ -21418,10 +21716,11 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
         subtitle: Text(
           _activeTypeFilterLabel,
+          key: const Key('type-filter-summary'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: const Color(0xff9da5b7),
+          style: _inventoryControlSummaryStyle(
+            context,
             fontSize: compact ? 11 : null,
           ),
         ),
@@ -21908,10 +22207,11 @@ class _InventoryHomeState extends State<InventoryHome> {
             selected == null
                 ? 'All colors'
                 : '${selected.label} · ${selected.hex}',
+            key: const Key('color-filter-summary'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: const Color(0xff9da5b7),
+            style: _inventoryControlSummaryStyle(
+              context,
               fontSize: compact ? 11 : null,
             ),
           ),
@@ -33654,6 +33954,13 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     ],
   );
 
+  bool get _hasSidebarColorOrMaterial =>
+      item.itemColorName.trim().isNotEmpty ||
+      item.itemColorLabel.trim().isNotEmpty ||
+      _itemGradientColors(item) != null ||
+      _itemCoextrudedColors(item) != null ||
+      item.materialName.trim().isNotEmpty;
+
   Widget _sidebarColorCard({required bool overlay}) {
     final colorScheme = Theme.of(context).colorScheme;
     final swatch = _itemColorSwatch(item.itemColorName);
@@ -33662,6 +33969,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     final coextrudedName = _itemCoextrudedName(item);
     final hasColor =
         item.itemColorName.trim().isNotEmpty ||
+        item.itemColorLabel.trim().isNotEmpty ||
         gradientColors != null ||
         coextrudedColors != null;
     final colorLabel = item.itemColorLabel.trim().isNotEmpty
@@ -33719,39 +34027,43 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
           child: Row(
             mainAxisSize: overlay ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              if (hasColor)
+              if (hasColor) ...[
                 coextrudedColors != null && coextrudedName.isNotEmpty
                     ? Tooltip(message: coextrudedName, child: colorChicklet)
                     : colorChicklet,
-              const SizedBox(width: 11),
-              Flexible(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      colorLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colorScheme.onSurface,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
+                const SizedBox(width: 11),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        colorLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colorScheme.onSurface,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
-                    Text(
-                      colorDetail,
-                      style: TextStyle(
-                        color: colorScheme.onSurfaceVariant,
-                        fontFamily: 'monospace',
-                        fontSize: 12,
+                      Text(
+                        colorDetail,
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
               if (item.materialName.trim().isNotEmpty) ...[
-                if (overlay) const Spacer() else const SizedBox(width: 11),
+                if (overlay)
+                  const Spacer()
+                else if (hasColor)
+                  const SizedBox(width: 11),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 130),
                   child: Align(
@@ -34444,9 +34756,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                                 filterQuality: FilterQuality.high,
                               ),
                             ),
-                            if (item.itemColorName.isNotEmpty ||
-                                _itemGradientColors(item) != null ||
-                                _itemCoextrudedColors(item) != null)
+                            if (_hasSidebarColorOrMaterial)
                               Positioned(
                                 left: 12,
                                 right: 12,
@@ -34651,9 +34961,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         icon: const Icon(Icons.download_rounded),
                         label: const Text('Download labeled QR'),
                       ),
-                      if ((item.itemColorName.isNotEmpty ||
-                              _itemGradientColors(item) != null ||
-                              _itemCoextrudedColors(item) != null) &&
+                      if (_hasSidebarColorOrMaterial &&
                           item.imageBytes == null) ...[
                         const SizedBox(height: 22),
                         _sidebarColorCard(overlay: false),
@@ -36030,6 +36338,12 @@ class _RemoteQuantityChangeEffectState extends State<RemoteQuantityChangeEffect>
   );
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.trigger > 0) controller.forward(from: 0);
+  }
+
+  @override
   void didUpdateWidget(covariant RemoteQuantityChangeEffect oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.durationPercent != oldWidget.durationPercent) {
@@ -36514,12 +36828,26 @@ class ItemCardEffects extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final staticChild = RepaintBoundary(child: child);
+    // SliverGrid/List already creates a repaint boundary for each child. A
+    // second one inside every card adds an offscreen layer without isolating
+    // more paint, which gets expensive when a wide desktop viewport shows
+    // dozens of cards at once.
+    final staticChild = child;
     if (!cardEffectsEnabled) return staticChild;
+    final hasRemoteEffect = remoteSyncEffectsEnabled && quantitySyncVersion > 0;
+    final hasLowStockEffect =
+        lowStockEffectsEnabled && (lowStockActive || lowStockVersion > 0);
+    final hasMoistureEffect =
+        moistureEffectsEnabled && (moistureActive || moistureVersion > 0);
+    // Most cards have no active effect. Do not give every visible item an
+    // animation controller and scroll listener just in case one is needed.
+    if (!hasRemoteEffect && !hasLowStockEffect && !hasMoistureEffect) {
+      return staticChild;
+    }
     final playWhenFirstVisible = scrollingListenable == null;
     Widget effects(Widget effectChild) {
       Widget result = effectChild;
-      if (remoteSyncEffectsEnabled) {
+      if (hasRemoteEffect) {
         result = RemoteQuantityChangeEffect(
           itemId: itemId,
           trigger: quantitySyncVersion,
@@ -36527,9 +36855,7 @@ class ItemCardEffects extends StatelessWidget {
           child: result,
         );
       }
-      // Keep idle cards cheap: alert animation controllers and builders are
-      // only needed while an alert is active or has fired.
-      if (lowStockEffectsEnabled && (lowStockActive || lowStockVersion > 0)) {
+      if (hasLowStockEffect) {
         result = LowStockPulseEffect(
           itemId: itemId,
           trigger: lowStockVersion,
@@ -36540,7 +36866,7 @@ class ItemCardEffects extends StatelessWidget {
           child: result,
         );
       }
-      if (moistureEffectsEnabled && (moistureActive || moistureVersion > 0)) {
+      if (hasMoistureEffect) {
         result = MoistureDropletWaveEffect(
           itemId: itemId,
           trigger: moistureVersion,
@@ -36668,6 +36994,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
     required this.spoolSizeLabel,
     required this.showStatus,
     this.onQuantityChanged,
+    this.scrolling,
   });
 
   final InventoryItem item;
@@ -36677,6 +37004,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
   final String spoolSizeLabel;
   final bool showStatus;
   final ValueChanged<double>? onQuantityChanged;
+  final ValueListenable<bool>? scrolling;
 
   @override
   Widget build(BuildContext context) {
@@ -36704,13 +37032,8 @@ class _PhotoInventoryCardContent extends StatelessWidget {
             _CardPhotoBackground(
               bytes: item.thumbnailBytes ?? item.imageBytes!,
               imageKey: Key('photo-card-background-${item.id}'),
+              scrolling: scrolling,
             ),
-            if (swatch != null || hasSpecialColors)
-              ColoredBox(
-                color:
-                    (swatch ?? coextrudedColors?.first ?? gradientColors!.first)
-                        .withValues(alpha: .12),
-              ),
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -36874,14 +37197,20 @@ class _PhotoInventoryCardContent extends StatelessWidget {
 }
 
 class _CardPhotoBackground extends StatelessWidget {
-  const _CardPhotoBackground({required this.bytes, required this.imageKey});
+  const _CardPhotoBackground({
+    required this.bytes,
+    required this.imageKey,
+    this.scrolling,
+  });
 
   final Uint8List bytes;
   final Key imageKey;
+  final ValueListenable<bool>? scrolling;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
+  Widget build(BuildContext context) {
+    Widget image(FilterQuality filterQuality) => LayoutBuilder(
+      builder: (context, constraints) {
       final logicalWidth = constraints.maxWidth.isFinite
           ? constraints.maxWidth
           : 400.0;
@@ -36907,13 +37236,22 @@ class _CardPhotoBackground extends StatelessWidget {
           image: DecorationImage(
             image: ResizeImage(MemoryImage(bytes), width: cacheWidth),
             fit: BoxFit.cover,
-            filterQuality: FilterQuality.medium,
+            filterQuality: filterQuality,
             onError: (_, _) {},
           ),
         ),
       );
     },
   );
+    final notifier = scrolling;
+    if (notifier == null) return image(FilterQuality.medium);
+    return ValueListenableBuilder<bool>(
+      valueListenable: notifier,
+      builder: (context, isScrolling, _) => image(
+        isScrolling ? FilterQuality.low : FilterQuality.medium,
+      ),
+    );
+  }
 }
 
 class _PhotoCatalogCardContent extends StatelessWidget {
@@ -37030,6 +37368,56 @@ class _PhotoCatalogCardContent extends StatelessWidget {
   );
 }
 
+class _ScrollingInventoryCard extends StatelessWidget {
+  const _ScrollingInventoryCard({
+    required this.itemId,
+    required this.selected,
+    required this.scrolling,
+    required this.child,
+  });
+
+  final String itemId;
+  final bool selected;
+  final ValueListenable<bool>? scrolling;
+  final Widget child;
+
+  Widget _buildCard(BuildContext context, Clip clipBehavior, Widget child) => Card(
+    key: Key('inventory-card-$itemId'),
+    color: selected
+        ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
+        : null,
+    shape: selected
+        ? RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: BorderSide(
+              color: Theme.of(context).colorScheme.primary,
+              width: 2,
+            ),
+          )
+        : null,
+    // Anti-aliasing every moving card costs a full viewport's worth of edge
+    // samples. A hard clip is visually equivalent while content is in motion;
+    // restore the polished anti-aliased edge as soon as the viewport settles.
+    clipBehavior: clipBehavior,
+    child: child,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final notifier = scrolling;
+    if (notifier == null) return _buildCard(context, Clip.antiAlias, child);
+    return ValueListenableBuilder<bool>(
+      valueListenable: notifier,
+      child: child,
+      builder: (context, isScrolling, cachedChild) => _buildCard(
+        context,
+        isScrolling ? Clip.hardEdge : Clip.antiAlias,
+        cachedChild!,
+      ),
+    );
+  }
+}
+
 class InventoryCard extends StatelessWidget {
   const InventoryCard({
     super.key,
@@ -37096,21 +37484,10 @@ class InventoryCard extends StatelessWidget {
     canArchive: canArchive,
     canDelete: canDelete,
     onSelect: onSelect,
-    child: Card(
-      key: Key('inventory-card-${item.id}'),
-      color: selected
-          ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
-          : null,
-      shape: selected
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(22),
-              side: BorderSide(
-                color: Theme.of(context).colorScheme.primary,
-                width: 2,
-              ),
-            )
-          : null,
-      clipBehavior: Clip.antiAlias,
+    child: _ScrollingInventoryCard(
+      itemId: item.id,
+      selected: selected,
+      scrolling: scrollingListenable,
       child: InkWell(
         onTap: onOpen,
         hoverColor: Theme.of(context).colorScheme.primary
@@ -37146,6 +37523,7 @@ class InventoryCard extends StatelessWidget {
                   spoolSizeLabel: spoolSizeLabel,
                   showStatus: showStatus,
                   onQuantityChanged: canEdit ? onQuantityChanged : null,
+                  scrolling: scrollingListenable,
                 )
               : LayoutBuilder(
                   builder: (context, constraints) {
@@ -37730,6 +38108,18 @@ class CountdownRing extends StatelessWidget {
         ? const Color(0xffffc857)
         : const Color(0xff45d2bd);
     final moistureLabel = _moistureRemainingLabel(item);
+    final lightTheme = Theme.of(context).brightness == Brightness.light;
+    final statusHsl = HSLColor.fromColor(statusColor);
+    final baseTone = statusHsl
+        .withLightness(
+          (statusHsl.lightness + (lightTheme ? .12 : -.22)).clamp(.12, .88),
+        )
+        .toColor();
+    final highlightTone = statusHsl
+        .withLightness(
+          (statusHsl.lightness + (lightTheme ? .22 : .08)).clamp(.12, .88),
+        )
+        .toColor();
     final statusLabel = active
         ? 'Time until dry'
         : queued
@@ -37764,9 +38154,14 @@ class CountdownRing extends StatelessWidget {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: statusColor.withValues(alpha: .22),
-                  blurRadius: 14,
-                  spreadRadius: 1,
+                  color: statusColor.withValues(alpha: .24),
+                  blurRadius: 12,
+                  spreadRadius: .5,
+                ),
+                BoxShadow(
+                  color: statusColor.withValues(alpha: .12),
+                  blurRadius: 3,
+                  spreadRadius: 0,
                 ),
               ],
             ),
@@ -37775,12 +38170,14 @@ class CountdownRing extends StatelessWidget {
               children: [
                 SizedBox.square(
                   dimension: size,
-                  child: CircularProgressIndicator(
-                    value: animatedProgress,
-                    strokeWidth: compact ? 4 : 5,
-                    backgroundColor: const Color(0xff292f3d),
-                    color: statusColor,
-                    strokeCap: StrokeCap.round,
+                  child: CustomPaint(
+                    painter: _StatusRingPainter(
+                      progress: animatedProgress,
+                      strokeWidth: compact ? 4 : 5,
+                      baseColor: baseTone,
+                      statusColor: statusColor,
+                      highlightColor: highlightTone,
+                    ),
                   ),
                 ),
                 Column(
@@ -37832,6 +38229,55 @@ class CountdownRing extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StatusRingPainter extends CustomPainter {
+  const _StatusRingPainter({
+    required this.progress,
+    required this.strokeWidth,
+    required this.baseColor,
+    required this.statusColor,
+    required this.highlightColor,
+  });
+
+  final double progress;
+  final double strokeWidth;
+  final Color baseColor;
+  final Color statusColor;
+  final Color highlightColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final inset = strokeWidth / 2;
+    final bounds = Rect.fromLTWH(
+      inset,
+      inset,
+      size.width - strokeWidth,
+      size.height - strokeWidth,
+    );
+    // This is a status jewel, not a progress track. A complete sweep keeps
+    // the color continuous around the circle instead of ending in a dark
+    // unused segment.
+    final ring = Paint()
+      ..shader = SweepGradient(
+        startAngle: -math.pi / 2,
+        endAngle: math.pi * 1.5,
+        colors: [statusColor, highlightColor, statusColor, baseColor, statusColor],
+        stops: const [0, .24, .5, .76, 1],
+      ).createShader(bounds)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.butt;
+    canvas.drawArc(bounds, -math.pi / 2, math.pi * 2, false, ring);
+  }
+
+  @override
+  bool shouldRepaint(covariant _StatusRingPainter oldDelegate) =>
+      progress != oldDelegate.progress ||
+      strokeWidth != oldDelegate.strokeWidth ||
+      baseColor != oldDelegate.baseColor ||
+      statusColor != oldDelegate.statusColor ||
+      highlightColor != oldDelegate.highlightColor;
 }
 
 class _PinnedActionBarDelegate extends SliverPersistentHeaderDelegate {

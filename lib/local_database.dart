@@ -227,7 +227,9 @@ class LocalDatabase {
     ''');
     final outboxColumns = _database.select('PRAGMA table_info(sync_outbox)');
     if (!outboxColumns.any((row) => row['name'] == 'base_json')) {
-      _database.execute("ALTER TABLE sync_outbox ADD COLUMN base_json TEXT NOT NULL DEFAULT '{}'");
+      _database.execute(
+        "ALTER TABLE sync_outbox ADD COLUMN base_json TEXT NOT NULL DEFAULT '{}'",
+      );
     }
     if (!outboxColumns.any((row) => row['name'] == 'local_revision')) {
       _database.execute(
@@ -754,7 +756,10 @@ class LocalDatabase {
             localRevision,
           ],
         );
-        _database.execute('UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?', [jsonEncode(baseline), change.entityType, change.entityId]);
+        _database.execute(
+          'UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?',
+          [jsonEncode(baseline), change.entityType, change.entityId],
+        );
       }
       _database.execute('COMMIT');
     } catch (_) {
@@ -811,7 +816,10 @@ class LocalDatabase {
             localRevision,
           ],
         );
-        _database.execute('UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?', [jsonEncode(baseline), change.entityType, change.entityId]);
+        _database.execute(
+          'UPDATE sync_outbox SET base_json = ? WHERE entity_type = ? AND entity_id = ?',
+          [jsonEncode(baseline), change.entityType, change.entityId],
+        );
       }
       _database.execute('COMMIT');
     } catch (_) {
@@ -821,17 +829,43 @@ class LocalDatabase {
   }
 
   Map<String, dynamic> _conflictBaseline(WorkshopEntityChange change) {
-    final rows = _database.select('SELECT base_json FROM sync_outbox WHERE entity_type = ? AND entity_id = ?', [change.entityType, change.entityId]);
-    final base = rows.isEmpty ? <String, dynamic>{} : Map<String, dynamic>.from(jsonDecode(rows.first['base_json'] as String) as Map);
-    final previous = readEntityPayload(change.entityType, change.entityId) ?? {};
-    if (change.deleted) { base.putIfAbsent('(deleted)', () => previous); }
-    for (final field in change.fields.keys) { base.putIfAbsent(field, () => previous[field]); }
+    final rows = _database.select(
+      'SELECT base_json FROM sync_outbox WHERE entity_type = ? AND entity_id = ?',
+      [change.entityType, change.entityId],
+    );
+    final base = rows.isEmpty
+        ? <String, dynamic>{}
+        : Map<String, dynamic>.from(
+            jsonDecode(rows.first['base_json'] as String) as Map,
+          );
+    final previous =
+        readEntityPayload(change.entityType, change.entityId) ?? {};
+    if (change.deleted) {
+      // A tombstone supersedes every earlier queued local edit. Keep the
+      // original remote values for future diagnostics rather than treating the
+      // current local payload (which may contain unsynced edits) as remote.
+      final remoteBaseline = Map<String, dynamic>.from(previous);
+      for (final entry in base.entries) {
+        if (!entry.key.startsWith('(')) remoteBaseline[entry.key] = entry.value;
+      }
+      base['(deleted)'] = remoteBaseline;
+    }
+    for (final field in change.fields.keys) {
+      base.putIfAbsent(field, () => previous[field]);
+    }
     return base;
   }
 
   Map<String, dynamic>? readEntityPayload(String type, String id) {
-    final rows = _database.select('SELECT payload_json FROM entity_state WHERE entity_type = ? AND entity_id = ?', [type, id]);
-    return rows.isEmpty ? null : Map<String, dynamic>.from(jsonDecode(rows.first['payload_json'] as String) as Map);
+    final rows = _database.select(
+      'SELECT payload_json FROM entity_state WHERE entity_type = ? AND entity_id = ?',
+      [type, id],
+    );
+    return rows.isEmpty
+        ? null
+        : Map<String, dynamic>.from(
+            jsonDecode(rows.first['payload_json'] as String) as Map,
+          );
   }
 
   void saveEntityPayloadAndQueue(
@@ -1080,7 +1114,9 @@ class LocalDatabase {
               jsonDecode(row['fields_json'] as String) as Map,
             ),
             deleted: row['deleted'] == 1,
-            baseFields: Map<String, dynamic>.from(jsonDecode(row['base_json'] as String) as Map),
+            baseFields: Map<String, dynamic>.from(
+              jsonDecode(row['base_json'] as String) as Map,
+            ),
           ),
         ),
       )
@@ -1106,15 +1142,23 @@ class LocalDatabase {
         statement.execute([pending.outboxId, pending.localRevision]);
         // A newer local revision still queued after this acknowledgement uses
         // the just-sent values as its remote baseline.
-        final remaining = _database.select('SELECT base_json FROM sync_outbox WHERE id = ?', [pending.outboxId]);
+        final remaining = _database.select(
+          'SELECT base_json FROM sync_outbox WHERE id = ?',
+          [pending.outboxId],
+        );
         if (remaining.isNotEmpty) {
-          final base = Map<String, dynamic>.from(jsonDecode(remaining.first['base_json'] as String) as Map);
+          final base = Map<String, dynamic>.from(
+            jsonDecode(remaining.first['base_json'] as String) as Map,
+          );
           for (final field in pending.change.fields.keys) {
             if (base.containsKey(field)) {
               base[field] = pending.change.fields[field];
             }
           }
-          _database.execute('UPDATE sync_outbox SET base_json = ? WHERE id = ?', [jsonEncode(base), pending.outboxId]);
+          _database.execute(
+            'UPDATE sync_outbox SET base_json = ? WHERE id = ?',
+            [jsonEncode(base), pending.outboxId],
+          );
         }
       }
     } finally {

@@ -37,13 +37,49 @@ class SyncConflictStore {
     save(rows);
   }
 
-  List<PendingWorkshopChange> readyForUpload(List<PendingWorkshopChange> pending, {bool atomicBuilds = false}) {
+  List<PendingWorkshopChange> readyForUpload(
+    List<PendingWorkshopChange> pending, {
+    bool atomicBuilds = false,
+  }) {
     final rows = load();
-    final blocked = rows.map((r) => '${r['entityType']}\u0000${r['entityId']}').toSet();
-    final holdBuildTransaction = atomicBuilds && rows.any((r) => r['entityType'] == 'inventory' || r['entityType'] == 'builds');
-    return pending.where((p) => !blocked.contains('${p.change.entityType}\u0000${p.change.entityId}') &&
-      !(holdBuildTransaction && (p.change.entityType == 'inventory' || p.change.entityType == 'builds'))).toList();
+    // v29 gives queued tombstones precedence. Clear any legacy false conflict
+    // row so a delete that was previously stranded can leave the outbox.
+    final deletedKeys = pending
+        .where((entry) => entry.change.deleted)
+        .map(
+          (entry) => '${entry.change.entityType}\u0000${entry.change.entityId}',
+        )
+        .toSet();
+    if (deletedKeys.isNotEmpty) {
+      final count = rows.length;
+      rows.removeWhere(
+        (row) => deletedKeys.contains(
+          '${row['entityType']}\u0000${row['entityId']}',
+        ),
+      );
+      if (rows.length != count) save(rows);
+    }
+    final blocked = rows
+        .map((r) => '${r['entityType']}\u0000${r['entityId']}')
+        .toSet();
+    final holdBuildTransaction =
+        atomicBuilds &&
+        rows.any(
+          (r) => r['entityType'] == 'inventory' || r['entityType'] == 'builds',
+        );
+    return pending
+        .where(
+          (p) =>
+              !blocked.contains(
+                '${p.change.entityType}\u0000${p.change.entityId}',
+              ) &&
+              !(holdBuildTransaction &&
+                  (p.change.entityType == 'inventory' ||
+                      p.change.entityType == 'builds')),
+        )
+        .toList();
   }
+
   bool blocks(WorkshopEntityChange change) => load().any(
     (r) =>
         r['entityType'] == change.entityType &&

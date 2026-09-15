@@ -81,6 +81,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/icons/
     - assets/fonts/DejaVuSans.ttf
     - assets/audio/transhuman_sync.wav
     - assets/audio/drying_complete.wav

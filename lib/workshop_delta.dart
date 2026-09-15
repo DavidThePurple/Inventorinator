@@ -102,18 +102,9 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
     if (local.deleted) {
-      if (remote.fields.isNotEmpty &&
-          !_sameJson(local.baseFields?['(deleted)'], remote.fields)) {
-        conflicts.add(
-          WorkshopFieldConflict(
-            entityType: remote.entityType,
-            entityId: remote.entityId,
-            field: '(deleted)',
-            localValue: null,
-            remoteValue: remote.fields,
-          ),
-        );
-      }
+      // A delete is ordered after any version already on the server.  It is a
+      // deliberate tombstone, so an incoming record must not turn it into a
+      // conflict merely because the local device had queued an earlier edit.
       return local;
     }
     if (remote.deleted) {

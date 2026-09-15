@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 28;
+const latestInventorinatorSchemaVersion = 29;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 

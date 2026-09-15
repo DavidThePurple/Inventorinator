@@ -22,6 +22,7 @@ class ServiceStatus {
       if (version < 25) 'custom role assignment',
       if (version < 26) 'Scratch Pad backup',
       if (version < 28) 'Scratch Pad note links',
+      if (version < 29) 'delete-queue fix',
     ];
     return 'Connected—server update needed for ${missing.join(', ')}. '
         'Inventory sync is supported. Local changes are retained.';

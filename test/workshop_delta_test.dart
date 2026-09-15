@@ -146,4 +146,31 @@ void main() {
     });
     expect(merged.conflicts, isEmpty);
   });
+
+  test('a queued delete supersedes an incoming record without a conflict', () {
+    final merged = mergeRemoteChangesWithPending(
+      const [
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'FILAMENT-1',
+          fields: {'name': 'PolyLite PLA', 'filamentStatus': 'ready'},
+          revision: 42,
+        ),
+      ],
+      const [
+        WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'FILAMENT-1',
+          fields: {},
+          deleted: true,
+          baseFields: {
+            '(deleted)': {'name': 'PolyLite PLA', 'filamentStatus': 'wet'},
+          },
+        ),
+      ],
+    );
+
+    expect(merged.changes.single.deleted, isTrue);
+    expect(merged.conflicts, isEmpty);
+  });
 }

@@ -1,21 +1,12 @@
 import 'package:flutter/material.dart';
 
 class MarkdownEditingController extends TextEditingController {
-  static const _codeSurface = Color(0xFF21142F);
-  static const _codeText = Color(0xFFF0E8F6);
-  static const _codeKeyword = Color(0xFF71C7EC);
-  static const _codeString = Color(0xFFF2B880);
-  static const _codeNumber = Color(0xFFC7A4FF);
-  static const _codeComment = Color(0xFF91B98C);
-  static const _codeFunction = Color(0xFFE6C27A);
-  static const _codeType = Color(0xFFB69CFF);
-  static const _codePunctuation = Color(0xFFBDB0CA);
-
   MarkdownEditingController({
     super.text,
     this.onLinkTap,
     this.onImageTap,
     this.imageHeightLines = 5,
+    this.renderImages = true,
   }) : assert(imageHeightLines > 0, 'imageHeightLines must be positive') {
     _sourceText = super.text;
     // Add virtual newlines for image spacing on initial text
@@ -33,6 +24,9 @@ class MarkdownEditingController extends TextEditingController {
   /// Defaults to 5 lines.
   final int imageHeightLines;
 
+  /// Render image syntax as a widget. Source-only editors can opt out.
+  final bool renderImages;
+
   /// Stores link ranges for offset-based tap detection.
   /// Each entry contains (start, end, url).
   final List<({int start, int end, String url})> _linkRanges = [];
@@ -48,6 +42,53 @@ class MarkdownEditingController extends TextEditingController {
   bool _isUpdatingText = false;
 
   int? get focusedLine => _focusedLine;
+
+  /// Reveals a rendered image as Markdown so the existing image can be edited.
+  void revealImage(String url) {
+    final match = _imagePattern
+        .allMatches(_sourceText)
+        .firstWhere(
+          (candidate) => candidate.group(4) == url,
+          orElse: () => throw StateError('Image not found in Markdown source'),
+        );
+    final sourceOffset = match.start;
+    _focusedLine = _getLineNumber(sourceOffset, _sourceText);
+    final displayOffset = _sourceToDisplayOffset(sourceOffset, super.text);
+    selection = TextSelection.collapsed(offset: displayOffset);
+    notifyListeners();
+  }
+
+  /// Handles vertical caret movement at a rendered image as one block. This
+  /// prevents EditableText from walking its internal placeholder rows.
+  bool movePastImage({required bool down}) {
+    final sourceOffset = _displayToSourceOffset(
+      selection.extentOffset,
+      super.text,
+    );
+    for (final match in _imagePattern.allMatches(_sourceText)) {
+      final nextLine =
+          match.end < _sourceText.length && _sourceText[match.end] == '\n'
+          ? match.end + 1
+          : match.end;
+      if (down && sourceOffset >= match.start && sourceOffset <= match.end) {
+        _setSelectionAtSourceOffset(nextLine);
+        return true;
+      }
+      if (!down && sourceOffset == nextLine) {
+        _setSelectionAtSourceOffset(match.start);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _setSelectionAtSourceOffset(int sourceOffset) {
+    _focusedLine = _getLineNumber(sourceOffset, _sourceText);
+    selection = TextSelection.collapsed(
+      offset: _sourceToDisplayOffset(sourceOffset, super.text),
+    );
+    notifyListeners();
+  }
 
   /// Set the focused line and update text to inject/remove newlines
   set focusedLine(int? value) {
@@ -136,16 +177,19 @@ class MarkdownEditingController extends TextEditingController {
     return (0, 0);
   }
 
-  /// Builds an image widget for rendering inline images.
+  /// Builds an image at the same fixed height used for cursor reservation.
   Widget _buildImageWidget(String url, String altText, TextStyle style) {
-    final fontSize = style.fontSize?.toDouble() ?? 16.0;
-
+    final lineHeight = _lineHeight(style);
+    final imageHeight = lineHeight * imageHeightLines;
     return GestureDetector(
-      onTap: onImageTap != null ? () => onImageTap!(url) : null,
+      onTap: () {
+        revealImage(url);
+        onImageTap?.call(url);
+      },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
         child: SizedBox(
-          height: fontSize * imageHeightLines * (style.height ?? 1.2),
+          height: imageHeight,
           child: _buildImageWithSource(url, altText),
         ),
       ),
@@ -200,7 +244,9 @@ class MarkdownEditingController extends TextEditingController {
   /// We use zero-width space + newline to mark virtual newlines
   static const _virtualNewlineMarker = '\u200B\n';
 
-  /// Update the actual text to include newlines around unfocused images
+  /// Update the editable buffer with virtual lines that reserve an image's
+  /// configured height. The source Markdown remains available through
+  /// [sourceText] and is restored before every edit is persisted.
   void _updateTextWithNewlines() {
     if (_isUpdatingText) return;
     _isUpdatingText = true;
@@ -212,23 +258,25 @@ class MarkdownEditingController extends TextEditingController {
     }
   }
 
-  /// Keeps the editable buffer as the original Markdown source.
-  ///
-  /// Earlier versions injected zero-width markers and real newlines around
-  /// image previews. That made the TextField's buffer differ from the note
-  /// source, which caused IME edits and cursor moves to replay removed text.
-  /// Image previews already have their own WidgetSpan height, so the source
-  /// buffer never needs synthetic characters.
   void _updateTextWithNewlinesInternal() {
     final cleanText = _removeVirtualNewlines(super.text);
     _sourceText = cleanText;
-    if (super.text == cleanText) return;
+    final displayText = _injectVirtualImageLines(cleanText);
+    if (super.text == displayText) return;
     final oldSelection = selection;
+    final sourceBase = _displayToSourceOffset(
+      oldSelection.baseOffset,
+      super.text,
+    );
+    final sourceExtent = _displayToSourceOffset(
+      oldSelection.extentOffset,
+      super.text,
+    );
     super.value = super.value.copyWith(
-      text: cleanText,
+      text: displayText,
       selection: TextSelection(
-        baseOffset: oldSelection.baseOffset.clamp(0, cleanText.length),
-        extentOffset: oldSelection.extentOffset.clamp(0, cleanText.length),
+        baseOffset: _sourceToDisplayOffset(sourceBase, displayText),
+        extentOffset: _sourceToDisplayOffset(sourceExtent, displayText),
         affinity: oldSelection.affinity,
       ),
       composing: TextRange.empty,
@@ -238,6 +286,65 @@ class MarkdownEditingController extends TextEditingController {
   /// Remove virtual newlines from text
   String _removeVirtualNewlines(String text) {
     return text.replaceAll(_virtualNewlineMarker, '');
+  }
+
+  double _lineHeight(TextStyle style) =>
+      (style.fontSize ?? 16) * (style.height ?? 1.2);
+
+  /// The WidgetSpan consumes the image's first line. Reserve only the
+  /// remaining lines, so one Enter moves to the next source line below it.
+  String _injectVirtualImageLines(String source) {
+    final reserveLines = imageHeightLines - 1;
+    if (reserveLines <= 0) return source;
+    final spacer = _virtualNewlineMarker * reserveLines;
+    return source.replaceAllMapped(
+      _imagePattern,
+      (match) => '${match.group(0)}$spacer',
+    );
+  }
+
+  int _sourceToDisplayOffset(int sourceOffset, String displayText) {
+    var sourceIndex = 0;
+    for (
+      var displayIndex = 0;
+      displayIndex < displayText.length;
+      displayIndex++
+    ) {
+      if (sourceIndex >= sourceOffset) return displayIndex;
+      if (displayText.startsWith(_virtualNewlineMarker, displayIndex)) {
+        displayIndex += _virtualNewlineMarker.length - 1;
+      } else {
+        sourceIndex++;
+      }
+    }
+    return displayText.length;
+  }
+
+  /// The virtual image lines exist only to reserve paint space. A TextField
+  /// must never leave its caret on one of them, or typing would create source
+  /// text visually behind the preview.
+  TextSelection _skipVirtualImageLines(
+    TextSelection selection,
+    String displayText,
+  ) {
+    int snap(int offset) {
+      for (final match in RegExp(r'(?:\u200B\n)+').allMatches(displayText)) {
+        // Keep the end of a raw image line editable. Every position after its
+        // first marker is a reserved display-only line and goes to the next
+        // real Markdown line instead.
+        if (offset > match.start && offset <= match.end) {
+          return match.end < displayText.length &&
+                  displayText[match.end] == '\n'
+              ? match.end + 1
+              : match.end;
+        }
+      }
+      return offset;
+    }
+
+    final base = snap(selection.baseOffset.clamp(0, displayText.length));
+    final extent = snap(selection.extentOffset.clamp(0, displayText.length));
+    return selection.copyWith(baseOffset: base, extentOffset: extent);
   }
 
   /// Override text setter so externally loaded notes retain exact source text.
@@ -255,9 +362,15 @@ class MarkdownEditingController extends TextEditingController {
         text: cleanValue,
         selection: TextSelection.collapsed(offset: cleanValue.length),
       );
+      _updateTextWithNewlinesInternal();
     } finally {
       _isUpdatingText = false;
     }
+  }
+
+  void _syncFocusedLineToSelection(int offset, String source) {
+    if (offset < 0) return;
+    _focusedLine = _getLineNumber(offset.clamp(0, source.length), source);
   }
 
   /// Override value setter to handle paste operations
@@ -270,10 +383,22 @@ class MarkdownEditingController extends TextEditingController {
       return;
     }
 
-    // Check if text has actually changed (selection-only changes should pass through)
+    // Selection updates arrive here for mouse clicks and arrow keys. Update the
+    // active source line before EditableText paints again; this makes an image
+    // line reveal its Markdown source instead of letting a caret sit over its
+    // rendered WidgetSpan.
     if (newValue.text == super.text) {
-      // Selection-only change - pass through without processing
-      super.value = newValue;
+      final normalizedSelection = _skipVirtualImageLines(
+        newValue.selection,
+        newValue.text,
+      );
+      final source = _removeVirtualNewlines(newValue.text);
+      _sourceText = source;
+      _syncFocusedLineToSelection(
+        _displayToSourceOffset(normalizedSelection.extentOffset, newValue.text),
+        source,
+      );
+      super.value = newValue.copyWith(selection: normalizedSelection);
       return;
     }
 
@@ -313,6 +438,7 @@ class MarkdownEditingController extends TextEditingController {
         extentOffset: mappedSourceExtent.clamp(0, cleanText.length),
         affinity: newValue.selection.affinity,
       );
+      _syncFocusedLineToSelection(sourceSelection.extentOffset, cleanText);
       super.value = newValue.copyWith(
         text: cleanText,
         selection: sourceSelection,
@@ -368,6 +494,7 @@ class MarkdownEditingController extends TextEditingController {
     String code,
     TextStyle style,
     String language,
+    ColorScheme colors,
   ) {
     final keywords = switch (language) {
       'dart' =>
@@ -395,20 +522,23 @@ class MarkdownEditingController extends TextEditingController {
       final token = match.group(0)!;
       final isFunction = RegExp(r'^\s*\(').hasMatch(code.substring(match.end));
       final tokenStyle = token.startsWith('//') || token.startsWith('#')
-          ? style.copyWith(color: _codeComment)
+          ? style.copyWith(color: colors.onSurfaceVariant)
           : token.startsWith('"') || token.startsWith("'")
-          ? style.copyWith(color: _codeString)
+          ? style.copyWith(color: colors.tertiary)
           : RegExp(r'^\d').hasMatch(token)
-          ? style.copyWith(color: _codeNumber)
+          ? style.copyWith(color: colors.secondary)
           : keywordPattern.hasMatch(token)
-          ? style.copyWith(color: _codeKeyword, fontWeight: FontWeight.w600)
+          ? style.copyWith(color: colors.primary, fontWeight: FontWeight.w600)
           : RegExp(r'^[(){}\[\],.;:=+*/<>!-]+$').hasMatch(token)
-          ? style.copyWith(color: _codePunctuation)
+          ? style.copyWith(color: colors.onSurfaceVariant)
           : isFunction
-          ? style.copyWith(color: _codeFunction, fontWeight: FontWeight.w600)
+          ? style.copyWith(color: colors.secondary, fontWeight: FontWeight.w600)
           : RegExp(r'^[A-Z]').hasMatch(token)
-          ? style.copyWith(color: _codeType)
-          : style.copyWith(color: _codeFunction, fontWeight: FontWeight.w600);
+          ? style.copyWith(color: colors.tertiary)
+          : style.copyWith(
+              color: colors.secondary,
+              fontWeight: FontWeight.w600,
+            );
       spans.add(TextSpan(text: token, style: tokenStyle));
       offset = match.end;
     }
@@ -438,11 +568,15 @@ class MarkdownEditingController extends TextEditingController {
     final List<InlineSpan> spans = [];
     final colors = Theme.of(context).colorScheme;
     final light = Theme.of(context).brightness == Brightness.light;
-    final codeSurface = light ? const Color(0xffe7e1ed) : _codeSurface;
-    final codeText = light ? const Color(0xff211a2d) : _codeText;
-    final inlineCodeSurface = light
-        ? const Color(0xffd7cfe2)
-        : Colors.grey.shade200.withValues(alpha: .5);
+    final codeSurface = Color.alphaBlend(
+      colors.primary.withValues(alpha: light ? .08 : .16),
+      colors.surfaceContainerHigh,
+    );
+    final codeText = colors.onSurface;
+    final inlineCodeSurface = Color.alphaBlend(
+      colors.primary.withValues(alpha: light ? .12 : .22),
+      colors.surfaceContainerHigh,
+    );
 
     // Calculate focused line range in SOURCE text coordinates
     // This is critical because _focusedLine is tracked in source coordinates,
@@ -639,7 +773,9 @@ class MarkdownEditingController extends TextEditingController {
               style: isOnFocusedLine ? combinedStyle : hiddenStyle,
             ),
           );
-          matchSpans.addAll(_buildCodeSpans(content, combinedStyle, language));
+          matchSpans.addAll(
+            _buildCodeSpans(content, combinedStyle, language, colors),
+          );
           matchSpans.add(
             TextSpan(
               text: closingFence,
@@ -654,7 +790,7 @@ class MarkdownEditingController extends TextEditingController {
             RegExp(r'\n>\s?'),
             '\n',
           );
-          if (isOnFocusedLine) {
+          if (!renderImages || isOnFocusedLine) {
             matchSpans.add(TextSpan(text: marker, style: combinedStyle));
             matchSpans.add(TextSpan(text: rawContent, style: combinedStyle));
           } else {
@@ -813,8 +949,7 @@ class MarkdownEditingController extends TextEditingController {
           final url = match.group(4)!;
           final closeParen = match.group(5)!;
           final int syntaxLength = match.group(0)!.length;
-
-          if (isOnFocusedLine) {
+          if (!renderImages || isOnFocusedLine) {
             // On focused line: show full raw syntax for editing
             matchSpans.add(TextSpan(text: openingMarker, style: combinedStyle));
             matchSpans.add(TextSpan(text: altText, style: combinedStyle));
@@ -832,7 +967,10 @@ class MarkdownEditingController extends TextEditingController {
 
             matchSpans.add(
               WidgetSpan(
-                alignment: PlaceholderAlignment.middle,
+                // The virtual rows follow the Markdown image line. Anchor the
+                // preview at that line's top so its pixels occupy those same
+                // rows instead of extending upward over editable text.
+                alignment: PlaceholderAlignment.top,
                 child: _buildImageWidget(url, altText, combinedStyle),
               ),
             );

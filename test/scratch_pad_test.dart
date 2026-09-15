@@ -170,7 +170,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('fenced code uses the dark workshop palette', (tester) async {
+  testWidgets('fenced code follows the active theme palette', (tester) async {
     final controller = MarkdownEditingController(
       text: '~~~dart\nif (this) Then(42);\n~~~',
     );
@@ -193,23 +193,27 @@ void main() {
         withComposing: false,
       ),
     ).toList();
+    final colors = Theme.of(context).colorScheme;
     expect(
       spans.any(
-        (span) =>
-            span.text == 'if' && span.style?.color == const Color(0xFF71C7EC),
+        (span) => span.text == 'if' && span.style?.color == colors.primary,
+      ),
+      isTrue,
+    );
+    expect(
+      spans.any(
+        (span) => span.text == 'Then' && span.style?.color == colors.secondary,
       ),
       isTrue,
     );
     expect(
       spans.any(
         (span) =>
-            span.text == 'Then' && span.style?.color == const Color(0xFFE6C27A),
-      ),
-      isTrue,
-    );
-    expect(
-      spans.any(
-        (span) => span.style?.backgroundColor == const Color(0xFF21142F),
+            span.style?.backgroundColor ==
+            Color.alphaBlend(
+              colors.primary.withValues(alpha: .16),
+              colors.surfaceContainerHigh,
+            ),
       ),
       isTrue,
     );
@@ -309,23 +313,161 @@ Plain text''';
     controller.dispose();
   });
 
-  test('image previews never inject source characters while editing', () {
-    const source = 'Keep\n![Cone](https://example.com/cone.png)\nRemove me';
-    final controller = MarkdownEditingController(text: source)
-      ..selection = TextSelection.collapsed(offset: source.length);
+  test(
+    'image previews reserve their configured height without changing source',
+    () {
+      const source = 'Keep\n![Cone](https://example.com/cone.png)\nRemove me';
+      final controller = MarkdownEditingController(text: source)
+        ..selection = TextSelection.collapsed(offset: 0);
 
-    expect(controller.text, source);
-    final removed = source.replaceFirst('Remove me', '');
+      expect(controller.text, contains('\u200B\n'));
+      expect(controller.sourceText, source);
+      final removed = controller.text.replaceFirst('Remove me', '');
+      controller.value = controller.value.copyWith(
+        text: removed,
+        selection: TextSelection.collapsed(offset: removed.length),
+        composing: TextRange.empty,
+      );
+      controller.updateFocusedLineFromSelection();
+
+      expect(controller.text, contains('\u200B\n'));
+      expect(controller.sourceText, source.replaceFirst('Remove me', ''));
+      expect(controller.selection.extentOffset, removed.length);
+      controller.dispose();
+    },
+  );
+
+  test('moving the selection onto an image activates its source line', () {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(text: 'Before\n$image\nAfter')
+      ..focusedLine = 2;
+
+    controller.selection = const TextSelection.collapsed(offset: 9);
+
+    expect(controller.focusedLine, 1);
+    controller.dispose();
+  });
+
+  test('tapping a preview reveals its existing Markdown source', () {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(text: 'Before\n$image\nAfter');
+
+    controller.revealImage('https://example.com/cone.png');
+
+    expect(controller.focusedLine, 1);
+    expect(controller.selection.extentOffset, controller.text.indexOf(image));
+    expect(controller.sourceText, 'Before\n$image\nAfter');
+    controller.dispose();
+  });
+
+  test('one Return after an image moves to the next source line', () {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(text: '$image\nAfter');
+    controller.revealImage('https://example.com/cone.png');
+    final imageEnd = controller.text.indexOf(image) + image.length;
+
     controller.value = controller.value.copyWith(
-      text: removed,
-      selection: TextSelection.collapsed(offset: removed.length),
+      text:
+          '${controller.text.substring(0, imageEnd)}\n${controller.text.substring(imageEnd)}',
+      selection: TextSelection.collapsed(offset: imageEnd + 1),
       composing: TextRange.empty,
     );
-    controller.updateFocusedLineFromSelection();
 
-    expect(controller.text, removed);
-    expect(controller.sourceText, removed);
-    expect(controller.selection.extentOffset, removed.length);
+    expect(controller.sourceText, '$image\n\nAfter');
+    expect(controller.focusedLine, 1);
+    expect(
+      controller.selection.extentOffset,
+      controller.text.indexOf('\n\nAfter') + 1,
+    );
+    controller.dispose();
+  });
+
+  test('caret skips every virtual line reserved for an image preview', () {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(text: '$image\nAfter');
+    final imageEnd = controller.text.indexOf(image) + image.length;
+    final nextLine = controller.text.indexOf('\nAfter') + 1;
+
+    for (var offset = imageEnd + 1; offset < nextLine; offset++) {
+      controller.selection = TextSelection.collapsed(offset: offset);
+      expect(controller.selection.extentOffset, nextLine);
+    }
+
+    controller.value = controller.value.copyWith(
+      text:
+          '${controller.text.substring(0, nextLine)}a${controller.text.substring(nextLine)}',
+      selection: TextSelection.collapsed(offset: nextLine + 1),
+      composing: TextRange.empty,
+    );
+    expect(controller.sourceText, '$image\naAfter');
+    controller.dispose();
+  });
+
+  test('vertical navigation treats an image preview as one block', () {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(text: '$image\nAfter');
+    controller.revealImage('https://example.com/cone.png');
+
+    expect(controller.movePastImage(down: true), isTrue);
+    expect(controller.focusedLine, 1);
+    expect(controller.selection.extentOffset, controller.text.indexOf('After'));
+    expect(controller.movePastImage(down: false), isTrue);
+    expect(controller.focusedLine, 0);
+    controller.dispose();
+  });
+
+  testWidgets('an image previews while its next line is being edited', (
+    tester,
+  ) async {
+    const image = '![Cone](https://example.com/cone.png)';
+    const source = 'Before\n$image\nAfter';
+    final controller = MarkdownEditingController(text: source)..focusedLine = 0;
+    late BuildContext context;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (value) {
+            context = value;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+
+    final span = controller.buildTextSpan(
+      context: context,
+      style: const TextStyle(),
+      withComposing: false,
+    );
+    expect(span.toPlainText(), isNot(contains(image)));
+    controller.dispose();
+  });
+
+  testWidgets('source-mode editors keep image Markdown as an ordinary line', (
+    tester,
+  ) async {
+    const image = '![Cone](https://example.com/cone.png)';
+    final controller = MarkdownEditingController(
+      text: 'Before\n$image\nAfter',
+      renderImages: false,
+    );
+    late BuildContext context;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (value) {
+            context = value;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    final span = controller.buildTextSpan(
+      context: context,
+      style: const TextStyle(),
+      withComposing: false,
+    );
+    expect(span.toPlainText(), contains(image));
     controller.dispose();
   });
 

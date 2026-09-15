@@ -134,6 +134,75 @@ void main() {
       dir.deleteSync(recursive: true);
     },
   );
+  test(
+    'a delete keeps the original remote baseline after a queued edit',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('delete-baseline-');
+      final db = await LocalDatabase.open(overridePath: '${dir.path}/db');
+      db.applyRemoteWorkshopChanges([
+        const WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {'name': 'Original', 'quantity': 1},
+        ),
+      ]);
+      db.applyAndQueueWorkshopChanges([
+        const WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {'name': 'Local edit'},
+        ),
+      ]);
+      db.applyAndQueueWorkshopChanges([
+        const WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {},
+          deleted: true,
+        ),
+      ]);
+
+      final pending = db.loadPendingWorkshopChanges().single.change;
+      expect(pending.deleted, isTrue);
+      expect(pending.baseFields!['(deleted)'], {
+        'id': 'a',
+        'name': 'Original',
+        'quantity': 1,
+      });
+      db.close();
+      dir.deleteSync(recursive: true);
+    },
+  );
+  test('a queued delete clears a legacy conflict hold', () async {
+    final dir = Directory.systemTemp.createTempSync('delete-conflict-hold-');
+    final db = await LocalDatabase.open(overridePath: '${dir.path}/db');
+    final store = SyncConflictStore(db, 'workspace');
+    store.save([
+      {
+        'entityType': 'inventory',
+        'entityId': 'a',
+        'field': '(deleted)',
+        'local': null,
+        'remote': {'name': 'Original'},
+      },
+    ]);
+    final ready = store.readyForUpload([
+      const PendingWorkshopChange(
+        outboxId: 1,
+        localRevision: 1,
+        change: WorkshopEntityChange(
+          entityType: 'inventory',
+          entityId: 'a',
+          fields: {},
+          deleted: true,
+        ),
+      ),
+    ]);
+    expect(ready, hasLength(1));
+    expect(store.load(), isEmpty);
+    db.close();
+    dir.deleteSync(recursive: true);
+  });
   test('unrelated remote changes do not create false conflicts', () async {
     final dir = Directory.systemTemp.createTempSync('baseline-test-');
     final db = await LocalDatabase.open(overridePath: '${dir.path}/db');

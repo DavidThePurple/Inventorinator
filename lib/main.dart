@@ -14274,19 +14274,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         entityId: local.entityId,
       );
       if (local.deleted) {
-        if (remote != null &&
-            !remote.deleted &&
-            !_sameJson(local.baseFields?['(deleted)'], remote.fields)) {
-          conflicts.add(
-            WorkshopFieldConflict(
-              entityType: local.entityType,
-              entityId: local.entityId,
-              field: '(deleted)',
-              localValue: null,
-              remoteValue: remote.fields,
-            ),
-          );
-        }
+        // Deletes intentionally apply after the remote record.  They replace
+        // any queued local edit and never need manual conflict resolution.
         continue;
       }
       if (remote?.deleted == true) {
@@ -16228,29 +16217,34 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   Widget _floatingHeaderActionBar() => ValueListenableBuilder<bool>(
     valueListenable: _inventoryIsScrolling,
-    child: AnimatedContainer(
-      key: const Key('floating-header-actions'),
-      duration: Duration.zero,
-      decoration: _floatingActionBarDecoration(reduceEffects: false),
-      clipBehavior: Clip.antiAlias,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 920;
-          return Padding(
-            padding: _floatingHeaderContentPadding(constraints.maxWidth),
-            child: compact
-                ? _compactHeaderActionStrip(
-                    showOverflowHint: constraints.maxWidth < 600,
-                  )
-                : Row(
-                    children: [
-                      ..._centerHeaderActions(),
-                      const Spacer(),
-                      ..._databaseHeaderActions(),
-                    ],
-                  ),
-          );
-        },
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: AnimatedContainer(
+          key: const Key('floating-header-actions'),
+          duration: Duration.zero,
+          decoration: _floatingActionBarDecoration(reduceEffects: false),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 920;
+              return Padding(
+                padding: _floatingHeaderContentPadding(constraints.maxWidth),
+                child: compact
+                    ? _compactHeaderActionStrip(
+                        showOverflowHint: constraints.maxWidth < 600,
+                      )
+                    : Row(
+                        children: [
+                          ..._centerHeaderActions(),
+                          const Spacer(),
+                          ..._databaseHeaderActions(),
+                        ],
+                      ),
+              );
+            },
+          ),
+        ),
       ),
     ),
     builder: (context, scrolling, child) => ValueListenableBuilder<double>(
@@ -16269,17 +16263,24 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
               )
             : compactSearch
-            ? AnimatedContainer(
-                key: const Key('floating-header-compact-search'),
-                duration: Duration.zero,
-                decoration: _floatingActionBarDecoration(reduceEffects: false),
-                clipBehavior: Clip.antiAlias,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Padding(
-                    padding: _floatingHeaderContentPadding(
-                      constraints.maxWidth,
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                  child: AnimatedContainer(
+                    key: const Key('floating-header-compact-search'),
+                    duration: Duration.zero,
+                    decoration: _floatingActionBarDecoration(
+                      reduceEffects: false,
                     ),
-                    child: _scrollingHeaderContent(),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Padding(
+                        padding: _floatingHeaderContentPadding(
+                          constraints.maxWidth,
+                        ),
+                        child: _scrollingHeaderContent(),
+                      ),
+                    ),
                   ),
                 ),
               )
@@ -16391,7 +16392,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) =>
       BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: .42),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: Theme.of(context).colorScheme.primary.withValues(alpha: .55),
@@ -19751,6 +19752,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         sharedNotes: sharedNotes,
         reviewNotes: reviewNotes,
         subjects: _scratchPadSubjects(),
+        localDeviceName: deviceName,
+        scrollbarThickness: mainScrollbarWidth,
+        buttonSurfaceBuilder: ({
+          required states,
+          joined = false,
+          required child,
+        }) => _GlassButtonSurface(states: states, joined: joined, child: child),
         onChanged: (updated) {
           database.saveStringPreference(
             scratchPadNotesPreferenceKey,
@@ -19859,217 +19867,222 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _bottomActionBar() {
     return ValueListenableBuilder<bool>(
       valueListenable: _inventoryIsScrolling,
-      child: AnimatedContainer(
-        key: const Key('bottom-action-surface'),
-        duration: Duration.zero,
-        decoration: _floatingActionBarDecoration(reduceEffects: false),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _androidBottomSearchDock(),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                // Collapse before the longest labels can crowd or clip. The
-                // compact rail is intentionally used through medium desktop
-                // widths, not only at phone sizes.
-                final tightDesktop = Platform.isLinux || Platform.isWindows;
-                final bottomActionsEnabled = currentRole.canCreateInventory;
-                final disabledActionMessage = bottomActionsEnabled
-                    ? null
-                    : 'Your role ($_workspaceRoleLabel) cannot add inventory items.';
-                final iconOnly = constraints.maxWidth < 1180;
-                final taper = ((constraints.maxWidth - 760) / (1180 - 760))
-                    .clamp(0.0, 1.0);
-                final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
-                final addItem = _glassQuickAction(
-                  key: const Key('add-item'),
-                  onPressed: bottomActionsEnabled ? _addItem : null,
-                  icon: Icons.add_rounded,
-                  label: 'Add item',
-                  iconOnly: iconOnly,
-                  iconOnlyWidth: iconOnlyWidth,
-                  tight: tightDesktop,
-                  disabledMessage: disabledActionMessage,
-                );
-                final rightActions = <Widget>[
-                  _scanButton(
-                    iconOnly: iconOnly,
-                    iconOnlyWidth: iconOnlyWidth,
-                    tight: tightDesktop,
-                    enabled: bottomActionsEnabled,
-                    disabledMessage: disabledActionMessage,
-                  ),
-                  const SizedBox(width: 12),
-                  addItem,
-                  const SizedBox(width: 12),
-                  _rapidizerButton(
-                    iconOnly: iconOnly,
-                    iconOnlyWidth: iconOnlyWidth,
-                    tight: tightDesktop,
-                    enabled: bottomActionsEnabled,
-                    disabledMessage: disabledActionMessage,
-                  ),
-                  const SizedBox(width: 12),
-                  _filamentColorsButton(
-                    iconOnly: iconOnly,
-                    iconOnlyWidth: iconOnlyWidth,
-                    tight: tightDesktop,
-                    enabled: bottomActionsEnabled,
-                    disabledMessage: disabledActionMessage,
-                  ),
-                  const SizedBox(width: 12),
-                  _inventoryJsonButton(
-                    iconOnly: iconOnly,
-                    iconOnlyWidth: iconOnlyWidth,
-                    tight: tightDesktop,
-                    enabled: bottomActionsEnabled,
-                    disabledMessage: disabledActionMessage,
-                  ),
-                ];
-                if (iconOnly) {
-                  // The compact rail needs all eight actions on one line.
-                  // Outlined button edges keep the targets visually distinct,
-                  // so narrow layouts trade the inter-button gaps for touch
-                  // target width instead of overflowing.
-                  const compactGap = 0.0;
-                  final fittedIconWidth = math.min(
-                    iconOnlyWidth,
-                    // Reserve the 28 px outer inset used by the expanded bar.
-                    math.max(
-                      constraints.maxWidth >= 350 ? 40.0 : 32.0,
-                      (constraints.maxWidth - 28) / 8,
-                    ),
-                  );
-                  final compactAddItem = _glassQuickAction(
-                    key: const Key('add-item'),
-                    onPressed: bottomActionsEnabled ? _addItem : null,
-                    icon: Icons.add_rounded,
-                    label: 'Add item',
-                    iconOnly: true,
-                    iconOnlyWidth: fittedIconWidth,
-                    disabledMessage: disabledActionMessage,
-                  );
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 7,
-                    ),
-                    child: SizedBox(
-                      height: 44,
-                      child: Row(
-                        key: const Key('compact-bottom-action-group'),
-                        children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: AnimatedContainer(
+            key: const Key('bottom-action-surface'),
+            duration: Duration.zero,
+            decoration: _floatingActionBarDecoration(reduceEffects: false),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _androidBottomSearchDock(),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Collapse before the longest labels can crowd or clip. The
+                    // compact rail is intentionally used through medium desktop
+                    // widths, not only at phone sizes.
+                    final tightDesktop = Platform.isLinux || Platform.isWindows;
+                    final bottomActionsEnabled = currentRole.canCreateInventory;
+                    final disabledActionMessage = bottomActionsEnabled
+                        ? null
+                        : 'Your role ($_workspaceRoleLabel) cannot add inventory items.';
+                    final iconOnly = constraints.maxWidth < 1180;
+                    final taper = ((constraints.maxWidth - 760) / (1180 - 760))
+                        .clamp(0.0, 1.0);
+                    final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
+                    final addItem = _glassQuickAction(
+                      key: const Key('add-item'),
+                      onPressed: bottomActionsEnabled ? _addItem : null,
+                      icon: Icons.add_rounded,
+                      label: 'Add item',
+                      iconOnly: iconOnly,
+                      iconOnlyWidth: iconOnlyWidth,
+                      tight: tightDesktop,
+                      disabledMessage: disabledActionMessage,
+                    );
+                    final rightActions = <Widget>[
+                      _scanButton(
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
+                      const SizedBox(width: 12),
+                      addItem,
+                      const SizedBox(width: 12),
+                      _rapidizerButton(
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
+                      const SizedBox(width: 12),
+                      _filamentColorsButton(
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
+                      const SizedBox(width: 12),
+                      _inventoryJsonButton(
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
+                        enabled: bottomActionsEnabled,
+                        disabledMessage: disabledActionMessage,
+                      ),
+                    ];
+                    if (iconOnly) {
+                      // The compact rail needs all eight actions on one line.
+                      // Outlined button edges keep the targets visually distinct,
+                      // so narrow layouts trade the inter-button gaps for touch
+                      // target width instead of overflowing.
+                      const compactGap = 0.0;
+                      final fittedIconWidth = math.min(
+                        iconOnlyWidth,
+                        // Reserve the 28 px outer inset used by the expanded bar.
+                        math.max(
+                          constraints.maxWidth >= 350 ? 40.0 : 32.0,
+                          (constraints.maxWidth - 28) / 8,
+                        ),
+                      );
+                      final compactAddItem = _glassQuickAction(
+                        key: const Key('add-item'),
+                        onPressed: bottomActionsEnabled ? _addItem : null,
+                        icon: Icons.add_rounded,
+                        label: 'Add item',
+                        iconOnly: true,
+                        iconOnlyWidth: fittedIconWidth,
+                        disabledMessage: disabledActionMessage,
+                      );
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 7,
+                        ),
+                        child: SizedBox(
+                          height: 44,
+                          child: Row(
+                            key: const Key('compact-bottom-action-group'),
                             children: [
-                              _catalogButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _catalogButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  _stockroomButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  _scratchPadButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: compactGap),
-                              _stockroomButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
-                              ),
-                              const SizedBox(width: compactGap),
-                              _scratchPadButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
+                              const Spacer(),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _scanButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  compactAddItem,
+                                  const SizedBox(width: compactGap),
+                                  _rapidizerButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  _filamentColorsButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  _inventoryJsonButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
+                                    enabled: bottomActionsEnabled,
+                                    disabledMessage: disabledActionMessage,
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                          const Spacer(),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _scanButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
+                        ),
+                      );
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          _catalogButton(
+                            tight: tightDesktop,
+                            enabled: bottomActionsEnabled,
+                            disabledMessage: disabledActionMessage,
+                          ),
+                          const SizedBox(width: 12),
+                          _stockroomButton(
+                            tight: tightDesktop,
+                            enabled: bottomActionsEnabled,
+                            disabledMessage: disabledActionMessage,
+                          ),
+                          const SizedBox(width: 12),
+                          _scratchPadButton(tight: tightDesktop),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                reverse: false,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: rightActions,
+                                ),
                               ),
-                              const SizedBox(width: compactGap),
-                              compactAddItem,
-                              const SizedBox(width: compactGap),
-                              _rapidizerButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
-                              ),
-                              const SizedBox(width: compactGap),
-                              _filamentColorsButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
-                              ),
-                              const SizedBox(width: compactGap),
-                              _inventoryJsonButton(
-                                iconOnly: true,
-                                iconOnlyWidth: fittedIconWidth,
-                                enabled: bottomActionsEnabled,
-                                disabledMessage: disabledActionMessage,
-                              ),
-                            ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  );
-                }
-                return Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      _catalogButton(
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
-                      _stockroomButton(
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
-                      _scratchPadButton(tight: tightDesktop),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            reverse: false,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: rightActions,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
       builder: (context, scrolling, child) {
         final hideForScroll = scrolling;
         return SafeArea(
           key: const Key('bottom-quick-actions'),
-          minimum: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          minimum: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: IgnorePointer(
             ignoring: hideForScroll,
             child: AnimatedOpacity(

@@ -238,10 +238,16 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)),
-      );
-      await tester.pumpAndSettle();
+      for (var attempt = 0; attempt < 40; attempt++) {
+        if (db.inventoryPayload('PHOTO-ITEM', thumbnail: true)?['thumbnail'] !=
+            null) {
+          break;
+        }
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
 
       expect(
         db.inventoryPayload('PHOTO-ITEM', thumbnail: true)!['thumbnail'],

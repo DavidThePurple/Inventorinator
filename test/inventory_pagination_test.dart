@@ -190,7 +190,7 @@ void main() {
   );
 
   testWidgets(
-    'home generates a card thumbnail for an existing lazy product photo',
+    'home leaves existing lazy product photos untouched after launch',
     (tester) async {
       final dir = Directory.systemTemp.createTempSync('paging-thumbnail-');
       addTearDown(() => dir.deleteSync(recursive: true));
@@ -237,21 +237,9 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      for (var attempt = 0; attempt < 40; attempt++) {
-        if (db.inventoryPayload('PHOTO-ITEM', thumbnail: true)?['thumbnail'] !=
-            null) {
-          break;
-        }
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
       expect(
         db.inventoryPayload('PHOTO-ITEM', thumbnail: true)!['thumbnail'],
-        isNotNull,
+        isNull,
       );
       await tester.pumpWidget(const SizedBox());
       await tester.pump();

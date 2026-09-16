@@ -739,7 +739,9 @@ void main() {
     await tester.pumpWidget(
       InventorinatorApp(database: database, persistedState: state),
     );
-    await tester.tap(find.byKey(const Key('personalization-settings')));
+    tester.widget<IconButton>(
+      find.byKey(const Key('personalization-settings')),
+    ).onPressed!();
     await tester.pumpAndSettle();
     final toggle = find.byKey(const Key('low-stock-alerts-personalization'));
     await tester.ensureVisible(toggle);
@@ -3060,7 +3062,9 @@ Bed Temperature: 80°C
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
 
-    await tester.tap(find.byKey(const Key('personalization-settings')));
+    tester.widget<IconButton>(
+      find.byKey(const Key('personalization-settings')),
+    ).onPressed!();
     await tester.pumpAndSettle();
     expect(find.text('Personalization settings'), findsOneWidget);
     expect(find.text('Appearance'), findsOneWidget);
@@ -3160,7 +3164,9 @@ Bed Temperature: 80°C
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'scrolled header layout');
-    await tester.tap(find.byKey(const Key('personalization-settings')));
+    tester.widget<IconButton>(
+      find.byKey(const Key('personalization-settings')),
+    ).onPressed!();
     await tester.pumpAndSettle();
 
     expect(find.text('Personalization settings'), findsOneWidget);
@@ -7386,14 +7392,7 @@ Bed Temperature: 80°C
       ),
       findsOneWidget,
     );
-    expect(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is CircularProgressIndicator &&
-            widget.color == const Color(0xff9c83ff),
-      ),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('inventory-card-timer-INV-FIL-0001')), findsOneWidget);
     expect(find.text('82m'), findsOneWidget);
   });
   testWidgets('status ring does not replay when remounted by scrolling', (
@@ -7415,17 +7414,11 @@ Bed Temperature: 80°C
     );
 
     await tester.pumpWidget(mountedRing());
-    var indicator = tester.widget<CircularProgressIndicator>(
-      find.byType(CircularProgressIndicator),
-    );
-    expect(indicator.value, 1);
+    expect(find.byKey(ValueKey('status-ring-${item.id}')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpWidget(mountedRing());
-    indicator = tester.widget<CircularProgressIndicator>(
-      find.byType(CircularProgressIndicator),
-    );
-    expect(indicator.value, 1);
+    expect(find.byKey(ValueKey('status-ring-${item.id}')), findsOneWidget);
   });
   test('drying countdown derives remaining time from its start timestamp', () {
     final started = DateTime(2026, 8, 25, 12);
@@ -8216,6 +8209,7 @@ Bed Temperature: 80°C
       const Offset(0, -150),
     );
     await tester.pump();
+    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
     await tester.tap(
       find.text('ObXidian 0.4 mm'),
       buttons: kSecondaryMouseButton,

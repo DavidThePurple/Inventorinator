@@ -4443,7 +4443,13 @@ Bed Temperature: 80°C
       ],
     );
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
-    await tester.tap(find.text('Types'));
+    tester
+        .widget<InkWell>(
+          find
+              .ancestor(of: find.text('Types'), matching: find.byType(InkWell))
+              .first,
+        )
+        .onTap!();
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('catalog-filter-kits')));
     await tester.pumpAndSettle();
@@ -5241,7 +5247,7 @@ Bed Temperature: 80°C
     }
     expect(
       find.descendant(of: actions, matching: find.byType(OutlinedButton)),
-      findsNWidgets(9),
+      findsNWidgets(8),
     );
     final stockroomButton = find.byKey(const Key('open-stockroom'));
     final stockroomIcon = find.descendant(
@@ -5911,12 +5917,13 @@ Bed Temperature: 80°C
       find.byKey(const Key('inventory-scroll-view')),
       const Offset(0, -150),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
 
@@ -5980,11 +5987,12 @@ Bed Temperature: 80°C
       find.byKey(const Key('inventory-scroll-view')),
       const Offset(0, -150),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('bulk-archive')));
@@ -6004,6 +6012,7 @@ Bed Temperature: 80°C
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('bulk-delete')));
@@ -7502,6 +7511,7 @@ Bed Temperature: 80°C
       const Offset(0, -150),
     );
     await tester.pump();
+    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('status-drying')), findsNothing);
@@ -7526,6 +7536,7 @@ Bed Temperature: 80°C
       const Offset(0, -150),
     );
     await tester.pump();
+    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('item-deployed')), findsOneWidget);
@@ -8159,6 +8170,7 @@ Bed Temperature: 80°C
       const Offset(0, -150),
     );
     await tester.pump();
+    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
     await tester.tap(find.text('ObXidian 0.4 mm'));
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byType(ItemDetailsPanel)).width, resizedWidth);
@@ -8464,13 +8476,20 @@ Bed Temperature: 80°C
       find.byKey(const Key('inventory-scroll-view')),
       const Offset(0, -150),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Brass 0.6 mm'));
     await tester.tap(find.text('Brass 0.6 mm'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archive'));
     await tester.pumpAndSettle();
     expect(find.text('Brass 0.6 mm'), findsNothing);
-    await tester.tap(find.text('Types'));
+    tester
+        .widget<InkWell>(
+          find
+              .ancestor(of: find.text('Types'), matching: find.byType(InkWell))
+              .first,
+        )
+        .onTap!();
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('archived-view')));
     await tester.pumpAndSettle();

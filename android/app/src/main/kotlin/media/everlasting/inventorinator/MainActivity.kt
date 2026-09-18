@@ -4,6 +4,8 @@ import android.media.MediaPlayer
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterShellArgs
+import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 
@@ -59,6 +61,24 @@ class MainActivity : FlutterActivity() {
             ) model else "$manufacturer $model"
         }
         return "Android emulator"
+    }
+
+    // Applies the renderer chosen in Personalization, which the app saves as a
+    // one-word file in path_provider's support directory (filesDir). Without
+    // a saved choice Android keeps Flutter's default, Impeller.
+    @Suppress("DEPRECATION")
+    override fun getFlutterShellArgs(): FlutterShellArgs {
+        val args = super.getFlutterShellArgs()
+        val choice = try {
+            File(filesDir, "renderer").readText().trim()
+        } catch (_: Exception) {
+            ""
+        }
+        when (choice) {
+            "skia" -> args.add("--enable-impeller=false")
+            "impeller" -> args.add("--enable-impeller=true")
+        }
+        return args
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

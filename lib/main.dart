@@ -29,6 +29,7 @@ import 'filament_colors.dart';
 import 'kit_package.dart';
 import 'label_ocr.dart';
 import 'qr_scanner.dart';
+import 'renderer_preference.dart';
 import 'cloud_sync_dialog.dart';
 import 'supabase_sync.dart';
 import 'sync_onboarding_dialog.dart';
@@ -28271,6 +28272,7 @@ class _PersonalizationSettingsDialogState
               ),
               subtitle: const Text('Tune animated card and alert layers.'),
               children: [
+                const RendererPreferenceTile(),
                 SwitchListTile(
                   key: const Key('card-effects-toggle'),
                   contentPadding: EdgeInsets.zero,

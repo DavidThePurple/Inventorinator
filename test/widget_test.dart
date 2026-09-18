@@ -3753,6 +3753,73 @@ Bed Temperature: 80°C
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('quantity buttons keep tooltips, keyboard and disabled state', (
+    tester,
+  ) async {
+    final deltas = <double>[];
+    final item = sampleInventory.first.copyWith(
+      id: 'INV-STEP-A11Y',
+      quantity: 0,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 260,
+            height: 286,
+            child: InventoryCard(
+              item: item,
+              onQuantityChanged: deltas.add,
+              onOpen: () {},
+              onAction: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    final increase = find.byKey(const Key('increase-quantity-INV-STEP-A11Y'));
+    final decrease = find.byKey(const Key('decrease-quantity-INV-STEP-A11Y'));
+
+    // At zero the decrease button is disabled.
+    await tester.tap(decrease);
+    await tester.pump();
+    expect(deltas, isEmpty);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(increase));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Increase quantity'), findsOneWidget);
+
+    await tester.tap(increase);
+    await tester.pump();
+    expect(deltas, [1]);
+
+    final increaseRegion = find
+        .descendant(of: increase, matching: find.byType(MouseRegion))
+        .first;
+    Focus.of(tester.element(increaseRegion)).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(deltas, [1, 1]);
+    expect(
+      tester.getSemantics(increase),
+      matchesSemantics(
+        label: 'Increase quantity',
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: true,
+        isFocusable: true,
+        isFocused: true,
+        hasTapAction: true,
+        hasFocusAction: true,
+      ),
+    );
+  });
+
   testWidgets('rapid quantity taps commit once after the debounce window', (
     tester,
   ) async {
@@ -4337,6 +4404,254 @@ Bed Temperature: 80°C
             .dy,
       ),
     );
+  });
+
+  test('kits and machines keep an added date through storage and sync', () {
+    final added = DateTime.utc(2026, 5, 4, 3, 2, 1);
+    final legacyStamp = DateTime.utc(2025, 1, 2).microsecondsSinceEpoch;
+    final restored = decodeWorkshopState(
+      encodeWorkshopState(
+        inventory: const [],
+        vendors: const [],
+        brands: const [],
+        products: const [],
+        machineTypes: const [MachineTypeRecord(id: 'TYPE-CNC', name: 'CNC')],
+        machines: [
+          MachineRecord(
+            id: 'MCH-DATED',
+            name: 'Router',
+            model: '',
+            address: '',
+            typeId: 'TYPE-CNC',
+            added: added,
+          ),
+        ],
+        kits: [
+          KitRecord(id: 'KIT-$legacyStamp', name: 'Legacy kit', bom: const []),
+          const KitRecord(id: 'KIT-PACKAGE-VORON', name: 'Voron', bom: []),
+        ],
+      ),
+    )!;
+
+    expect(restored.machines.single.added!.isAtSameMomentAs(added), isTrue);
+    // Records saved before the field existed recover the time in their ID.
+    expect(
+      restored.kits.first.added,
+      DateTime.fromMicrosecondsSinceEpoch(legacyStamp),
+    );
+    expect(restored.kits.last.added, isNull);
+  });
+
+  testWidgets('scrolling the grid does not rebuild visible cards', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final state = encodeWorkshopState(
+      inventory: [
+        for (var index = 0; index < 60; index++)
+          sampleInventory.first.copyWith(
+            id: 'INV-SCROLL-$index',
+            name: 'Scroll item $index',
+          ),
+      ],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: InventoryHome(persistedState: state)),
+    );
+    await tester.pumpAndSettle();
+    // Sliver constraints change on every scroll pixel; a layout builder
+    // around the grid rebuilt every visible card each frame.
+    expect(find.byType(SliverLayoutBuilder), findsNothing);
+    final firstCard = find.byType(InventoryCard).first;
+    final before = tester.widget<InventoryCard>(firstCard);
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -40),
+    );
+    await tester.pump();
+    expect(
+      identical(tester.widget<InventoryCard>(firstCard), before),
+      isTrue,
+    );
+  });
+
+  testWidgets('builds and machines with photos use photo cards', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final photo = Uint8List.fromList(
+      img.encodePng(img.Image(width: 2, height: 2)),
+    );
+    final state = encodeWorkshopState(
+      inventory: const [],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      machineTypes: const [MachineTypeRecord(id: 'TYPE-CNC', name: 'CNC')],
+      machines: [
+        MachineRecord(
+          id: 'MCH-PHOTO',
+          name: 'Router',
+          model: '',
+          address: '',
+          typeId: 'TYPE-CNC',
+          imageBytes: photo,
+          added: DateTime(2027, 2),
+        ),
+      ],
+      kits: [
+        KitRecord(
+          id: 'KIT-PHOTO',
+          name: 'Resin UPS',
+          bom: const [],
+          imageBytes: photo,
+          added: DateTime(2027),
+        ),
+      ],
+      builds: [
+        BuildRecord(
+          id: 'BUILD-PHOTO',
+          kitId: 'KIT-PHOTO',
+          name: 'Resin UPS build',
+          createdAt: DateTime(2027, 3),
+          createdBy: 'Linux workstation',
+          lines: const [],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: InventoryHome(persistedState: state)),
+    );
+    await tester.tap(find.byKey(const Key('sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
+    await tester.pumpAndSettle();
+
+    for (final id in ['KIT-PHOTO', 'BUILD-PHOTO', 'MCH-PHOTO']) {
+      expect(find.byKey(Key('photo-catalog-card-$id')), findsOneWidget);
+    }
+  });
+
+  testWidgets('added date sort interleaves kits, builds and machines', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    InventoryItem item(String id, DateTime added) => InventoryItem(
+      id: id,
+      name: id,
+      type: InventoryType.other,
+      compatibility: const [],
+      added: added,
+      cost: 0,
+      color: Colors.grey,
+      quantity: 1,
+    );
+    final state = encodeWorkshopState(
+      inventory: [
+        item('INV-OLD', DateTime(2026, 1)),
+        item('INV-NEW', DateTime(2026, 3)),
+      ],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      machineTypes: const [
+        MachineTypeRecord(id: 'TYPE-FDM', name: 'Printer FDM'),
+      ],
+      machines: const [
+        MachineRecord(
+          id: 'MCH-UNDATED',
+          name: 'Imported printer',
+          model: '',
+          address: '',
+          typeId: 'TYPE-FDM',
+        ),
+      ],
+      kits: [
+        KitRecord(
+          id: 'KIT-MID',
+          name: 'Mid kit',
+          bom: const [],
+          added: DateTime(2026, 2),
+        ),
+      ],
+      builds: [
+        BuildRecord(
+          id: 'BUILD-NEWEST',
+          kitId: 'KIT-MID',
+          name: 'Newest build',
+          createdAt: DateTime(2026, 4),
+          createdBy: 'Linux workstation',
+          lines: const [],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: InventoryHome(persistedState: state)),
+    );
+    await tester.tap(find.byIcon(Icons.view_agenda_outlined));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
+    await tester.pumpAndSettle();
+
+    List<String> order() {
+      final found = <(double, String)>[];
+      for (final (prefix, id) in const [
+        ('inventory-row-', 'INV-OLD'),
+        ('inventory-row-', 'INV-NEW'),
+        ('catalog-record-', 'KIT-MID'),
+        ('catalog-record-', 'BUILD-NEWEST'),
+        ('catalog-record-', 'MCH-UNDATED'),
+      ]) {
+        final finder = find.byKey(Key('$prefix$id'));
+        expect(finder, findsOneWidget, reason: id);
+        found.add((tester.getTopLeft(finder).dy, id));
+      }
+      found.sort((a, b) => a.$1.compareTo(b.$1));
+      return [for (final entry in found) entry.$2];
+    }
+
+    expect(order(), [
+      'BUILD-NEWEST',
+      'INV-NEW',
+      'KIT-MID',
+      'INV-OLD',
+      'MCH-UNDATED',
+    ]);
+
+    await tester.tap(find.byKey(const Key('sort-direction-toggle')));
+    await tester.pumpAndSettle();
+    // Undated records stay last in either direction.
+    expect(order(), [
+      'INV-OLD',
+      'KIT-MID',
+      'INV-NEW',
+      'BUILD-NEWEST',
+      'MCH-UNDATED',
+    ]);
+
+    await tester.tap(find.byKey(const Key('sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-sort-type')));
+    await tester.pumpAndSettle();
+    // Builds, Kits, Other, Printers.
+    expect(order(), [
+      'BUILD-NEWEST',
+      'KIT-MID',
+      'INV-NEW',
+      'INV-OLD',
+      'MCH-UNDATED',
+    ]);
   });
 
   testWidgets(
@@ -7126,11 +7441,12 @@ Bed Temperature: 80°C
   });
 
   testWidgets('deleting a kit warns about unfinished builds', (tester) async {
-    const kit = KitRecord(
+    final kit = KitRecord(
       id: 'KIT-WITH-BUILDS',
       name: 'Printer kit',
-      bom: [],
-      sections: ['Main component'],
+      bom: const [],
+      sections: const ['Main component'],
+      added: DateTime(2027),
     );
     final activeBuild = BuildRecord(
       id: 'BUILD-ACTIVE',
@@ -7154,11 +7470,15 @@ Bed Temperature: 80°C
       vendors: const [],
       brands: const [],
       products: const [],
-      kits: const [kit],
+      kits: [kit],
       builds: [activeBuild, completedBuild],
     );
 
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(
       find.byKey(const Key('catalog-record-KIT-WITH-BUILDS')),
     );
@@ -8705,10 +9025,11 @@ Bed Temperature: 80°C
       color: Colors.grey,
       quantity: 4,
     );
-    const kit = KitRecord(
+    final kit = KitRecord(
       id: 'KIT-MATCH-MISSING',
       name: 'Imported frame kit',
-      bom: [
+      added: DateTime(2027),
+      bom: const [
         KitBomEntry(
           id: 'BOM-M4',
           productId: 'IMPORTED-M4-BOLT',
@@ -8723,10 +9044,14 @@ Bed Temperature: 80°C
       vendors: const [],
       brands: const [],
       products: const [],
-      kits: const [kit],
+      kits: [kit],
     );
 
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.tap(find.byKey(const Key('sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('catalog-record-KIT-MATCH-MISSING')));
     await tester.pumpAndSettle();
     expect(find.textContaining('Missing 3'), findsOneWidget);

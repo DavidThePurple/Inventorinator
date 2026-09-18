@@ -539,6 +539,31 @@ class LocalDatabase {
               .first['n']
           as int;
 
+  /// The sort fields of every inventory record matching [where], used to
+  /// place kits, builds and machines within the paged inventory order.
+  List<({String type, String name, String customTypeName, String added})>
+  inventorySortFields({
+    String where = '1',
+    List<Object?> parameters = const [],
+  }) => _database
+      .select(
+        "SELECT json_extract(payload_json, '\$.type') AS type, "
+        "json_extract(payload_json, '\$.name') AS name, "
+        "coalesce(json_extract(payload_json, '\$.customTypeName'), '') AS custom, "
+        "json_extract(payload_json, '\$.added') AS added "
+        "FROM inventory_metadata WHERE entity_type = 'inventory' AND ($where)",
+        parameters,
+      )
+      .map(
+        (row) => (
+          type: row['type'] as String,
+          name: row['name'] as String,
+          customTypeName: row['custom'] as String,
+          added: row['added'] as String,
+        ),
+      )
+      .toList();
+
   List<String> inventoryIds() => _database
       .select(
         "SELECT entity_id FROM inventory_metadata WHERE entity_type = 'inventory' ORDER BY rowid",

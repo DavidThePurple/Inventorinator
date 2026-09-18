@@ -189,6 +189,74 @@ void main() {
     },
   );
 
+  testWidgets('quantity buttons keep a photo card showing its photo', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final dir = Directory.systemTemp.createTempSync('paging-quantity-photo-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final db = (await tester.runAsync(
+      () => LocalDatabase.open(overridePath: '${dir.path}/test.sqlite3'),
+    ))!;
+    db.saveState(
+      jsonEncode({
+        'schemaVersion': 8,
+        'inventory': [
+          {
+            'id': 'PHOTO-QTY',
+            'name': 'Photo widget',
+            'type': 'other',
+            'compatibility': <String>[],
+            'added': '2026-01-01T00:00:00.000',
+            'cost': 0,
+            'quantity': 2,
+            'color': 0xff888888,
+            'archived': false,
+            'thumbnail': base64Encode(
+              img.encodePng(img.Image(width: 2, height: 2)),
+            ),
+          },
+        ],
+      }),
+    );
+    db.saveSyncConfig(jsonEncode({'syncMode': 'local'}));
+    db.saveBoolPreference('photo_cards_enabled', true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: InventoryHome(
+          database: db,
+          persistedState: db.loadState(
+            includeFullImages: false,
+            includeInventory: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final photo = find.byKey(const Key('photo-card-background-PHOTO-QTY'));
+    expect(photo, findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('increase-quantity-PHOTO-QTY')));
+    await tester.pump();
+    expect(find.text('×3'), findsOneWidget);
+    expect(photo, findsOneWidget);
+
+    // The debounced commit republishes the item a second later.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(photo, findsOneWidget);
+    expect(
+      db.inventoryPayload('PHOTO-QTY', thumbnail: true)!['thumbnail'],
+      isNotNull,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    db.close();
+  });
+
   testWidgets(
     'home leaves existing lazy product photos untouched after launch',
     (tester) async {

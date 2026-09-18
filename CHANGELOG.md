@@ -6,11 +6,25 @@ All notable changes to Inventorinator will be recorded here.
 
 ### Fixed
 
+- Scrolling a large inventory window no longer rebuilds every visible card on each frame; a maximized 2560×1440 window builds frames about 20× faster. Card −/+ quantity buttons are lighter to build and keep their tooltip, hover, keyboard and disabled behavior.
+
+- Changing an item's quantity no longer blanks its photo card.
+
+- Kits, builds, printers and tools follow the main inventory sort instead of always leading it. Kits and machines record an Added date; older records recover it from their ID where possible and otherwise sort last.
+
+- Builds and machines with photos use photo cards.
+
+- Desktop QR and barcode scanning works with webcams such as the Logitech C270: MJPEG frames without Huffman tables decode, Find mode reads QR codes only, Ingest ignores phantom GS1 DataBar reads, and a rejected code no longer stops scanning.
+
 - Inventory paging now filters, sorts, counts, and selects pages in SQLite. Item and thumbnail caches are limited to the active page; offline inventory and images remain on disk.
 
 - Supplier imports use descriptive item names and existing category matches, ask for unmatched types, and preserve supplier details when changing type. Supplier search actions are grouped above the form with a responsive header.
 
 ### Added
+
+- Personalization > Visual effects > Renderer chooses Skia or Impeller for the next launch. Linux defaults to Skia, which scrolls about four times faster there; Windows and Android keep Impeller.
+
+- On Linux and Windows, tapping a text field on a touchscreen shows the on-screen keyboard.
 
 - BIQU/BIGTREETECH, E3D, Polymaker, Printed Solid, and Slice Engineering search/import through the shared storefront client, with official logos, variant selection, supplier-specific metadata, and cached photos.
 

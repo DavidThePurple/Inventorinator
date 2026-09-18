@@ -1728,6 +1728,22 @@ extension InventoryTypeContext on InventoryType {
   bool get supportsFilamentLifecycle => this == InventoryType.filament;
 }
 
+String inventoryTypeLabel(InventoryType type, String customTypeName) =>
+    type == InventoryType.custom && customTypeName.isNotEmpty
+    ? customTypeName
+    : switch (type) {
+        InventoryType.other => 'Other',
+        InventoryType.fastener => 'Fastener',
+        InventoryType.filament => 'Filament',
+        InventoryType.printedPart => 'Printed part',
+        InventoryType.resin => 'Resin',
+        InventoryType.nozzle => 'Nozzle',
+        InventoryType.heatBreak => 'Heat break',
+        InventoryType.heatBlock => 'Heat block',
+        InventoryType.sock => 'Silicone sock',
+        InventoryType.custom => 'Custom',
+      };
+
 enum InventorySort {
   type,
   quantity,
@@ -2358,6 +2374,7 @@ class MachineRecord {
     this.kitIds = const {},
     this.sourceUrls = const [],
     this.imageBytes,
+    this.added,
   });
   final String id;
   final String name;
@@ -2367,6 +2384,10 @@ class MachineRecord {
   final Set<String> kitIds;
   final List<String> sourceUrls;
   final Uint8List? imageBytes;
+
+  /// When this machine was added; null only for records that predate the
+  /// field and carry no timestamp in their ID.
+  final DateTime? added;
 }
 
 class CatalogProduct {
@@ -2419,6 +2440,7 @@ class KitRecord {
     this.sections = const [],
     this.sourceUrls = const [],
     this.imageBytes,
+    this.added,
   });
   final String id;
   final String name;
@@ -2426,6 +2448,10 @@ class KitRecord {
   final List<String> sections;
   final List<String> sourceUrls;
   final Uint8List? imageBytes;
+
+  /// When this kit was added; null only for records that predate the field
+  /// and carry no timestamp in their ID.
+  final DateTime? added;
 }
 
 class BuildLine {
@@ -3624,21 +3650,7 @@ class InventoryItem {
     masterSpoolMaterialName:
         masterSpoolMaterialName ?? this.masterSpoolMaterialName,
   );
-  String get typeLabel =>
-      type == InventoryType.custom && customTypeName.isNotEmpty
-      ? customTypeName
-      : switch (type) {
-          InventoryType.other => 'Other',
-          InventoryType.fastener => 'Fastener',
-          InventoryType.filament => 'Filament',
-          InventoryType.printedPart => 'Printed part',
-          InventoryType.resin => 'Resin',
-          InventoryType.nozzle => 'Nozzle',
-          InventoryType.heatBreak => 'Heat break',
-          InventoryType.heatBlock => 'Heat block',
-          InventoryType.sock => 'Silicone sock',
-          InventoryType.custom => 'Custom',
-        };
+  String get typeLabel => inventoryTypeLabel(type, customTypeName);
   IconData get icon => switch (type) {
     InventoryType.other => Icons.inventory_2_outlined,
     InventoryType.fastener => Icons.hardware_rounded,
@@ -4990,6 +5002,8 @@ String encodeWorkshopState({
           'kitIds': machine.kitIds.toList(),
           'sourceUrls': machine.sourceUrls,
           'image': _bytesToJson(machine.imageBytes),
+          if (machine.added != null)
+            'added': machine.added!.toUtc().toIso8601String(),
         },
       )
       .toList(),
@@ -5001,6 +5015,7 @@ String encodeWorkshopState({
           'sections': kit.sections,
           'sourceUrls': kit.sourceUrls,
           'image': _bytesToJson(kit.imageBytes),
+          if (kit.added != null) 'added': kit.added!.toUtc().toIso8601String(),
           'bom': kit.bom
               .map(
                 (entry) => {
@@ -5519,6 +5534,7 @@ WorkshopState? decodeWorkshopState(String? source) {
             sourceUrls: (machine['sourceUrls'] as List<dynamic>? ?? const [])
                 .cast<String>(),
             imageBytes: _bytesFromJson(machine['image']),
+            added: _catalogAddedFromJson(machine['added'], machine['id']),
           ),
         )
         .toList();
@@ -5533,6 +5549,7 @@ WorkshopState? decodeWorkshopState(String? source) {
             sourceUrls: (kit['sourceUrls'] as List<dynamic>? ?? const [])
                 .cast<String>(),
             imageBytes: _bytesFromJson(kit['image']),
+            added: _catalogAddedFromJson(kit['added'], kit['id']),
             bom: [
               for (final (index, entry)
                   in (kit['bom'] as List<dynamic>? ?? const [])
@@ -7224,7 +7241,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       inventory = DiskInventoryList<InventoryItem>(
         ids: database.inventoryIds(),
         idOf: (item) => item.id,
-        read: (id) => _decodeInventoryPayload(database.inventoryPayload(id)!),
+        read: (id) => _withShownThumbnail(
+          _decodeInventoryPayload(database.inventoryPayload(id)!),
+        ),
       );
       database.configureInventoryFunctions(
         searchText: (payload) => _searchableInventoryText(
@@ -8192,6 +8211,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       bom: segmented,
       imageBytes: kit.imageBytes,
       sourceUrls: kit.sourceUrls,
+      added: kit.added,
       sections: sectionOrder
           .where((section) => segmented.any((line) => line.section == section))
           .toList(),
@@ -8445,6 +8465,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       query,
       currentRole,
       currentUserId,
+      sort,
+      sortAscending,
     );
     if (_visibleCatalogRecordsCacheKey == cacheKey) {
       return _visibleCatalogRecordsCache!;
@@ -8466,9 +8488,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           })
           .cast<Object>()
           .toList();
-      result.sort(
-        (a, b) => (a as KitRecord).name.compareTo((b as KitRecord).name),
-      );
+      result.sort(_compareCatalogRecords);
       records = result;
     } else if (selected == CatalogViewFilter.builds) {
       final result = builds
@@ -8487,11 +8507,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           )
           .cast<Object>()
           .toList();
-      result.sort(
-        (a, b) => (b as BuildRecord).createdAt.compareTo(
-          (a as BuildRecord).createdAt,
-        ),
-      );
+      result.sort(_compareCatalogRecords);
       records = result;
     } else {
       final result = machines
@@ -8517,10 +8533,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           })
           .cast<Object>()
           .toList();
-      result.sort(
-        (a, b) =>
-            (a as MachineRecord).name.compareTo((b as MachineRecord).name),
-      );
+      result.sort(_compareCatalogRecords);
       records = result;
     }
     _visibleCatalogRecordsCacheKey = cacheKey;
@@ -8528,7 +8541,14 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   List<Object> get visibleEverythingCatalogRecords {
-    final cacheKey = (_searchDataRevision, query, currentRole, currentUserId);
+    final cacheKey = (
+      _searchDataRevision,
+      query,
+      currentRole,
+      currentUserId,
+      sort,
+      sortAscending,
+    );
     if (_visibleEverythingCatalogRecordsCacheKey == cacheKey) {
       return _visibleEverythingCatalogRecordsCache!;
     }
@@ -8575,8 +8595,172 @@ class _InventoryHomeState extends State<InventoryHome> {
                 .contains(needle);
       }),
     );
+    result.sort(_compareCatalogRecords);
     _visibleEverythingCatalogRecordsCacheKey = cacheKey;
     return _visibleEverythingCatalogRecordsCache = result;
+  }
+
+  DateTime? _catalogRecordAdded(Object record) => switch (record) {
+    KitRecord kit => kit.added,
+    MachineRecord machine => machine.added,
+    BuildRecord build => build.createdAt,
+    _ => null,
+  };
+
+  String _catalogRecordTypeLabel(Object record) => switch (record) {
+    KitRecord _ => _catalogViewDisplayLabel(CatalogViewFilter.kits),
+    BuildRecord _ => _catalogViewDisplayLabel(CatalogViewFilter.builds),
+    MachineRecord machine => _catalogViewDisplayLabel(
+      _isPrinter(machine)
+          ? CatalogViewFilter.printers
+          : CatalogViewFilter.tools,
+    ),
+    _ => '',
+  };
+
+  String _catalogRecordName(Object record) => switch (record) {
+    KitRecord kit => kit.name,
+    MachineRecord machine => machine.name,
+    BuildRecord build => build.name,
+    _ => '',
+  };
+
+  /// Orders kits, builds and machines by the active inventory sort.
+  ///
+  /// Only Added date and Type apply to these records. Under other sorts they
+  /// keep a stable name order after the items, and undated records always
+  /// follow dated ones.
+  int _compareCatalogRecords(Object left, Object right) {
+    final direction = sortAscending ? 1 : -1;
+    final primary = switch (sort) {
+      InventorySort.addedDate => switch ((
+        _catalogRecordAdded(left),
+        _catalogRecordAdded(right),
+      )) {
+        (null, null) => 0,
+        (null, _) => 1,
+        (_, null) => -1,
+        (final a?, final b?) => direction * a.compareTo(b),
+      },
+      InventorySort.type =>
+        direction *
+            _catalogRecordTypeLabel(left)
+                .compareTo(_catalogRecordTypeLabel(right)),
+      _ => 0,
+    };
+    if (primary != 0) return primary;
+    return _catalogRecordName(left).compareTo(_catalogRecordName(right));
+  }
+
+  /// Whether an item with these sort fields is listed before [record].
+  bool _itemPrecedesCatalogRecord(
+    DateTime itemAdded,
+    String itemTypeLabel,
+    Object record,
+  ) => switch (sort) {
+    InventorySort.addedDate => switch (_catalogRecordAdded(record)) {
+      null => true,
+      final added =>
+        sortAscending ? itemAdded.isBefore(added) : itemAdded.isAfter(added),
+    },
+    InventorySort.type => switch (itemTypeLabel.compareTo(
+      _catalogRecordTypeLabel(record),
+    )) {
+      final order => sortAscending ? order < 0 : order > 0,
+    },
+    _ => true,
+  };
+
+  Object? _catalogRanksCacheKey;
+  List<int>? _catalogRanksCache;
+
+  /// Counts the listed items that precede each sorted catalog record.
+  List<int> _catalogRecordRanks(
+    List<Object> catalog,
+    List<InventoryItem> memoryItems,
+  ) {
+    if (catalog.isEmpty) return const [];
+    final filter = _diskInventory != null ? _inventorySqlFilter() : null;
+    final cacheKey = (
+      _searchDataRevision,
+      identical(catalog, _visibleEverythingCatalogRecordsCache)
+          ? _visibleEverythingCatalogRecordsCacheKey
+          : Object(),
+      filter?.$1,
+      jsonEncode(filter?.$2),
+      identityHashCode(memoryItems),
+      sort,
+      sortAscending,
+    );
+    if (_catalogRanksCacheKey == cacheKey) return _catalogRanksCache!;
+    final fields = filter == null
+        ? [for (final item in memoryItems) (item.added, item.typeLabel)]
+        : [
+            for (final row in widget.database!.inventorySortFields(
+              where: filter.$1,
+              parameters: filter.$2,
+            ))
+              (
+                DateTime.parse(row.added),
+                inventoryTypeLabel(
+                  _migratedInventoryType(row.type, row.name),
+                  row.customTypeName,
+                ),
+              ),
+          ];
+    final ranks = [
+      for (final record in catalog)
+        fields
+            .where(
+              (field) => _itemPrecedesCatalogRecord(field.$1, field.$2, record),
+            )
+            .length,
+    ];
+    _catalogRanksCacheKey = cacheKey;
+    return _catalogRanksCache = ranks;
+  }
+
+  /// One page of the main inventory with kits, builds and machines placed by
+  /// the active sort among the items.
+  List<Object> _mergedInventoryPage({
+    required List<Object> catalog,
+    required List<InventoryItem> memoryItems,
+    required int itemCount,
+    required int start,
+    required int pageSize,
+  }) {
+    final ranks = _catalogRecordRanks(catalog, memoryItems);
+    // Catalog record i sits at merged position ranks[i] + i.
+    var first = 0;
+    while (first < catalog.length && ranks[first] + first < start) {
+      first++;
+    }
+    var end = first;
+    while (end < catalog.length && ranks[end] + end < start + pageSize) {
+      end++;
+    }
+    final itemStart = start - first;
+    final itemTake = math.max(
+      0,
+      math.min(pageSize - (end - first), itemCount - itemStart),
+    );
+    final items = _diskInventory != null
+        ? _readInventoryPage(itemStart, itemTake)
+        : memoryItems.skip(itemStart).take(itemTake).toList();
+    final page = <Object>[];
+    var itemIndex = 0;
+    var catalogIndex = first;
+    for (var position = start; page.length < pageSize; position++) {
+      if (catalogIndex < end &&
+          ranks[catalogIndex] + catalogIndex == position) {
+        page.add(catalog[catalogIndex++]);
+      } else if (itemIndex < items.length) {
+        page.add(items[itemIndex++]);
+      } else {
+        break;
+      }
+    }
+    return page;
   }
 
   String _spoolSizeLabel(InventoryItem item) =>
@@ -9335,32 +9519,34 @@ class _InventoryHomeState extends State<InventoryHome> {
         itemColorFilter == null &&
         filamentMaterialFilter == null &&
         filamentBrandFilter == null;
-    final allRecords = showingCatalog
-        ? allCatalogRecords
-        : showingEverything
-        ? <Object>[...visibleEverythingCatalogRecords, ...allItems]
-        : allItems.cast<Object>();
+    final everythingCatalog = showingEverything
+        ? visibleEverythingCatalogRecords
+        : const <Object>[];
     final sqlFilter = _inventorySqlFilter();
-    final diskCount = !showingCatalog && _diskInventory != null
+    final itemCount = showingCatalog
+        ? 0
+        : _diskInventory != null
         ? widget.database!.inventoryCount(
             where: sqlFilter.$1,
             parameters: sqlFilter.$2,
           )
-        : 0;
-    final resultCount = allRecords.length + diskCount;
+        : allItems.length;
+    final resultCount = showingCatalog
+        ? allCatalogRecords.length
+        : everythingCatalog.length + itemCount;
     final pageSize = _pageSizes[pageSizeIndex];
     final pageCount = resultCount == 0 ? 1 : (resultCount / pageSize).ceil();
     final page = currentPage.clamp(0, pageCount - 1);
     final start = page * pageSize;
-    final records = allRecords.skip(start).take(pageSize).toList();
-    if (!showingCatalog && _diskInventory != null) {
-      records.addAll(
-        _readInventoryPage(
-          (start - allRecords.length).clamp(0, resultCount),
-          pageSize - records.length,
-        ),
-      );
-    }
+    final records = showingCatalog
+        ? allCatalogRecords.skip(start).take(pageSize).toList()
+        : _mergedInventoryPage(
+            catalog: everythingCatalog,
+            memoryItems: allItems,
+            itemCount: itemCount,
+            start: start,
+            pageSize: pageSize,
+          );
     return _CustomIconAnimationScope(
       mode: customIconAnimationMode,
       child: TickerMode(
@@ -9453,10 +9639,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                 context,
                                                 liveCardSizePercent,
                                                 _,
-                                              ) => SliverLayoutBuilder(
-                                                builder: (context, constraints) {
-                                                  const spacing = 14.0;
-                                                  return SliverGrid.builder(
+                                              ) =>
+                                                  // No SliverLayoutBuilder here:
+                                                  // sliver constraints change on
+                                                  // every scroll pixel, which
+                                                  // rebuilt every visible card
+                                                  // each frame.
+                                                  SliverGrid.builder(
                                                     itemCount: records.length,
                                                     addAutomaticKeepAlives:
                                                         false,
@@ -9468,15 +9657,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                               274.0 *
                                                               (liveCardSizePercent /
                                                                   100),
-                                                          spacing: spacing,
+                                                          spacing: 14,
                                                         ),
                                                     itemBuilder: (_, index) =>
                                                         _recordWidget(
                                                           records[index],
                                                         ),
-                                                  );
-                                                },
-                                              ),
+                                                  ),
                                         )
                                       : SliverList.separated(
                                           itemCount: records.length,
@@ -11102,6 +11289,16 @@ class _InventoryHomeState extends State<InventoryHome> {
         .firstOrNull;
   }
 
+  /// Disk reads skip thumbnails to stay cheap, so an item read, changed and
+  /// republished (a quantity step, a status change) would lose the photo its
+  /// card is showing. Carry the shown thumbnail over; the stored one is
+  /// untouched either way.
+  InventoryItem _withShownThumbnail(InventoryItem item) {
+    if (item.thumbnailBytes != null) return item;
+    final shown = _inventoryItemNotifiers[item.id]?.value.thumbnailBytes;
+    return shown == null ? item : item.copyWith(thumbnailBytes: shown);
+  }
+
   InventoryItem _withFullInventoryImages(InventoryItem item) {
     final images = widget.database?.loadInventoryImages(item.id);
     if (images == null) return item;
@@ -12177,6 +12374,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           kitIds: {...existing.kitIds, kitId},
           sourceUrls: {...existing.sourceUrls, ...sourceUrls}.toList(),
           imageBytes: existing.imageBytes,
+          added: existing.added,
         );
         importedMachineIds.add(existing.id);
         updatedMachineCount++;
@@ -12189,6 +12387,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           typeId: nextMachineTypes[machineTypeIndex].id,
           kitIds: {kitId},
           sourceUrls: sourceUrls,
+          added: DateTime.now(),
         );
         nextMachines.add(machine);
         importedMachineIds.add(machine.id);
@@ -12410,6 +12609,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       sections: package.sections.map((section) => section.name).toList(),
       sourceUrls: package.sources.map((source) => source.url).toList(),
       imageBytes: kitIndex >= 0 ? nextKits[kitIndex].imageBytes : null,
+      added: kitIndex >= 0 ? nextKits[kitIndex].added : DateTime.now(),
     );
     if (kitIndex >= 0) {
       nextKits[kitIndex] = kit;
@@ -12931,6 +13131,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       sections: source.sections,
       sourceUrls: source.sourceUrls,
       imageBytes: source.imageBytes,
+      added: source.added,
     );
     setState(() {
       final index = kits.indexWhere((candidate) => candidate.id == source.id);
@@ -22418,9 +22619,14 @@ class _InventoryHomeState extends State<InventoryHome> {
           : machine.address;
       recordImage = machine.imageBytes;
     }
-    final content = !list && record is KitRecord && recordImage != null
+    final content = !list && recordImage != null
         ? _PhotoCatalogCardContent(
-            key: Key('photo-catalog-card-${record.id}'),
+            key: Key('photo-catalog-card-${switch (record) {
+              KitRecord value => value.id,
+              BuildRecord value => value.id,
+              MachineRecord value => value.id,
+              _ => record.hashCode,
+            }}'),
             bytes: recordImage,
             category: category,
             title: title,
@@ -26403,6 +26609,12 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               ?.sourceUrls ??
           const [],
       imageBytes: machineImage,
+      added: editingMachineId == null
+          ? DateTime.now()
+          : machines
+                .where((candidate) => candidate.id == editingMachineId)
+                .firstOrNull
+                ?.added,
     );
     setState(() {
       final index = machines.indexWhere(
@@ -26826,6 +27038,12 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               ?.sourceUrls ??
           const [],
       imageBytes: kitImage,
+      added: editedKitId == null
+          ? DateTime.now()
+          : kits
+                .where((candidate) => candidate.id == editedKitId)
+                .firstOrNull
+                ?.added,
     );
     setState(() {
       if (editedKitId == null) {
@@ -28626,6 +28844,19 @@ String _filamentCardRemainingLabel(
 
 String _newCatalogId(String prefix) =>
     '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+/// Reads a kit or machine's added time, falling back to the creation time
+/// embedded in IDs from [_newCatalogId] for records saved before the field
+/// existed. Imported records with stable IDs and no stored time stay null.
+DateTime? _catalogAddedFromJson(Object? value, Object? id) {
+  if (value is String) {
+    final parsed = DateTime.tryParse(value);
+    if (parsed != null) return parsed.toLocal();
+  }
+  final match = RegExp(r'^[A-Z]+-(\d{13,})$').firstMatch('${id ?? ''}');
+  if (match == null) return null;
+  return DateTime.fromMicrosecondsSinceEpoch(int.parse(match.group(1)!));
+}
 
 String _kitPackageStableId(String prefix, String packageId, [String? itemId]) {
   String clean(String value) => value
@@ -36235,7 +36466,16 @@ class _QuantityStepper extends StatelessWidget {
   }
 }
 
-class _QuantityStepButton extends StatelessWidget {
+/// A quantity −/+ button drawn with the theme's glass icon-button style.
+///
+/// Every visible card shows two of these, so a maximized desktop window builds
+/// dozens as rows scroll in. A Material IconButton brings its own ink,
+/// actions, focus scope, statesController and always-mounted tooltip overlay
+/// per button, which roughly doubled the build time of each scrolled frame on
+/// a 2560×1440 window. This keeps the same visuals, hover/press/focus states,
+/// keyboard activation and semantics, and only mounts the tooltip while it
+/// can be shown.
+class _QuantityStepButton extends StatefulWidget {
   const _QuantityStepButton({
     super.key,
     required this.icon,
@@ -36250,21 +36490,88 @@ class _QuantityStepButton extends StatelessWidget {
   final bool compact;
 
   @override
+  State<_QuantityStepButton> createState() => _QuantityStepButtonState();
+}
+
+class _QuantityStepButtonState extends State<_QuantityStepButton> {
+  final Set<WidgetState> _states = {};
+
+  void _setState(WidgetState state, bool active) {
+    if (_states.contains(state) == active) return;
+    setState(() => active ? _states.add(state) : _states.remove(state));
+  }
+
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    final onPressed = widget.onPressed;
+    if (onPressed == null || event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter ||
+        event.logicalKey == LogicalKeyboardKey.space) {
+      onPressed();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final size = compact ? 28.0 : 32.0;
-    return SizedBox.square(
-      dimension: size,
-      child: IconButton(
-        tooltip: tooltip,
-        style: const ButtonStyle(
-          minimumSize: WidgetStatePropertyAll(Size.zero),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    final onPressed = widget.onPressed;
+    final enabled = onPressed != null;
+    // Like Material buttons, a disabled button shows no hover or press.
+    final states = enabled ? {..._states} : {WidgetState.disabled};
+    final style = Theme.of(context).iconButtonTheme.style;
+    final size = widget.compact ? 28.0 : 32.0;
+    Widget content = Center(
+      child: Icon(
+        widget.icon,
+        size: widget.compact ? 17 : 19,
+        color:
+            style?.foregroundColor?.resolve(states) ??
+            IconTheme.of(context).color,
+      ),
+    );
+    final background = style?.backgroundBuilder;
+    if (background != null) content = background(context, states, content);
+    if (enabled &&
+        (_states.contains(WidgetState.hovered) ||
+            _states.contains(WidgetState.focused))) {
+      content = Tooltip(
+        message: widget.tooltip,
+        excludeFromSemantics: true,
+        child: content,
+      );
+    }
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: widget.tooltip,
+      onTap: onPressed,
+      child: Focus(
+        canRequestFocus: enabled,
+        onFocusChange: (focused) => _setState(WidgetState.focused, focused),
+        onKeyEvent: _handleKey,
+        child: MouseRegion(
+          cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+          onEnter: (_) => _setState(WidgetState.hovered, true),
+          onExit: (_) => _setState(WidgetState.hovered, false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            excludeFromSemantics: true,
+            onTapDown: enabled
+                ? (_) => _setState(WidgetState.pressed, true)
+                : null,
+            onTapUp: enabled
+                ? (_) => _setState(WidgetState.pressed, false)
+                : null,
+            onTapCancel: enabled
+                ? () => _setState(WidgetState.pressed, false)
+                : null,
+            onTap: onPressed,
+            child: SizedBox.square(dimension: size, child: content),
+          ),
         ),
-        padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
-        iconSize: compact ? 17 : 19,
-        onPressed: onPressed,
-        icon: Icon(icon),
       ),
     );
   }

@@ -1001,6 +1001,89 @@ void main() {
         : false,
   );
 
+  test(
+    'find decoder reads a soft QR from a fixed-focus webcam',
+    () async {
+      const value = 'inventorinator:item:INV-1726000000000000-12';
+      final encoded = zxing.zx.encodeBarcode(
+        contents: value,
+        params: zxing.EncodeParams(
+          format: zxing.Format.qrCode,
+          width: 200,
+          height: 200,
+          margin: 20,
+        ),
+      );
+      expect(encoded.isValid, isTrue);
+      final code = img.Image.fromBytes(
+        width: 200,
+        height: 200,
+        bytes: encoded.data!.buffer,
+        numChannels: 1,
+      );
+      // A C270 held too close: low contrast, soft module edges.
+      final frame = img.Image(width: 1280, height: 720, numChannels: 3);
+      img.fill(frame, color: img.ColorRgb8(90, 80, 95));
+      img.compositeImage(
+        frame,
+        img.adjustColor(code.convert(numChannels: 3), contrast: .62),
+        dstX: 550,
+        dstY: 270,
+      );
+      img.gaussianBlur(frame, radius: 5);
+
+      expect(
+        await compute(
+          decodeAnyBarcodeFrame,
+          Uint8List.fromList(img.encodeJpg(frame, quality: 70)),
+        ),
+        value,
+      );
+    },
+    skip: Platform.environment['INVENTORINATOR_NATIVE_DECODER_TEST'] != '1'
+        ? 'Requires the built Linux ZXing native library.'
+        : false,
+  );
+
+  test('webcam MJPEG frames without Huffman tables decode', () {
+    final source = img.Image(width: 64, height: 48, numChannels: 3);
+    img.fill(source, color: img.ColorRgb8(200, 40, 120));
+    final encoded = img.encodeJpg(source, quality: 80);
+    // Rebuild the frame without DHT segments, as UVC webcams send it.
+    final stripped = <int>[...encoded.sublist(0, 2)];
+    var index = 2;
+    while (encoded[index + 1] != 0xda) {
+      final length = encoded[index + 2] << 8 | encoded[index + 3];
+      if (encoded[index + 1] != 0xc4) {
+        stripped.addAll(encoded.sublist(index, index + 2 + length));
+      }
+      index += 2 + length;
+    }
+    stripped.addAll(encoded.sublist(index));
+    final frame = Uint8List.fromList(stripped);
+
+    expect(() => img.decodeJpg(frame), throwsA(anything));
+    final repaired = img.decodeJpg(jpegWithStandardHuffmanTables(frame))!;
+    expect(repaired.width, 64);
+    expect(repaired.getPixel(32, 24).r, closeTo(200, 6));
+    expect(jpegWithStandardHuffmanTables(encoded), same(encoded));
+  });
+
+  test('unsharp luminance restores contrast across a soft edge', () {
+    const width = 32;
+    final soft = Uint8List(width * 4);
+    for (var y = 0; y < 4; y++) {
+      for (var x = 0; x < width; x++) {
+        // A blurred step from dark to light across x = 12..20.
+        soft[y * width + x] = (60 + ((x - 12).clamp(0, 8) * 15)).toInt();
+      }
+    }
+    final sharpened = unsharpLuminance(soft, width, 4, 4, 2.5);
+    expect(sharpened[width + 13], lessThan(soft[width + 13]));
+    expect(sharpened[width + 19], greaterThan(soft[width + 19]));
+    expect(sharpened[width + 2], soft[width + 2]);
+  });
+
   test('autofocus sharpness score prefers crisp label edges', () {
     final sharp = img.Image(width: 240, height: 160, numChannels: 3);
     for (var y = 0; y < sharp.height; y++) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -537,7 +538,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         try {
           final code = widget.mode == ScanMode.ingest
               ? await compute(decodeProductBarcodeFrame, frame)
-              : await compute(decodeAnyBarcodeFrame, frame);
+              : await compute(decodeInventoryQrFrame, frame);
           if (code != null && !delivered) {
             delivered = true;
             widget.onCode(code, frame);
@@ -715,7 +716,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       try {
         code = widget.mode == ScanMode.ingest
             ? await compute(decodeProductBarcodeFrame, bytes)
-            : await compute(decodeAnyBarcodeFrame, bytes);
+            : await compute(decodeInventoryQrFrame, bytes);
       } catch (exception) {
         debugPrint('Windows barcode decoder error: $exception');
       }
@@ -723,6 +724,14 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       if (code != null && !delivered) {
         delivered = true;
         widget.onCode(code, bytes);
+        // A matched code closes the scanner. If it is still open, the code
+        // was rejected (no matching item), so keep looking after the
+        // message has had a moment to show.
+        unawaited(
+          Future<void>.delayed(const Duration(milliseconds: 1500), () {
+            if (mounted) delivered = false;
+          }),
+        );
       }
     } finally {
       decoding = false;
@@ -1009,12 +1018,86 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
   Future<void>? focusOperation;
   bool focusing = false;
   bool focusLocked = false;
+  bool fixedFocus = false;
+  // Device controls changed for scanning, with the values to restore once
+  // the scanner releases that camera.
+  final Map<String, Map<String, int>> restoreControls = {};
   String? error;
 
   @override
   void initState() {
     super.initState();
     _findCameras();
+  }
+
+  Future<Map<String, ({int minimum, int maximum, int value})>> _readControls(
+    String path,
+  ) async {
+    final output = await Process.run('v4l2-ctl', [
+      '--device=$path',
+      '--list-ctrls',
+    ]);
+    return {
+      for (final match in RegExp(
+        r'^\s*(\w+)\s+0x[0-9a-f]+\s+\((?:int|bool)\)\s*:'
+        r'(?:\s*min=(-?\d+)\s+max=(-?\d+))?.*?\svalue=(-?\d+)',
+        multiLine: true,
+      ).allMatches(output.stdout.toString()))
+        match.group(1)!: (
+          minimum: int.parse(match.group(2) ?? '0'),
+          maximum: int.parse(match.group(3) ?? '1'),
+          value: int.parse(match.group(4)!),
+        ),
+    };
+  }
+
+  /// Tunes fixed-focus webcams for reading codes.
+  ///
+  /// Cameras like the Logitech C270 have no focus motor and ship with very
+  /// light in-camera sharpening, and auto exposure may stretch frames to
+  /// 66 ms in room light, smearing a handheld code. Sharpening before MJPEG
+  /// compression and holding exposure to one frame time keep module edges
+  /// crisp enough for ZXing.
+  Future<void> _applyFixedFocusScanControls(
+    String path,
+    Map<String, ({int minimum, int maximum, int value})> controls,
+  ) async {
+    final changes = <String, int>{};
+    final sharpness = controls['sharpness'];
+    if (sharpness != null) {
+      final target =
+          sharpness.minimum +
+          ((sharpness.maximum - sharpness.minimum) * .75).round();
+      if (sharpness.value < target) changes['sharpness'] = target;
+    }
+    if (controls['exposure_dynamic_framerate']?.value == 1) {
+      changes['exposure_dynamic_framerate'] = 0;
+    }
+    if (changes.isEmpty) return;
+    restoreControls[path] = {
+      for (final name in changes.keys) name: controls[name]!.value,
+    };
+    await _setControls(path, changes);
+  }
+
+  Future<void> _setControls(
+    String path,
+    Map<String, int> values,
+  ) => Process.run('v4l2-ctl', [
+    '--device=$path',
+    '--set-ctrl=${values.entries.map((e) => '${e.key}=${e.value}').join(',')}',
+  ]);
+
+  Future<void> _restoreScanControls() async {
+    final pending = Map.of(restoreControls);
+    restoreControls.clear();
+    for (final entry in pending.entries) {
+      try {
+        await _setControls(entry.key, entry.value);
+      } catch (_) {
+        // The camera may already be unplugged.
+      }
+    }
   }
 
   @override
@@ -1107,7 +1190,15 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       ]);
       cameraProcess = process;
       cameraOutput = process.stdout.listen(_acceptCameraBytes);
-      unawaited(_refocusCamera());
+      final path = device!;
+      final controls = await _readControls(path);
+      final hasFocusMotor = controls.containsKey('focus_absolute');
+      if (mounted) setState(() => fixedFocus = !hasFocusMotor);
+      if (hasFocusMotor) {
+        unawaited(_refocusCamera());
+      } else {
+        await _applyFixedFocusScanControls(path, controls);
+      }
       final errors = StringBuffer();
       process.stderr
           .transform(const SystemEncoding().decoder)
@@ -1140,7 +1231,9 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
         if (start > 0) streamBuffer.removeRange(0, start);
         return;
       }
-      final bytes = Uint8List.fromList(streamBuffer.sublist(start, end + 2));
+      final bytes = jpegWithStandardHuffmanTables(
+        Uint8List.fromList(streamBuffer.sublist(start, end + 2)),
+      );
       streamBuffer.removeRange(0, end + 2);
       if (!mounted) return;
       setState(() {
@@ -1172,7 +1265,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       try {
         code = widget.mode == ScanMode.ingest
             ? await compute(decodeProductBarcodeFrame, bytes)
-            : await compute(decodeAnyBarcodeFrame, bytes);
+            : await compute(decodeInventoryQrFrame, bytes);
       } catch (exception) {
         debugPrint('Native barcode decoder error: $exception');
       }
@@ -1180,6 +1273,14 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       if (code != null && !delivered) {
         delivered = true;
         widget.onCode(code, bytes);
+        // A matched code closes the scanner. If it is still open, the code
+        // was rejected (no matching item), so keep looking after the
+        // message has had a moment to show.
+        unawaited(
+          Future<void>.delayed(const Duration(milliseconds: 1500), () {
+            if (mounted) delivered = false;
+          }),
+        );
       }
     } finally {
       decoding = false;
@@ -1199,6 +1300,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
     }
     await cameraOutput?.cancel();
     cameraOutput = null;
+    await _restoreScanControls();
   }
 
   void _cycleCamera() {
@@ -1216,6 +1318,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
   void dispose() {
     cameraOutput?.cancel();
     cameraProcess?.kill();
+    unawaited(_restoreScanControls());
     manual.dispose();
     super.dispose();
   }
@@ -1269,22 +1372,36 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
               child: Row(
                 children: [
-                  Tooltip(
-                    message: focusLocked
-                        ? 'Focus is locked. Press F1 to run another sweep.'
-                        : 'Run an autofocus sweep and lock the sharpest point.',
-                    child: OutlinedButton.icon(
-                      key: const Key('refocus-camera'),
-                      onPressed: focusing ? null : _refocusCamera,
-                      icon: focusing
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.center_focus_strong_rounded),
-                      label: Text(focusing ? 'Focusing…' : 'Refocus · F1'),
+                  if (fixedFocus)
+                    const Tooltip(
+                      message:
+                          'This webcam cannot refocus. Codes held too close '
+                          'blur; a smaller, sharp code still scans.',
+                      child: Chip(
+                        key: Key('fixed-focus-camera'),
+                        avatar: Icon(Icons.center_focus_weak_rounded),
+                        label: Text('Fixed focus'),
+                      ),
+                    )
+                  else
+                    Tooltip(
+                      message: focusLocked
+                          ? 'Focus is locked. Press F1 to run another sweep.'
+                          : 'Run an autofocus sweep and lock the sharpest point.',
+                      child: OutlinedButton.icon(
+                        key: const Key('refocus-camera'),
+                        onPressed: focusing ? null : _refocusCamera,
+                        icon: focusing
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.center_focus_strong_rounded),
+                        label: Text(focusing ? 'Focusing…' : 'Refocus · F1'),
+                      ),
                     ),
-                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -1292,6 +1409,8 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
                           ? widget.captureMode == ScanCaptureMode.barcode
                                 ? 'Fill the wide guide with the bars; leave white space at both ends.'
                                 : 'Fill the view with the label, press F1 to refocus, then click the camera.'
+                          : fixedFocus
+                          ? 'Hold the QR back until its edges look crisp; it can sit inside the guide.'
                           : 'Fill the square guide with the QR code.',
                       style: const TextStyle(
                         color: Color(0xff929aac),
@@ -1361,6 +1480,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
   }
 
   Future<void> _refocusCamera() {
+    if (fixedFocus) return Future.value();
     final active = focusOperation;
     if (active != null) return active;
     final operation = _runRefocusCamera();
@@ -1496,20 +1616,109 @@ double focusSharpnessScore(Uint8List bytes) {
   return samples == 0 ? 0 : score / samples;
 }
 
+/// Inserts the standard JPEG Huffman tables into a webcam MJPEG frame.
+///
+/// UVC webcams such as the Logitech C270 omit the DHT segment and rely on
+/// decoders supplying the Annex K defaults. Flutter's preview does, but the
+/// `image` package cannot decode such frames, so no barcode was ever read.
+@visibleForTesting
+Uint8List jpegWithStandardHuffmanTables(Uint8List bytes) {
+  if (bytes.length < 4 || bytes[0] != 0xff || bytes[1] != 0xd8) return bytes;
+  var index = 2;
+  while (index + 4 <= bytes.length && bytes[index] == 0xff) {
+    final marker = bytes[index + 1];
+    if (marker == 0xc4) return bytes;
+    if (marker == 0xda) {
+      return Uint8List(bytes.length + _standardHuffmanTables.length)
+        ..setRange(0, index, bytes)
+        ..setAll(index, _standardHuffmanTables)
+        ..setRange(
+          index + _standardHuffmanTables.length,
+          bytes.length + _standardHuffmanTables.length,
+          bytes,
+          index,
+        );
+    }
+    index += 2 + (bytes[index + 2] << 8 | bytes[index + 3]);
+  }
+  return bytes;
+}
+
+// ITU T.81 Annex K.3 tables, as one DHT segment.
+// dart format off
+const _standardHuffmanTables = <int>[
+  0xff, 0xc4, 0x01, 0xa2,
+  // DC luminance
+  0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+  0x07, 0x08, 0x09, 0x0a, 0x0b,
+  // AC luminance
+  0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04,
+  0x04, 0x00, 0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05,
+  0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14,
+  0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1,
+  0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19,
+  0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38,
+  0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54,
+  0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+  0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84,
+  0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+  0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa,
+  0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4,
+  0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
+  0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+  0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+  // DC chrominance
+  0x01, 0x00, 0x03, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+  0x07, 0x08, 0x09, 0x0a, 0x0b,
+  // AC chrominance
+  0x11, 0x00, 0x02, 0x01, 0x02, 0x04, 0x04, 0x03, 0x04, 0x07, 0x05, 0x04,
+  0x04, 0x00, 0x01, 0x02, 0x77, 0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05,
+  0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32,
+  0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52,
+  0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1,
+  0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37,
+  0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53,
+  0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67,
+  0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82,
+  0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95,
+  0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
+  0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2,
+  0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5,
+  0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8,
+  0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+];
+// dart format on
+
 String? _decodeBarcodeFrame(Uint8List bytes, int format) {
   final image = img.decodeImage(bytes);
   if (image == null) return null;
-  return _decodeBarcodeImage(image, format);
+  return _decodeBarcodeImage(image, format) ??
+      _decodeSharpenedImage(image, format);
 }
 
 String? decodeAnyBarcodeFrame(Uint8List bytes) =>
     _decodeBarcodeFrame(bytes, zxing.Format.any);
 
+/// Reads only QR codes, which is all Find mode can match.
+///
+/// Noisy webcam frames (the Logitech C270 in room light especially) make
+/// ZXing report phantom GS1 DataBar values; one of those ended a desktop scan
+/// before the real QR was ever read.
+String? decodeInventoryQrFrame(Uint8List bytes) =>
+    _decodeBarcodeFrame(bytes, zxing.Format.qrCode);
+
+// GS1 DataBar is for produce and coupons, and webcam noise decodes as it.
+const _productLinearCodes =
+    zxing.Format.linearCodes &
+    ~(zxing.Format.dataBar | zxing.Format.dataBarExpanded);
+
 String? decodeProductBarcodeFrame(Uint8List bytes) {
   final image = img.decodeImage(bytes);
   if (image == null) return null;
 
-  final fullFrame = _decodeBarcodeImage(image, zxing.Format.linearCodes);
+  final fullFrame = _decodeBarcodeImage(image, _productLinearCodes);
   if (fullFrame != null) return fullFrame;
 
   final crop = img.copyCrop(
@@ -1522,7 +1731,7 @@ String? decodeProductBarcodeFrame(Uint8List bytes) {
   final focusedCode128 = _decodeBarcodeImage(crop, zxing.Format.code128);
   if (focusedCode128 != null) return focusedCode128;
 
-  final focusedLinear = _decodeBarcodeImage(crop, zxing.Format.linearCodes);
+  final focusedLinear = _decodeBarcodeImage(crop, _productLinearCodes);
   if (focusedLinear != null) return focusedLinear;
 
   final enhanced = img.adjustColor(
@@ -1538,7 +1747,102 @@ String? decodeProductBarcodeFrame(Uint8List bytes) {
     final result = _decodeBarcodeImage(deskewed, zxing.Format.code128);
     if (result != null) return result;
   }
+  return _decodeSharpenedImage(
+    image,
+    _productLinearCodes | zxing.Format.qrCode,
+  );
+}
+
+/// Retries a soft frame after an unsharp mask.
+///
+/// Fixed-focus webcams such as the Logitech C270 blur codes held close to the
+/// lens, and ZXing's binarizer loses module edges once the blur approaches
+/// half a module. Restoring edge contrast recovers roughly another blur step
+/// without asking the user to hold the code perfectly still at the ideal
+/// distance.
+String? _decodeSharpenedImage(img.Image image, int format) {
+  final normalized = image.convert(numChannels: 3);
+  final width = normalized.width;
+  final height = normalized.height;
+  final rgb = normalized.getBytes(order: img.ChannelOrder.rgb);
+  final luminance = Uint8List(width * height);
+  for (var index = 0, pixel = 0; index < luminance.length; index++) {
+    luminance[index] =
+        (rgb[pixel++] * 77 + rgb[pixel++] * 150 + rgb[pixel++] * 29) >> 8;
+  }
+  for (final (radius, amount) in const [(4, 2.5), (2, 1.5)]) {
+    final result = zxing.zx.readBarcode(
+      unsharpLuminance(luminance, width, height, radius, amount),
+      zxing.DecodeParams(
+        imageFormat: zxing.ImageFormat.lum,
+        width: width,
+        height: height,
+        format: format,
+        tryHarder: true,
+        tryRotate: true,
+        tryInverted: true,
+        tryDownscale: false,
+        maxSize: 2048,
+      ),
+    );
+    final text = result.text?.trim();
+    if (result.isValid && text?.isNotEmpty == true) return text;
+  }
   return null;
+}
+
+/// Sharpens an 8-bit luminance plane with an unsharp mask.
+///
+/// Two separable box-blur passes approximate a Gaussian of [radius] cheaply
+/// enough to run on every scanned webcam frame.
+@visibleForTesting
+Uint8List unsharpLuminance(
+  Uint8List luminance,
+  int width,
+  int height,
+  int radius,
+  double amount,
+) {
+  var blurred = Uint16List.fromList(luminance);
+  var scratch = Uint16List(blurred.length);
+  for (var pass = 0; pass < 2; pass++) {
+    _boxBlur(blurred, scratch, width, height, radius, horizontal: true);
+    _boxBlur(scratch, blurred, width, height, radius, horizontal: false);
+  }
+  final sharpened = Uint8List(luminance.length);
+  for (var index = 0; index < luminance.length; index++) {
+    final value = luminance[index];
+    sharpened[index] = (value + amount * (value - blurred[index]))
+        .round()
+        .clamp(0, 255);
+  }
+  return sharpened;
+}
+
+void _boxBlur(
+  Uint16List source,
+  Uint16List target,
+  int width,
+  int height,
+  int radius, {
+  required bool horizontal,
+}) {
+  final lines = horizontal ? height : width;
+  final length = horizontal ? width : height;
+  final stride = horizontal ? 1 : width;
+  final window = radius * 2 + 1;
+  for (var line = 0; line < lines; line++) {
+    final start = horizontal ? line * width : line;
+    int at(int offset) => source[start + offset.clamp(0, length - 1) * stride];
+    var sum = 0;
+    for (var offset = -radius; offset <= radius; offset++) {
+      sum += at(offset);
+    }
+    for (var offset = 0; offset < length; offset++) {
+      target[start + offset * stride] = sum ~/ window;
+      sum += at(offset + radius + 1) - at(offset - radius);
+    }
+  }
 }
 
 String? _decodeBarcodeImage(img.Image image, int format) {

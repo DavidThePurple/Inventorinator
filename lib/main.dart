@@ -6202,6 +6202,52 @@ class _NotchedSliderThumbShape extends SliderComponentShape {
 
 enum _GlassHoverPhase { rest, magenta, purple }
 
+/// Requests the host on-screen keyboard after a finger has focused an editor.
+///
+/// Flutter's desktop embedders do not consistently make this request for touch
+/// input themselves. Waiting for the pointer-up frame lets the tapped field
+/// take focus first, while leaving ordinary mouse and trackpad clicks alone.
+class DesktopTouchKeyboardBridge extends StatefulWidget {
+  const DesktopTouchKeyboardBridge({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<DesktopTouchKeyboardBridge> createState() =>
+      _DesktopTouchKeyboardBridgeState();
+}
+
+class _DesktopTouchKeyboardBridgeState extends State<DesktopTouchKeyboardBridge> {
+  bool get _usesDesktopTextInput =>
+      !kIsWeb && (Platform.isLinux || Platform.isWindows);
+
+  void _requestKeyboardForTouch(PointerUpEvent event) {
+    if (!_usesDesktopTextInput || event.kind != ui.PointerDeviceKind.touch) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focusContext = FocusManager.instance.primaryFocus?.context;
+      if (focusContext == null ||
+          focusContext.findAncestorStateOfType<EditableTextState>() == null) {
+        return;
+      }
+      unawaited(
+        SystemChannels.textInput
+            .invokeMethod<void>('TextInput.show')
+            .catchError((_) {}),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Listener(
+    behavior: HitTestBehavior.translucent,
+    onPointerUp: _requestKeyboardForTouch,
+    child: widget.child,
+  );
+}
+
 class InventorinatorApp extends StatefulWidget {
   const InventorinatorApp({
     super.key,
@@ -6424,6 +6470,8 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Inventorinator',
+      builder: (context, child) =>
+          DesktopTouchKeyboardBridge(child: child ?? const SizedBox.shrink()),
       theme: ThemeData(
         brightness: brightness,
         colorScheme: scheme,

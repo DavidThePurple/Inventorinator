@@ -15948,18 +15948,69 @@ class _InventoryHomeState extends State<InventoryHome> {
 
       if (installedSchema >= 26) {
         final workspaceId = config.workspaceId!;
+        final ownerRevisionsKey = 'scratch_pad_owner_revisions_$workspaceId';
+        final ownerRevisions = decodeScratchPadOwnerRevisions(
+          database.loadStringPreference(ownerRevisionsKey, fallback: '{}'),
+        );
+        var canBackUpNotes = true;
+        try {
+          if (installedSchema >= 31) {
+            final recovered = await service.listRecoveredScratchPadNotes(
+              session,
+            );
+            if (recovered.isNotEmpty) {
+              // Re-read after the request so edits made during sync survive.
+              final local = decodeScratchPadNotes(
+                database.loadStringPreference(
+                  scratchPadNotesPreferenceKey,
+                  fallback: '[]',
+                ),
+              );
+              database.saveStringPreference(
+                scratchPadNotesPreferenceKey,
+                encodeScratchPadNotes(
+                  mergeRecoveredScratchPadNotes(
+                    local,
+                    recovered,
+                    ownerRevisions: ownerRevisions,
+                  ),
+                ),
+              );
+              database.saveStringPreference(
+                'scratch_pad_backup_$workspaceId',
+                '',
+              );
+              database.saveStringPreference(
+                ownerRevisionsKey,
+                jsonEncode(ownerRevisions),
+              );
+              database.saveStringPreference(
+                'scratch_pad_owner_changes_$workspaceId',
+                encodeScratchPadNotes(
+                  recovered.where((note) => note.ownerRevision > 0),
+                ),
+              );
+              await database.waitForPendingWrites();
+            }
+          }
+        } catch (error) {
+          canBackUpNotes = false;
+          debugPrint('Scratch Pad recovery is waiting: $error');
+        }
         final notesRaw = database.loadStringPreference(
           scratchPadNotesPreferenceKey,
           fallback: '[]',
         );
         final backupKey = 'scratch_pad_backup_$workspaceId';
         final backupErrorKey = 'scratch_pad_backup_error_$workspaceId';
-        if (database.loadStringPreference(backupKey, fallback: '') !=
-            notesRaw) {
+        if (canBackUpNotes &&
+            database.loadStringPreference(backupKey, fallback: '') !=
+                notesRaw) {
           try {
             await service.backupScratchPadNotes(
               session,
               decodeScratchPadNotes(notesRaw),
+              ownerRevisions: installedSchema >= 31 ? ownerRevisions : null,
             );
             database.saveStringPreference(backupKey, notesRaw);
             database.saveStringPreference(backupErrorKey, '');
@@ -15969,6 +16020,25 @@ class _InventoryHomeState extends State<InventoryHome> {
               'Scratch Pad backup is waiting: $error',
             );
           }
+        }
+        if (installedSchema >= 31 && config.workspaceRole == 'owner') {
+          try {
+            final allNotes = await service.listOwnerScratchPadNotes(session);
+            database.saveStringPreference(
+              'scratch_pad_owner_$workspaceId',
+              encodeScratchPadNotes(allNotes),
+            );
+            database.saveStringPreference(
+              'scratch_pad_owner_capable_$workspaceId',
+              '1',
+            );
+          } catch (_) {}
+        } else {
+          database.saveStringPreference('scratch_pad_owner_$workspaceId', '[]');
+          database.saveStringPreference(
+            'scratch_pad_owner_capable_$workspaceId',
+            '0',
+          );
         }
         if (canRemoveWorkspaceDevices(config.workspaceRole)) {
           try {
@@ -20690,6 +20760,103 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
+  Future<bool> _manageScratchPadNote(
+    ScratchPadNote note,
+    ScratchPadNote? replacement,
+    String? expectedWorkspace,
+  ) async {
+    final database = widget.database;
+    if (database == null) return false;
+    try {
+      await _syncAutomatically(force: true);
+      final config = SupabaseConfig.fromJson(
+        jsonDecode(database.loadSyncConfig()!) as Map<String, dynamic>,
+      );
+      final session = config.cachedSession;
+      if (session == null || config.workspaceRole != 'owner') {
+        throw const SupabaseSyncException('Owner access required.');
+      }
+      final service = SupabaseSyncService(
+        config,
+        client: widget.supabaseHttpClient,
+      );
+      if (config.workspaceId != expectedWorkspace) {
+        throw const SupabaseSyncException('Workspace changed. Reopen Scratch Pad.');
+      }
+      await service.manageScratchPadNote(session, note, replacement);
+      final remaining = await service.listOwnerScratchPadNotes(session);
+      database.saveStringPreference(
+        'scratch_pad_owner_${config.workspaceId}',
+        encodeScratchPadNotes(remaining),
+      );
+      unawaited(_syncAutomatically(force: true));
+      return true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _restoreScratchPadNote(ScratchPadNote note) async {
+    final database = widget.database;
+    if (database == null || note.sourceUserId == null) return false;
+    try {
+      await _syncAutomatically(force: true);
+      final raw = database.loadSyncConfig();
+      if (raw == null) return false;
+      final config = SupabaseConfig.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+      final session = config.cachedSession;
+      if (session == null) {
+        throw const SupabaseSyncException('Reconnect Remote Sync first.');
+      }
+      final service = SupabaseSyncService(
+        config,
+        client: widget.supabaseHttpClient,
+      );
+      final devices = await service.listDevices(session);
+      if (!mounted) return false;
+      final target = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('Restore note to device'),
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Choose the device that should own this note. It will receive the note on its next sync.',
+              ),
+            ),
+            for (final device in devices)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, device.userId),
+                child: Text(device.name),
+              ),
+          ],
+        ),
+      );
+      if (target == null) return false;
+      await service.restoreRemovedScratchPadNote(session, note, target);
+      final remaining = await service.listRemovedDeviceNotes(session);
+      database.saveStringPreference(
+        'scratch_pad_review_${config.workspaceId}',
+        encodeScratchPadNotes(remaining),
+      );
+      unawaited(_syncAutomatically(force: true));
+      return true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+      return false;
+    }
+  }
+
   Future<void> _openScratchPad() async {
     final database = widget.database;
     if (database == null) return;
@@ -20699,6 +20866,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         fallback: '[]',
       ),
     );
+    var canManageNotes = false;
+    String? notesWorkspace;
     var reviewNotes = const <ScratchPadNote>[];
     var sharedNotes = const <ScratchPadNote>[];
     final source = database.loadSyncConfig();
@@ -20708,6 +20877,14 @@ class _InventoryHomeState extends State<InventoryHome> {
           jsonDecode(source) as Map<String, dynamic>,
         );
         if (config.workspaceId != null) {
+          notesWorkspace = config.workspaceId;
+          canManageNotes =
+              config.workspaceRole == 'owner' &&
+              database.loadStringPreference(
+                    'scratch_pad_owner_capable_${config.workspaceId}',
+                    fallback: '0',
+                  ) ==
+                  '1';
           reviewNotes = decodeScratchPadNotes(
             database.loadStringPreference(
               'scratch_pad_review_${config.workspaceId}',
@@ -20720,6 +20897,21 @@ class _InventoryHomeState extends State<InventoryHome> {
               fallback: '[]',
             ),
           );
+          if (canManageNotes) {
+            final ownerNotes = decodeScratchPadNotes(
+              database.loadStringPreference(
+                'scratch_pad_owner_${config.workspaceId}',
+                fallback: '[]',
+              ),
+            );
+            sharedNotes = ownerNotes
+                .where(
+                  (note) =>
+                      !note.isArchived && note.sourceUserId != config.userId,
+                )
+                .toList();
+            reviewNotes = ownerNotes.where((note) => note.isArchived).toList();
+          }
         }
       } catch (_) {}
     }
@@ -20729,6 +20921,23 @@ class _InventoryHomeState extends State<InventoryHome> {
         notes: notes,
         sharedNotes: sharedNotes,
         reviewNotes: reviewNotes,
+        onRestoreNote: _restoreScratchPadNote,
+        onManageNote: canManageNotes ? (note, replacement) => _manageScratchPadNote(note, replacement, notesWorkspace) : null,
+        reloadManagedNotes: canManageNotes
+            ? () =>
+                  decodeScratchPadNotes(
+                        database.loadStringPreference(
+                          'scratch_pad_owner_$notesWorkspace',
+                          fallback: '[]',
+                        ),
+                      )
+                      .where(
+                        (note) =>
+                            note.isArchived ||
+                            note.sourceUserId != currentUserId,
+                      )
+                      .toList()
+            : null,
         subjects: _scratchPadSubjects(),
         localDeviceName: deviceName,
         scrollbarThickness: mainScrollbarWidth,
@@ -20738,9 +20947,38 @@ class _InventoryHomeState extends State<InventoryHome> {
           required child,
         }) => _GlassButtonSurface(states: states, joined: joined, child: child),
         onChanged: (updated) {
+          final revisions = decodeScratchPadOwnerRevisions(
+            database.loadStringPreference(
+              'scratch_pad_owner_revisions_$notesWorkspace',
+              fallback: '{}',
+            ),
+          );
+          updated = mergeRecoveredScratchPadNotes(
+            updated,
+            decodeScratchPadNotes(
+              database.loadStringPreference(
+                'scratch_pad_owner_changes_$notesWorkspace',
+                fallback: '[]',
+              ),
+            ),
+            ownerRevisions: revisions,
+          );
+
           database.saveStringPreference(
             scratchPadNotesPreferenceKey,
-            encodeScratchPadNotes(updated),
+            encodeScratchPadNotes([
+              ...updated,
+              ...decodeScratchPadNotes(
+                database.loadStringPreference(
+                  scratchPadNotesPreferenceKey,
+                  fallback: '[]',
+                ),
+              ).where(
+                (note) =>
+                    !notes.any((initial) => initial.id == note.id) &&
+                    !updated.any((edited) => edited.id == note.id),
+              ),
+            ]),
           );
           unawaited(_syncAutomatically(force: true));
         },

@@ -23,6 +23,7 @@ class ServiceStatus {
       if (version < 26) 'Scratch Pad backup',
       if (version < 28) 'Scratch Pad note links',
       if (version < 29) 'delete-queue fix',
+      if (version < 31) 'Scratch Pad device recovery',
       if (version < 30) 'safe import undo',
     ];
     return 'Connected—server update needed for ${missing.join(', ')}. '

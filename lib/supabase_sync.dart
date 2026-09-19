@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 30;
+const latestInventorinatorSchemaVersion = 31;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -919,11 +919,68 @@ class SupabaseSyncService {
 
   Future<void> backupScratchPadNotes(
     SupabaseSession session,
-    Iterable<ScratchPadNote> notes,
-  ) => _rpc(session, 'backup_inventorinator_device_notes', {
+    Iterable<ScratchPadNote> notes, {
+    Map<String, int>? ownerRevisions,
+  }) => _rpc(session, 'backup_inventorinator_device_notes', {
     'target_workspace': config.workspaceId,
     'target_notes': notes.map((note) => note.toJson()).toList(),
+    'target_owner_revisions': ?ownerRevisions,
   });
+  Future<List<ScratchPadNote>> listOwnerScratchPadNotes(
+    SupabaseSession session,
+  ) async {
+    final result = await _rpc(session, 'list_inventorinator_owner_notes', {
+      'target_workspace': config.workspaceId,
+    });
+    return (result as List)
+        .whereType<Map>()
+        .map(
+          (row) =>
+              ScratchPadNote.fromRemoteJson(Map<String, dynamic>.from(row)),
+        )
+        .toList();
+  }
+
+  Future<void> manageScratchPadNote(
+    SupabaseSession session,
+    ScratchPadNote note,
+    ScratchPadNote? replacement,
+  ) => _rpc(session, 'manage_inventorinator_note', {
+    'target_workspace': config.workspaceId,
+    'source_user': note.sourceUserId,
+    'target_note': note.id,
+    'expected_updated_at': note.updatedAt.toUtc().toIso8601String(),
+    'replacement': replacement?.toJson(),
+  });
+
+  Future<List<ScratchPadNote>> listRecoveredScratchPadNotes(
+    SupabaseSession session,
+  ) async {
+    final result = await _rpc(
+      session,
+      'list_inventorinator_recovered_device_notes',
+      {'target_workspace': config.workspaceId},
+    );
+    return (result as List)
+        .whereType<Map>()
+        .map(
+          (row) =>
+              ScratchPadNote.fromRemoteJson(Map<String, dynamic>.from(row)),
+        )
+        .toList();
+  }
+
+  Future<void> restoreRemovedScratchPadNote(
+    SupabaseSession session,
+    ScratchPadNote note,
+    String targetUser,
+  ) => _rpc(session, 'restore_inventorinator_removed_device_note', {
+    'target_workspace': config.workspaceId,
+    'source_user': note.sourceUserId,
+    'target_note': note.id,
+    'target_user': targetUser,
+  });
+
   Future<List<ScratchPadNote>> listRemovedDeviceNotes(
     SupabaseSession session,
   ) async {
@@ -983,6 +1040,13 @@ class SupabaseSyncService {
       'set_inventorinator_mouser_credentials' => (24, 'Mouser credential sync'),
       'backup_inventorinator_device_notes' ||
       'list_inventorinator_removed_device_notes' => (26, 'Scratch Pad backup'),
+      'list_inventorinator_owner_notes' ||
+      'manage_inventorinator_note' ||
+      'list_inventorinator_recovered_device_notes' ||
+      'restore_inventorinator_removed_device_note' => (
+        31,
+        'Scratch Pad device recovery',
+      ),
       'list_inventorinator_shared_device_notes' => (27, 'Scratch Pad sharing'),
       _ => null,
     };

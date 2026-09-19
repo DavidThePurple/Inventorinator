@@ -15,7 +15,7 @@ Check off against the build being released. Existing results count when they app
 - [ ] Drying timers, countdowns, and alerts still work.
 - [ ] Kit/build stock, shopping lists, and kit-deletion reservation release behave correctly.
 - [ ] CSV/XLSX/JSON item import/export and PDF reports work; unsupported kit/shopping-list JSON imports are clearly noted.
-- [ ] Scratch Pad notes save and share as intended; private notes stay private.
+- [ ] Scratch Pad notes save and share correctly; only the Owner can manage every backed-up note. Verify Owner edits/deletes survive stale backups and reach the author.
 - [ ] Two devices sync edits and offline changes without losing data; conflicts are reviewable and roles prevent unauthorized changes.
 - [ ] Backup restores successfully into a separate test inventory.
 

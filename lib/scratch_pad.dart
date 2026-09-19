@@ -7,6 +7,16 @@ import 'package:markdown_editor_live/markdown_editor_live.dart';
 
 const scratchPadNotesPreferenceKey = 'scratch_pad_notes_v1';
 
+Map<String, int> decodeScratchPadOwnerRevisions(String raw) {
+  try {
+    return (jsonDecode(raw) as Map<String, dynamic>).map(
+      (key, value) => MapEntry(key, (value as num).toInt()),
+    );
+  } catch (_) {
+    return {};
+  }
+}
+
 String scratchPadRenderMarkdown(String source) => source;
 
 enum _ScratchPadViewMode { cover, twoColumn, oneColumn, horizontal }
@@ -37,6 +47,10 @@ class ScratchPadNote {
     required this.updatedAt,
     this.isShared = false,
     this.sourceDeviceName,
+    this.sourceUserId,
+    this.ownerRevision = 0,
+    this.ownerDeleted = false,
+    this.isArchived = false,
     this.subjectKind,
     this.subjectId,
     this.subjectLabel,
@@ -48,6 +62,10 @@ class ScratchPadNote {
   final DateTime updatedAt;
   final bool isShared;
   final String? sourceDeviceName;
+  final String? sourceUserId;
+  final int ownerRevision;
+  final bool ownerDeleted;
+  final bool isArchived;
   final String? subjectKind;
   final String? subjectId;
   final String? subjectLabel;
@@ -74,6 +92,10 @@ class ScratchPadNote {
     updatedAt: updatedAt ?? this.updatedAt,
     isShared: isShared ?? this.isShared,
     sourceDeviceName: sourceDeviceName,
+    sourceUserId: sourceUserId,
+    ownerRevision: ownerRevision,
+    ownerDeleted: ownerDeleted,
+    isArchived: isArchived,
     subjectKind: subject?.kind ?? subjectKind,
     subjectId: subject?.id ?? subjectId,
     subjectLabel: subject?.label ?? subjectLabel,
@@ -85,7 +107,11 @@ class ScratchPadNote {
     'body': body,
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'isShared': isShared,
+    'ownerRevision': ownerRevision,
+    'ownerDeleted': ownerDeleted,
+    'isArchived': isArchived,
     if (sourceDeviceName != null) 'sourceDeviceName': sourceDeviceName,
+    if (sourceUserId != null) 'sourceUserId': sourceUserId,
     if (subject != null) 'subjectKind': subject!.kind,
     if (subject != null) 'subjectId': subject!.id,
     if (subject != null) 'subjectLabel': subject!.label,
@@ -100,6 +126,10 @@ class ScratchPadNote {
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     isShared: json['isShared'] == true,
     sourceDeviceName: json['sourceDeviceName'] as String?,
+    sourceUserId: json['sourceUserId'] as String?,
+    ownerRevision: (json['ownerRevision'] as num?)?.toInt() ?? 0,
+    ownerDeleted: json['ownerDeleted'] == true,
+    isArchived: json['isArchived'] == true,
     subjectKind: json['subjectKind'] as String?,
     subjectId: json['subjectId'] as String?,
     subjectLabel: json['subjectLabel'] as String?,
@@ -115,6 +145,10 @@ class ScratchPadNote {
             DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
         isShared: json['is_shared'] == true,
         sourceDeviceName: json['source_device_name'] as String?,
+        sourceUserId: json['source_user_id'] as String?,
+        ownerRevision: (json['owner_revision'] as num?)?.toInt() ?? 0,
+        ownerDeleted: json['owner_deleted'] == true,
+        isArchived: json['transferred_at'] != null,
         subjectKind: json['subject_kind'] as String?,
         subjectId: json['subject_id'] as String?,
         subjectLabel: json['subject_label'] as String?,
@@ -140,6 +174,74 @@ String encodeScratchPadNotes(Iterable<ScratchPadNote> notes) {
   return jsonEncode(ordered.map((note) => note.toJson()).toList());
 }
 
+// Recovery is additive. A differing local revision stays under its original ID;
+// retain the recovered revision separately rather than silently overwriting it.
+List<ScratchPadNote> mergeRecoveredScratchPadNotes(
+  List<ScratchPadNote> local,
+  List<ScratchPadNote> recovered, {
+  Map<String, int>? ownerRevisions,
+}) {
+  final result = {for (final note in local) note.id: note};
+  for (final note in recovered) {
+    final existing = result[note.id];
+    if (note.ownerRevision > 0) {
+      final seen = ownerRevisions == null
+          ? (existing?.ownerRevision ?? 0)
+          : (ownerRevisions[note.id] ?? 0);
+      ownerRevisions?[note.id] = note.ownerRevision > seen
+          ? note.ownerRevision
+          : seen;
+      if (note.ownerDeleted) {
+        result.remove(note.id);
+        continue;
+      }
+      if ((existing != null &&
+              existing.ownerRevision >= note.ownerRevision &&
+              seen >= note.ownerRevision) ||
+          (existing == null && seen >= note.ownerRevision)) {
+        continue;
+      }
+      result[note.id] = ScratchPadNote(
+        id: note.id,
+        title: note.title,
+        body: note.body,
+        updatedAt: note.updatedAt,
+        isShared: note.isShared,
+        ownerRevision: note.ownerRevision,
+        subjectKind: note.subjectKind,
+        subjectId: note.subjectId,
+        subjectLabel: note.subjectLabel,
+      );
+      continue;
+    }
+    var id = note.id;
+    if (existing != null) {
+      if (existing.title == note.title &&
+          existing.body == note.body &&
+          existing.isShared == note.isShared &&
+          existing.subjectKind == note.subjectKind &&
+          existing.subjectId == note.subjectId &&
+          existing.subjectLabel == note.subjectLabel) {
+        continue;
+      }
+      final prefix = id.length > 80 ? id.substring(0, 80) : id;
+      id = '${prefix}_recovered_${note.updatedAt.microsecondsSinceEpoch}';
+      if (result.containsKey(id)) continue;
+    }
+    result[id] = ScratchPadNote(
+      id: id,
+      title: note.title,
+      body: note.body,
+      updatedAt: note.updatedAt,
+      isShared: note.isShared,
+      subjectKind: note.subjectKind,
+      subjectId: note.subjectId,
+      subjectLabel: note.subjectLabel,
+    );
+  }
+  return result.values.toList();
+}
+
 class ScratchPadDialog extends StatefulWidget {
   const ScratchPadDialog({
     super.key,
@@ -148,17 +250,23 @@ class ScratchPadDialog extends StatefulWidget {
     this.sharedNotes = const [],
     this.reviewNotes = const [],
     this.backupMessage,
+    this.onRestoreNote,
+    this.onManageNote,
+    this.reloadManagedNotes,
     this.subjects = const [],
     this.localDeviceName = 'This device',
     this.scrollbarThickness = 10,
     required this.buttonSurfaceBuilder,
   });
 
+  final List<ScratchPadNote> Function()? reloadManagedNotes;
   final List<ScratchPadNote> notes;
   final ValueChanged<List<ScratchPadNote>> onChanged;
   final List<ScratchPadNote> sharedNotes;
   final List<ScratchPadNote> reviewNotes;
   final String? backupMessage;
+  final Future<bool> Function(ScratchPadNote)? onRestoreNote;
+  final Future<bool> Function(ScratchPadNote, ScratchPadNote?)? onManageNote;
   final List<ScratchPadSubject> subjects;
   final String localDeviceName;
   final double scrollbarThickness;
@@ -171,6 +279,8 @@ class ScratchPadDialog extends StatefulWidget {
 class _ScratchPadDialogState extends State<ScratchPadDialog> {
   late List<ScratchPadNote> notes;
   String? _deviceFilter;
+  final Set<ScratchPadNote> _restoredNotes = {};
+  List<ScratchPadNote>? _managedNotes;
   var _viewMode = _ScratchPadViewMode.twoColumn;
 
   @override
@@ -228,9 +338,75 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
     });
   }
 
+  Future<void> _manageNote(
+    ScratchPadNote note,
+    BuildContext noteContext, {
+    required bool delete,
+  }) async {
+    ScratchPadNote? replacement;
+    if (delete) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete note from its device?'),
+          content: Text(
+            'Delete “${note.title}”? The author’s device will remove it on its next sync.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    } else {
+      replacement = await showDialog<ScratchPadNote>(
+        context: context,
+        builder: (_) => _ScratchPadEditor(
+          note: note,
+          subjects: widget.subjects,
+          ownerEditing: true,
+        ),
+      );
+      if (replacement == null) return;
+    }
+    if (await widget.onManageNote!(note, replacement) && mounted) {
+      setState(() {
+        _restoredNotes.add(note);
+        _managedNotes = widget.reloadManagedNotes?.call();
+      });
+      if (noteContext.mounted) Navigator.pop(noteContext);
+    }
+  }
+
   Future<void> _viewSharedNote(ScratchPadNote note) => showDialog<void>(
     context: context,
-    builder: (_) => _ScratchPadReadOnlyNote(note: note),
+    builder: (noteContext) => _ScratchPadReadOnlyNote(
+      note: note,
+      onOwnerEdit: widget.onManageNote != null && note.sourceUserId != null
+          ? () => _manageNote(note, noteContext, delete: false)
+          : null,
+      onOwnerDelete: widget.onManageNote != null && note.sourceUserId != null
+          ? () => _manageNote(note, noteContext, delete: true)
+          : null,
+      onRestore:
+          (widget.reviewNotes.contains(note) || note.isArchived) &&
+              note.sourceUserId != null &&
+              widget.onRestoreNote != null
+          ? () async {
+              if (await widget.onRestoreNote!(note) && mounted) {
+                setState(() => _restoredNotes.add(note));
+                if (noteContext.mounted) Navigator.pop(noteContext);
+              }
+            }
+          : null,
+    ),
   );
 
   static const _localFilter = '__local__';
@@ -242,7 +418,9 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
 
   Map<String, List<ScratchPadNote>> _notesByRemoteDevice() {
     final byDevice = <String, List<ScratchPadNote>>{};
-    for (final note in [...widget.sharedNotes, ...widget.reviewNotes]) {
+    for (final note
+        in _managedNotes ?? [...widget.sharedNotes, ...widget.reviewNotes]) {
+      if (_restoredNotes.contains(note)) continue;
       byDevice.putIfAbsent(_remoteDeviceName(note), () => []).add(note);
     }
     return byDevice;
@@ -435,7 +613,9 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
                     if (_deviceFilter == null || _deviceFilter == device) ...[
                       const SizedBox(height: 24),
                       Text(
-                        'Shared from $device',
+                        widget.onManageNote == null
+                            ? 'Shared from $device'
+                            : 'Notes from $device',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
@@ -498,7 +678,9 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
         if (_deviceFilter == null || _deviceFilter == device)
           _ScratchPadTimelineSegment(
             key: device,
-            title: 'Shared from $device',
+            title: widget.onManageNote == null
+                ? 'Shared from $device'
+                : 'Notes from $device',
             icon: Icons.devices_other_outlined,
             notes: remoteByDevice[device]!,
             editable: false,
@@ -956,7 +1138,15 @@ class _ScratchPadHoverActionStrip extends StatelessWidget {
 }
 
 class _ScratchPadReadOnlyNote extends StatelessWidget {
-  const _ScratchPadReadOnlyNote({required this.note});
+  const _ScratchPadReadOnlyNote({
+    required this.note,
+    this.onRestore,
+    this.onOwnerEdit,
+    this.onOwnerDelete,
+  });
+  final VoidCallback? onRestore;
+  final VoidCallback? onOwnerEdit;
+  final VoidCallback? onOwnerDelete;
   final ScratchPadNote note;
 
   @override
@@ -965,6 +1155,23 @@ class _ScratchPadReadOnlyNote extends StatelessWidget {
       appBar: AppBar(
         title: Text(note.title),
         actions: [
+          if (onOwnerEdit != null)
+            IconButton(
+              tooltip: 'Edit as Owner',
+              onPressed: onOwnerEdit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          if (onOwnerDelete != null)
+            IconButton(
+              tooltip: 'Delete as Owner',
+              onPressed: onOwnerDelete,
+              icon: const Icon(Icons.delete_outline),
+            ),
+          if (onRestore != null)
+            TextButton(
+              onPressed: onRestore,
+              child: const Text('Restore to device'),
+            ),
           IconButton(
             tooltip: 'Close note',
             onPressed: () => Navigator.pop(context),
@@ -1174,7 +1381,12 @@ class _ScratchPadMarkdownImage extends StatelessWidget {
 }
 
 class _ScratchPadEditor extends StatefulWidget {
-  const _ScratchPadEditor({this.note, this.subjects = const []});
+  const _ScratchPadEditor({
+    this.note,
+    this.subjects = const [],
+    this.ownerEditing = false,
+  });
+  final bool ownerEditing;
   final ScratchPadNote? note;
   final List<ScratchPadSubject> subjects;
   @override
@@ -1340,8 +1552,13 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Share with workspace'),
+                  subtitle: const Text(
+                    'The workspace Owner can read, edit, or delete backed-up notes, even when sharing is off.',
+                  ),
                   value: isShared,
-                  onChanged: (value) => setState(() => isShared = value),
+                  onChanged: widget.ownerEditing
+                      ? null
+                      : (value) => setState(() => isShared = value),
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -1416,6 +1633,7 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
                               body: text,
                               updatedAt: DateTime.now().toUtc(),
                               isShared: isShared,
+                              ownerRevision: widget.note?.ownerRevision ?? 0,
                               subjectKind: subject?.kind,
                               subjectId: subject?.id,
                               subjectLabel: subject?.label,

@@ -1,5 +1,9 @@
 # Changelog
 
+- Give workspace Owners edit/delete authority over all backed-up Scratch Pad notes, with stale-backup protection (schema 31).
+
+- Fix Scratch Pad recovery for re-added devices and add explicit reassignment of legacy archived notes (schema 31).
+
 All notable changes to Inventorinator will be recorded here.
 
 ## [0.1.1-alpha.2] - Unreleased

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -7867,6 +7868,63 @@ Bed Temperature: 80°C
       identical(tester.widget<InventoryCard>(find.byType(InventoryCard)), card),
       isTrue,
     );
+  });
+
+  testWidgets('the countdown ring arc follows drying progress', (
+    tester,
+  ) async {
+    final started = DateTime(2026, 8, 25, 12);
+    addTearDown(() => countdownClock.debugNow = null);
+    final item = sampleInventory.first.copyWith(
+      id: 'INV-RING-ARC',
+      filamentStatus: FilamentStatus.drying,
+      dryingMinutes: 300,
+      dryingRemaining: 300,
+      dryingStartedAt: started,
+    );
+    const boundaryKey = Key('ring-arc-boundary');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RepaintBoundary(
+            key: boundaryKey,
+            child: SizedBox(
+              width: 300,
+              height: 286,
+              child: InventoryCard(item: item, onOpen: () {}, onAction: (_) {}),
+            ),
+          ),
+        ),
+      ),
+    );
+    final ring = find.byKey(const Key('inventory-card-timer-INV-RING-ARC'));
+
+    // Distance from the drying arc colour at six o'clock, halfway round.
+    Future<int> halfwayDistance(Duration elapsed) async {
+      countdownClock.debugNow = started.add(elapsed);
+      await tester.pumpAndSettle();
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(boundaryKey),
+      );
+      final origin = tester.getTopLeft(find.byKey(boundaryKey));
+      final center = tester.getCenter(ring) - origin;
+      final radius = tester.getSize(ring).width / 2 - 2.5;
+      final bytes = (await tester.runAsync(() async {
+        final image = await boundary.toImage();
+        final data = await image.toByteData();
+        return (data!, image.width);
+      }))!;
+      final x = center.dx.round();
+      final y = (center.dy + radius).round();
+      final offset = (y * bytes.$2 + x) * 4;
+      final rgb = [for (var i = 0; i < 3; i++) bytes.$1.getUint8(offset + i)];
+      return (rgb[0] - 0x9c).abs() + (rgb[1] - 0x83).abs() + (rgb[2] - 0xff).abs();
+    }
+
+    final early = await halfwayDistance(const Duration(minutes: 30));
+    final late = await halfwayDistance(const Duration(minutes: 200));
+    expect(late, lessThan(40));
+    expect(early, greaterThan(late + 60));
   });
 
   testWidgets('the countdown clock only runs while a ring listens', (

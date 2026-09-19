@@ -38659,9 +38659,16 @@ class _StatusRingPainter extends CustomPainter {
       size.width - strokeWidth,
       size.height - strokeWidth,
     );
-    // This is a status jewel, not a progress track. A complete sweep keeps
-    // the color continuous around the circle instead of ending in a dark
-    // unused segment.
+    // The arc is the countdown: it fills as filament dries and drains as
+    // moisture life runs out, over a dim track showing the remainder.
+    final track = Paint()
+      ..color = baseColor.withValues(alpha: .45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth;
+    canvas.drawArc(bounds, 0, math.pi * 2, false, track);
+    final sweep = math.pi * 2 * progress.clamp(0.0, 1.0);
+    if (sweep <= 0) return;
+    final full = sweep >= math.pi * 2;
     final ring = Paint()
       ..shader = SweepGradient(
         startAngle: -math.pi / 2,
@@ -38671,8 +38678,9 @@ class _StatusRingPainter extends CustomPainter {
       ).createShader(bounds)
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.butt;
-    canvas.drawArc(bounds, -math.pi / 2, math.pi * 2, false, ring);
+      // A full ring stays seamless; a partial arc gets rounded ends.
+      ..strokeCap = full ? StrokeCap.butt : StrokeCap.round;
+    canvas.drawArc(bounds, -math.pi / 2, sweep, false, ring);
   }
 
   @override

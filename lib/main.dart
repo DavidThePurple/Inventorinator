@@ -9076,6 +9076,30 @@ class _InventoryHomeState extends State<InventoryHome> {
         )
         .map(_decodeInventoryPayload)
         .toList();
+    // Photo cards key their decoded image on the thumbnail buffer itself, so
+    // a page re-read after any edit would give every card fresh bytes and
+    // make every photo on screen flash while it decodes again. Keep the
+    // buffer a card already shows when the thumbnail has not changed.
+    final shownThumbnails = <String, Uint8List>{
+      for (final item in _visibleItemsCache ?? const <InventoryItem>[])
+        if (item.thumbnailBytes != null) item.id: item.thumbnailBytes!,
+      for (final notifier in _inventoryItemNotifiers.values)
+        if (notifier.value.thumbnailBytes != null)
+          notifier.value.id: notifier.value.thumbnailBytes!,
+    };
+    final reusedThumbnails = Set<Uint8List>.identity();
+    for (var index = 0; index < items.length; index++) {
+      final item = items[index];
+      final shown = shownThumbnails[item.id];
+      final bytes = item.thumbnailBytes;
+      if (shown != null &&
+          bytes != null &&
+          shown.length == bytes.length &&
+          listEquals(shown, bytes)) {
+        items[index] = item.copyWith(thumbnailBytes: shown);
+        reusedThumbnails.add(shown);
+      }
+    }
     final keep = items.map((e) => e.id).toSet();
     final old = _inventoryItemNotifiers.values.toList();
     _inventoryItemNotifiers.clear();
@@ -9083,12 +9107,17 @@ class _InventoryHomeState extends State<InventoryHome> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       for (final notifier in old) {
         final bytes = notifier.value.thumbnailBytes;
-        if (bytes != null) MemoryImage(bytes).evict();
+        if (bytes != null && !reusedThumbnails.contains(bytes)) {
+          MemoryImage(bytes).evict();
+        }
         notifier.dispose();
       }
       for (final item in previous ?? <InventoryItem>[]) {
-        if (!keep.contains(item.id) && item.thumbnailBytes != null) {
-          MemoryImage(item.thumbnailBytes!).evict();
+        final bytes = item.thumbnailBytes;
+        if (!keep.contains(item.id) &&
+            bytes != null &&
+            !reusedThumbnails.contains(bytes)) {
+          MemoryImage(bytes).evict();
         }
       }
     });

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -251,6 +252,74 @@ void main() {
       db.inventoryPayload('PHOTO-QTY', thumbnail: true)!['thumbnail'],
       isNotNull,
     );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    db.close();
+  });
+
+  testWidgets('re-reading a page keeps photo cards on their decoded image', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final dir = Directory.systemTemp.createTempSync('paging-photo-reuse-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final db = (await tester.runAsync(
+      () => LocalDatabase.open(overridePath: '${dir.path}/test.sqlite3'),
+    ))!;
+    db.saveState(
+      jsonEncode({
+        'schemaVersion': 8,
+        'inventory': [
+          for (final id in ['PHOTO-A', 'PHOTO-B'])
+            {
+              'id': id,
+              'name': 'Photo $id',
+              'type': 'other',
+              'compatibility': <String>[],
+              'added': '2026-01-01T00:00:00.000',
+              'cost': 0,
+              'quantity': 2,
+              'color': 0xff888888,
+              'archived': false,
+              'thumbnail': base64Encode(
+                img.encodePng(img.Image(width: 2, height: 2)),
+              ),
+            },
+        ],
+      }),
+    );
+    db.saveSyncConfig(jsonEncode({'syncMode': 'local'}));
+    db.saveBoolPreference('photo_cards_enabled', true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: InventoryHome(
+          database: db,
+          persistedState: db.loadState(
+            includeFullImages: false,
+            includeInventory: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Uint8List shownBytes(String id) {
+      final ink = tester.widget<Ink>(
+        find.byKey(Key('photo-card-background-$id')),
+      );
+      final image = (ink.decoration! as BoxDecoration).image!.image;
+      return ((image as ResizeImage).imageProvider as MemoryImage).bytes;
+    }
+
+    final before = shownBytes('PHOTO-A');
+    // Any edit re-reads the visible page from the database.
+    final dynamic home = tester.state(find.byType(InventoryHome));
+    home.setState(() => home.sortAscending = !(home.sortAscending as bool));
+    await tester.pumpAndSettle();
+    expect(identical(shownBytes('PHOTO-A'), before), isTrue);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();

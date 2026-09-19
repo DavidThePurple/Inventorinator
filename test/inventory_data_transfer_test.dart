@@ -238,7 +238,7 @@ void main() {
     expect(await result, isFalse);
   });
 
-  testWidgets('Bulk Import flyout offers import, Rapidizer and export', (
+  testWidgets('Bulk Import flyout offers import and Rapidizer', (
     tester,
   ) async {
     await pumpHome(tester);
@@ -253,7 +253,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Import CSV, XLSX or JSON…'), findsOneWidget);
     expect(find.text('Rapidizer…'), findsOneWidget);
-    expect(find.text('Export inventory…'), findsOneWidget);
+    // Export has its own bottom bar button instead.
+    expect(find.text('Export inventory…'), findsNothing);
+    expect(find.byKey(const Key('open-inventory-export')), findsOneWidget);
 
     await tester.tap(find.text('Rapidizer…'));
     await tester.pumpAndSettle();

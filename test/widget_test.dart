@@ -5484,9 +5484,9 @@ Bed Temperature: 80°C
       'open-scratch-pad',
       'open-scanner',
       'add-item',
-      'open-rapidizer',
       'open-filament-colors',
       'open-inventory-json-import',
+      'open-inventory-export',
     ];
     final actionTop = tester
         .getTopLeft(find.byKey(Key(bottomActionKeys.first)))
@@ -5514,7 +5514,7 @@ Bed Temperature: 80°C
       closeTo(compactSurface.left + 14, 1.1),
     );
     expect(
-      tester.getRect(find.byKey(const Key('open-inventory-json-import'))).right,
+      tester.getRect(find.byKey(const Key('open-inventory-export'))).right,
       closeTo(compactSurface.right - 14, 1.1),
     );
     expect(
@@ -5691,9 +5691,9 @@ Bed Temperature: 80°C
       'open-stockroom',
       'open-scanner',
       'add-item',
-      'open-rapidizer',
       'open-filament-colors',
       'open-inventory-json-import',
+      'open-inventory-export',
     ]) {
       expect(
         find.descendant(of: actions, matching: find.byKey(Key(key))),
@@ -5774,7 +5774,7 @@ Bed Temperature: 80°C
       closeTo(surfaceRect.left + 14, 1.1),
     );
     expect(
-      tester.getRect(find.byKey(const Key('open-inventory-json-import'))).right,
+      tester.getRect(find.byKey(const Key('open-inventory-export'))).right,
       closeTo(surfaceRect.right - 14, 1.1),
     );
     for (final key in const [
@@ -5834,7 +5834,7 @@ Bed Temperature: 80°C
       expect(find.byKey(const Key('workspace-role-bubble')), findsNothing);
       expect(
         find.byTooltip('Your role (Builder) cannot add inventory items.'),
-        findsNWidgets(7),
+        findsNWidgets(6),
       );
       await tester.tap(find.byKey(const Key('cloud-sync')));
       await tester.pumpAndSettle();
@@ -5845,13 +5845,21 @@ Bed Temperature: 80°C
         'open-stockroom',
         'open-scanner',
         'add-item',
-        'open-rapidizer',
         'open-filament-colors',
         'open-inventory-json-import',
       ]) {
         final button = tester.widget<OutlinedButton>(find.byKey(Key(key)));
         expect(button.onPressed, isNull, reason: key);
       }
+      // Anyone who can see the inventory can export it.
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('open-inventory-export')),
+            )
+            .onPressed,
+        isNotNull,
+      );
 
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
@@ -6692,7 +6700,13 @@ Bed Temperature: 80°C
       products: const [],
     );
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
-    await tester.tap(find.byKey(const Key('open-rapidizer')));
+    // Rapidizer lives in the Bulk Import flyout.
+    final bulkImport = find.byKey(const Key('open-inventory-json-import'));
+    await tester.ensureVisible(bulkImport);
+    await tester.pumpAndSettle();
+    await tester.tap(bulkImport);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('context-action-inventory-rapidizer')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('rapidizer-input')), findsOneWidget);

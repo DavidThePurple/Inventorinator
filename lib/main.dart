@@ -10894,22 +10894,11 @@ class _InventoryHomeState extends State<InventoryHome> {
             label: 'Rapidizer…',
           ),
         ),
-        const PopupMenuItem(
-          value: 'export',
-          height: 52,
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: _PopupActionRow(
-            actionKey: 'inventory-export',
-            icon: Icons.ios_share_rounded,
-            label: 'Export inventory…',
-          ),
-        ),
       ],
     );
     if (!mounted) return;
     if (action == 'import') await _importInventoryFile();
     if (action == 'rapidizer') await _openRapidizer();
-    if (action == 'export') await exportInventory();
   }
 
   /// Asks for a format and scope, then saves the inventory export.
@@ -17847,21 +17836,22 @@ class _InventoryHomeState extends State<InventoryHome> {
     disabledMessage: disabledMessage,
   );
 
-  Widget _rapidizerButton({
+  Widget _exportInventoryButton({
     bool iconOnly = false,
     double iconOnlyWidth = 48,
     bool tight = false,
-    bool enabled = true,
-    String? disabledMessage,
-  }) => _glassQuickAction(
-    key: const Key('open-rapidizer'),
-    onPressed: enabled ? _openRapidizer : null,
-    icon: Icons.bolt_rounded,
-    label: 'RAPIDIZER',
-    iconOnly: iconOnly,
-    iconOnlyWidth: iconOnlyWidth,
-    tight: tight,
-    disabledMessage: disabledMessage,
+  }) => Tooltip(
+    message: 'Export inventory (CSV, XLSX, portable JSON)',
+    child: _glassQuickAction(
+      key: const Key('open-inventory-export'),
+      // Every role can see the inventory, so every role can export it.
+      onPressed: () => unawaited(exportInventory()),
+      icon: Icons.ios_share_rounded,
+      label: 'Export',
+      iconOnly: iconOnly,
+      iconOnlyWidth: iconOnlyWidth,
+      tight: tight,
+    ),
   );
 
   Widget _filamentColorsButton({
@@ -17892,7 +17882,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool enabled = true,
     String? disabledMessage,
   }) => Tooltip(
-    message: 'Bulk import or export inventory (CSV, XLSX, JSON, Rapidizer)',
+    message: 'Bulk import inventory (CSV, XLSX, JSON, Rapidizer)',
     child: Builder(
       builder: (buttonContext) => _glassQuickAction(
         key: const Key('open-inventory-json-import'),
@@ -20812,14 +20802,6 @@ class _InventoryHomeState extends State<InventoryHome> {
                       const SizedBox(width: 12),
                       addItem,
                       const SizedBox(width: 12),
-                      _rapidizerButton(
-                        iconOnly: iconOnly,
-                        iconOnlyWidth: iconOnlyWidth,
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
                       _filamentColorsButton(
                         iconOnly: iconOnly,
                         iconOnlyWidth: iconOnlyWidth,
@@ -20834,6 +20816,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                         tight: tightDesktop,
                         enabled: bottomActionsEnabled,
                         disabledMessage: disabledActionMessage,
+                      ),
+                      const SizedBox(width: 12),
+                      _exportInventoryButton(
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
                       ),
                     ];
                     if (iconOnly) {
@@ -20905,13 +20893,6 @@ class _InventoryHomeState extends State<InventoryHome> {
                                   const SizedBox(width: compactGap),
                                   compactAddItem,
                                   const SizedBox(width: compactGap),
-                                  _rapidizerButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
-                                  ),
-                                  const SizedBox(width: compactGap),
                                   _filamentColorsButton(
                                     iconOnly: true,
                                     iconOnlyWidth: fittedIconWidth,
@@ -20924,6 +20905,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                                     iconOnlyWidth: fittedIconWidth,
                                     enabled: bottomActionsEnabled,
                                     disabledMessage: disabledActionMessage,
+                                  ),
+                                  const SizedBox(width: compactGap),
+                                  _exportInventoryButton(
+                                    iconOnly: true,
+                                    iconOnlyWidth: fittedIconWidth,
                                   ),
                                 ],
                               ),

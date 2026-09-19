@@ -196,7 +196,7 @@ void main() {
   });
 
   for (final width in [360.0, 1280.0]) {
-    testWidgets('configured service LEDs fit beside logo at $width', (
+    testWidgets('only the Supabase LED sits beside the logo at $width', (
       tester,
     ) async {
       tester.view.physicalSize = Size(width, 900);
@@ -252,21 +252,13 @@ void main() {
       ).save(const MouserCredentials(apiKey: 'fixture'), pending: false);
       ServiceStatus.set('DigiKey:local', ConnectionStateLed.connected);
       await tester.pumpAndSettle();
-      expect(find.byType(ServiceStatusLed), findsNWidgets(3));
+      // Supplier integrations stay configured but show no light by the logo.
+      expect(find.byType(ServiceStatusLed), findsOneWidget);
+      expect(find.byTooltip(RegExp('^(DigiKey|Mouser)')), findsNothing);
       final logo = tester.getRect(find.byKey(const Key('inventorinator-logo')));
-      for (final element in find.byType(ServiceStatusLed).evaluate()) {
-        final rect = tester.getRect(find.byWidget(element.widget));
-        expect(rect.left, greaterThan(logo.right));
-        expect(rect.right, lessThanOrEqualTo(width));
-      }
-      expect(
-        find.byTooltip('DigiKey: Last connection succeeded'),
-        findsOneWidget,
-      );
-      store.save(const DigiKeyCredentials(), pending: false);
-      ServiceStatus.refresh();
-      await tester.pumpAndSettle();
-      expect(find.byType(ServiceStatusLed), findsNWidgets(2));
+      final led = tester.getRect(find.byType(ServiceStatusLed));
+      expect(led.left, greaterThan(logo.right));
+      expect(led.right, lessThanOrEqualTo(width));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       db.close();

@@ -42,7 +42,6 @@ import 'adafruit.dart';
 import 'adafruit_search_dialog.dart';
 import 'west3d_search_dialog.dart';
 import 'mouser.dart' hide safeProductLink;
-import 'mouser_credentials.dart';
 import 'mouser_settings.dart';
 import 'mouser_search_dialog.dart';
 import 'digikey_settings.dart';
@@ -16651,19 +16650,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             ? null
             : SupabaseConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final scope = digiKeyScope(config?.url ?? '', config?.workspaceId);
-        final digikey = database == null
-            ? null
-            : DigiKeyCredentialStore(database, scope).read();
-        final mouser = database == null
-            ? null
-            : MouserCredentialStore(database, scope).read();
+        // Supplier APIs (DigiKey, Mouser) only report a connection once a
+        // search runs, so their lights sat grey; their status stays in
+        // Remote Settings.
         final indicators = <Widget>[
-          if (mouser?.credentials.configured == true)
-            ServiceStatusLed(name: 'Mouser', statusKey: 'Mouser:$scope'),
           if (config?.isConfigured == true)
             ServiceStatusLed(name: 'Supabase', statusKey: 'Supabase:$scope'),
-          if (digikey?.credentials.configured == true)
-            ServiceStatusLed(name: 'DigiKey', statusKey: 'DigiKey:$scope'),
         ];
         return Padding(
           padding: EdgeInsets.fromLTRB(

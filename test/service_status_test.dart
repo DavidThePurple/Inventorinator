@@ -255,14 +255,18 @@ void main() {
       // Supplier integrations stay configured but show no light by the logo.
       expect(find.byType(ServiceStatusLed), findsOneWidget);
       expect(find.byTooltip(RegExp('^(DigiKey|Mouser)')), findsNothing);
-      final logo = tester.getRect(find.byKey(const Key('inventorinator-logo')));
       final led = tester.getRect(find.byType(ServiceStatusLed));
-      expect(led.left, greaterThan(logo.right));
-      // Right-aligned, clear of the default 16 px desktop scrollbar by 8 px.
-      expect(led.right, moreOrLessEquals(width - 24, epsilon: .5));
-      // The logo and title stay centred on the page.
       final title = tester.getRect(find.byKey(const Key('app-title-block')));
+      // The logo and title stay centred on the page.
       expect(title.center.dx, moreOrLessEquals(width / 2, epsilon: 1));
+      // The light floats halfway between the title and the right limit,
+      // which stays clear of the default 16 px desktop scrollbar by 8 px.
+      expect(led.left, greaterThan(title.right));
+      expect(led.right, lessThanOrEqualTo(width - 24));
+      expect(
+        led.center.dx,
+        moreOrLessEquals((title.right + 8 + width - 24) / 2, epsilon: 1),
+      );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       db.close();

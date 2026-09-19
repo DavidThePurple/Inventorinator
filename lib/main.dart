@@ -16951,9 +16951,10 @@ class _InventoryHomeState extends State<InventoryHome> {
           0.0,
           mainScrollbarWidth + 8 - horizontalPadding,
         );
+        // Minimum room kept for the lights beside the logo on narrow windows.
         final indicatorSpace = indicators.isEmpty
             ? 0.0
-            : math.min(180.0, constraints.maxWidth * .25);
+            : math.min(120.0, constraints.maxWidth * .2);
         return Padding(
           padding: EdgeInsets.fromLTRB(
             narrow ? 12 : 20,
@@ -16961,46 +16962,49 @@ class _InventoryHomeState extends State<InventoryHome> {
             narrow ? 12 : 20,
             4,
           ),
-          // The logo stays centred; status lights sit at the right edge, kept
-          // clear of the main scrollbar that overlays the page's right side.
-          child: SizedBox(
-            width: double.infinity,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: indicatorSpace),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: _headerIdentity(compactLogo: narrow),
+          // Equal flexible sides keep the logo centred. Status lights float
+          // halfway between the logo and the right edge, kept clear of the
+          // main scrollbar that overlays the page's right side.
+          child: Row(
+            children: [
+              const Expanded(child: SizedBox()),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: math.max(
+                    0,
+                    constraints.maxWidth - 2 * horizontalPadding - 2 * indicatorSpace,
                   ),
                 ),
-                if (indicators.isNotEmpty)
-                  Positioned(
-                    right: indicatorInset,
-                    child: SizedBox(
-                      width: indicatorSpace - indicatorInset - 8,
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerRight,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (final indicator in indicators)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 4,
-                                ),
-                                child: indicator,
-                              ),
-                          ],
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: _headerIdentity(compactLogo: narrow),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(left: 8, right: indicatorInset),
+                  child: indicators.isEmpty
+                      ? const SizedBox()
+                      : Center(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (final indicator in indicators)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                    ),
+                                    child: indicator,
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+                ),
+              ),
+            ],
           ),
         );
       },

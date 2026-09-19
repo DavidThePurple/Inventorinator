@@ -30,6 +30,8 @@ import 'kit_package.dart';
 import 'label_ocr.dart';
 import 'qr_scanner.dart';
 import 'renderer_preference.dart';
+import 'inventory_data_dialogs.dart';
+import 'inventory_spreadsheet.dart';
 import 'cloud_sync_dialog.dart';
 import 'supabase_sync.dart';
 import 'sync_onboarding_dialog.dart';
@@ -2698,6 +2700,7 @@ class RapidizerParseResult {
 
 class InventoryJsonDraft {
   const InventoryJsonDraft({
+    this.id = '',
     required this.rowNumber,
     required this.name,
     required this.typeName,
@@ -2714,8 +2717,12 @@ class InventoryJsonDraft {
     this.imageUrl = '',
     this.compatibility = const [],
     this.amsCompatible = false,
+    this.archived = false,
   });
 
+  /// Item ID from the source, used when it is not already taken so a
+  /// round trip through export and import keeps the same records.
+  final String id;
   final int rowNumber;
   final String name;
   final String typeName;
@@ -2732,6 +2739,7 @@ class InventoryJsonDraft {
   final String imageUrl;
   final List<String> compatibility;
   final bool amsCompatible;
+  final bool archived;
 }
 
 class InventoryJsonParseResult {
@@ -10818,164 +10826,422 @@ class _InventoryHomeState extends State<InventoryHome> {
     await _addItem(initialFilamentColor: selected);
   }
 
-  Future<bool> _importInventoryJson() async {
+  List<InventoryItem> _allInventoryItems() => _diskInventory == null
+      ? List.of(inventory)
+      : [for (var index = 0; index < inventory.length; index++) inventory[index]];
+
+  List<InventoryItem> _currentViewInventoryItems() {
+    if (_diskInventory == null) return List.of(visibleItems);
+    final filter = _inventorySqlFilter();
+    final count = widget.database!.inventoryCount(
+      where: filter.$1,
+      parameters: filter.$2,
+    );
+    return widget.database!
+        .inventoryPage(
+          where: filter.$1,
+          parameters: filter.$2,
+          orderBy: _inventorySqlOrder,
+          limit: count,
+          offset: 0,
+        )
+        .map(_decodeInventoryPayload)
+        .toList();
+  }
+
+  int _currentViewInventoryCount() {
+    if (_diskInventory == null) return visibleItems.length;
+    final filter = _inventorySqlFilter();
+    return widget.database!.inventoryCount(
+      where: filter.$1,
+      parameters: filter.$2,
+    );
+  }
+
+  Future<void> _showInventoryDataMenu(BuildContext buttonContext) async {
+    final box = buttonContext.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(buttonContext).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        topLeft & box.size,
+        Offset.zero & overlay.size,
+      ),
+      constraints: const BoxConstraints(minWidth: 240, maxWidth: 300),
+      items: [
+        PopupMenuItem(
+          value: 'import',
+          enabled: currentRole.canCreateInventory,
+          height: 52,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: const _PopupActionRow(
+            actionKey: 'inventory-import',
+            icon: Icons.file_upload_outlined,
+            label: 'Import CSV, XLSX or JSON…',
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'export',
+          height: 52,
+          padding: EdgeInsets.symmetric(horizontal: 12),
+          child: _PopupActionRow(
+            actionKey: 'inventory-export',
+            icon: Icons.ios_share_rounded,
+            label: 'Export inventory…',
+          ),
+        ),
+      ],
+    );
+    if (!mounted) return;
+    if (action == 'import') await _importInventoryFile();
+    if (action == 'export') await exportInventory();
+  }
+
+  /// Asks for a format and scope, then saves the inventory export.
+  @visibleForTesting
+  Future<void> exportInventory({
+    Future<String?> Function(String fileName, Uint8List bytes)? save,
+  }) async {
+    final allCount = inventory.length;
+    final filteredCount = _currentViewInventoryCount();
+    final choice = await showDialog<InventoryExportChoice>(
+      context: context,
+      builder: (_) => InventoryExportDialog(
+        allCount: allCount,
+        filteredCount: filteredCount,
+        filtersActive: filteredCount != allCount || query.trim().isNotEmpty,
+      ),
+    );
+    if (choice == null || !mounted) return;
+    final items = choice.filteredOnly
+        ? _currentViewInventoryItems()
+        : _allInventoryItems();
+    final Uint8List bytes = switch (choice.format) {
+      InventoryExportFormat.csv => Uint8List.fromList(
+        utf8.encode(
+          encodeCsv(
+            inventoryExportTable(items, typeLabel: _itemTypeDisplayLabel),
+          ),
+        ),
+      ),
+      InventoryExportFormat.xlsx => encodeXlsx(
+        inventoryExportTable(items, typeLabel: _itemTypeDisplayLabel),
+        sheetName: 'Inventory',
+      ),
+      InventoryExportFormat.json => Uint8List.fromList(
+        utf8.encode(
+          const JsonEncoder.withIndent('  ').convert(
+            portableInventoryDocument(
+              items,
+              typeLabel: _itemTypeDisplayLabel,
+              kits: choice.filteredOnly ? const [] : kits,
+              shoppingList: choice.filteredOnly ? const [] : shoppingList,
+            ),
+          ),
+        ),
+      ),
+    };
+    final date = DateTime.now().toIso8601String().substring(0, 10);
+    final fileName =
+        'inventorinator-inventory-$date.${choice.format.extension}';
+    try {
+      final destination = save != null
+          ? await save(fileName, bytes)
+          : await FilePicker.saveFile(
+              dialogTitle: 'Export inventory',
+              fileName: fileName,
+              bytes: bytes,
+            );
+      if (destination == null || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${items.length} items exported as ${choice.format.label}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
+    }
+  }
+
+  bool _inventoryContainsId(String id) =>
+      (_diskInventory?.indexOfId(id) ??
+          inventory.indexWhere((item) => item.id == id)) >=
+      0;
+
+  /// True when an imported row would repeat an existing item: the same ID,
+  /// or the same type and name.
+  bool _isImportDuplicate(InventoryJsonDraft draft, InventoryItem prepared) =>
+      (draft.id.trim().isNotEmpty && _inventoryContainsId(draft.id.trim())) ||
+      inventory.any(
+        (existing) =>
+            existing.type == prepared.type &&
+            _normalized(existing.name) == _normalized(prepared.name),
+      );
+
+  Future<bool> _importInventoryFile() async {
     if (!currentRole.canCreateInventory) {
       _showPermissionDenied('Your role cannot add inventory items.');
       return false;
     }
     final picked = await FilePicker.pickFile(
-      dialogTitle: 'Import inventory items from JSON',
+      dialogTitle: 'Import inventory from CSV, XLSX or JSON',
       type: FileType.custom,
-      allowedExtensions: const ['json'],
+      allowedExtensions: const ['csv', 'xlsx', 'json'],
     );
     if (picked == null || !mounted) return false;
     try {
-      final bytes = await picked.readAsBytes();
+      return await importInventoryData(await picked.readAsBytes(), picked.name);
+    } catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Import failed: $error')));
+      return false;
+    }
+  }
+
+  /// Imports inventory rows from CSV, XLSX or JSON [bytes]. Spreadsheets go
+  /// through column mapping first; every format then shares the same
+  /// validation, review and duplicate handling.
+  @visibleForTesting
+  Future<bool> importInventoryData(Uint8List bytes, String fileName) async {
+    final lowerName = fileName.toLowerCase();
+    final spreadsheet =
+        lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx');
+    final sourceLabel = lowerName.endsWith('.xlsx')
+        ? 'XLSX'
+        : lowerName.endsWith('.csv')
+        ? 'CSV'
+        : 'JSON';
+    try {
       if (bytes.length > 10 * 1024 * 1024) {
-        throw const FormatException('Inventory JSON must be 10 MB or smaller.');
+        throw const FormatException('Import files must be 10 MB or smaller.');
       }
-      final parsed = parseInventoryJson(utf8.decode(bytes));
+      final InventoryJsonParseResult parsed;
+      if (spreadsheet) {
+        final table = decodeInventorySpreadsheet(bytes, fileName);
+        final mapping = await showDialog<List<InventorySpreadsheetField?>>(
+          context: context,
+          builder: (_) =>
+              SpreadsheetMappingDialog(table: table, fileName: fileName),
+        );
+        if (mapping == null || !mounted) return false;
+        parsed = parseInventoryJson(
+          jsonEncode(spreadsheetRowsToInventoryJson(table, mapping)),
+        );
+      } else {
+        parsed = parseInventoryJson(utf8.decode(bytes));
+      }
       if (!parsed.isValid) {
         await _showInventoryJsonErrors(parsed.errors);
         return false;
       }
-      final prepared = prepareInventoryJsonImport(parsed.items);
+      var prepared = prepareInventoryJsonImport(parsed.items);
       if (prepared.errors.isNotEmpty) {
         await _showInventoryJsonErrors(prepared.errors);
         return false;
       }
       if (!mounted) return false;
-      final duplicateCount = prepared.items
-          .where(
-            (item) => inventory.any(
-              (existing) =>
-                  existing.type == item.type &&
-                  _normalized(existing.name) == _normalized(item.name),
-            ),
-          )
-          .length;
+      // Drafts and prepared items line up one to one once there are no errors.
+      final duplicates = <int>{
+        for (var index = 0; index < prepared.items.length; index++)
+          if (_isImportDuplicate(parsed.items[index], prepared.items[index]))
+            index,
+      };
+      final duplicateCount = duplicates.length;
       final imageCount = parsed.items
           .where((draft) => draft.imageUrl.isNotEmpty)
           .length;
+      var skipDuplicates = true;
+      final reviewItems = prepared.items;
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Row(
-            children: [
-              const Icon(Icons.data_object_rounded),
-              const SizedBox(width: 10),
-              Expanded(child: Text('Import ${prepared.items.length} items?')),
-            ],
-          ),
-          content: SizedBox(
-            width: 720,
-            height: 600,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setDialogState) => AlertDialog(
+            title: Row(
               children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Chip(label: Text('${prepared.items.length} new items')),
-                    if (prepared.newMaterials.isNotEmpty)
-                      Chip(
-                        label: Text(
-                          '${prepared.newMaterials.length} new materials',
-                        ),
-                      ),
-                    if (prepared.newVendors.isNotEmpty)
-                      Chip(
-                        label: Text(
-                          '${prepared.newVendors.length} new vendors',
-                        ),
-                      ),
-                    if (prepared.newBrands.isNotEmpty)
-                      Chip(
-                        label: Text('${prepared.newBrands.length} new brands'),
-                      ),
-                    if (prepared.updatedBrands.isNotEmpty ||
-                        prepared.updatedVendors.isNotEmpty)
-                      Chip(
-                        label: Text(
-                          '${prepared.updatedBrands.length + prepared.updatedVendors.length} catalog links updated',
-                        ),
-                      ),
-                    if (imageCount > 0)
-                      Chip(label: Text('$imageCount product images')),
-                    if (duplicateCount > 0)
-                      Chip(
-                        avatar: const Icon(
-                          Icons.warning_amber_rounded,
-                          size: 18,
-                        ),
-                        label: Text('$duplicateCount possible duplicates'),
-                      ),
-                  ],
+                Icon(
+                  spreadsheet
+                      ? Icons.table_chart_outlined
+                      : Icons.data_object_rounded,
                 ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Every row creates a new inventory item. Review possible duplicates before importing.',
-                  style: TextStyle(color: Color(0xffaeb5c5)),
-                ),
-                const SizedBox(height: 10),
-                const Divider(height: 1),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: ListView.separated(
-                    itemCount: prepared.items.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final item = prepared.items[index];
-                      final duplicate = inventory.any(
-                        (existing) =>
-                            existing.type == item.type &&
-                            _normalized(existing.name) ==
-                                _normalized(item.name),
-                      );
-                      return ListTile(
-                        dense: true,
-                        leading: Icon(
-                          duplicate
-                              ? Icons.warning_amber_rounded
-                              : _typeIcon(item.type),
-                          color: duplicate ? const Color(0xffffc15c) : null,
-                        ),
-                        title: Text(item.name),
-                        subtitle: Text(
-                          [
-                            _itemTypeDisplayLabel(item),
-                            if (item.materialName.isNotEmpty) item.materialName,
-                            'qty ${_formatBomQuantity(item.quantity)}',
-                            '\$${item.cost.toStringAsFixed(2)}',
-                            if (duplicate) 'Possible duplicate',
-                          ].join(' · '),
-                        ),
-                      );
-                    },
-                  ),
+                  child: Text('Import ${reviewItems.length} items?'),
                 ),
               ],
             ),
+            content: SizedBox(
+              width: 720,
+              height: 600,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Chip(label: Text('${reviewItems.length} rows')),
+                      if (prepared.newMaterials.isNotEmpty)
+                        Chip(
+                          label: Text(
+                            '${prepared.newMaterials.length} new materials',
+                          ),
+                        ),
+                      if (prepared.newVendors.isNotEmpty)
+                        Chip(
+                          label: Text(
+                            '${prepared.newVendors.length} new vendors',
+                          ),
+                        ),
+                      if (prepared.newBrands.isNotEmpty)
+                        Chip(
+                          label: Text(
+                            '${prepared.newBrands.length} new brands',
+                          ),
+                        ),
+                      if (prepared.updatedBrands.isNotEmpty ||
+                          prepared.updatedVendors.isNotEmpty)
+                        Chip(
+                          label: Text(
+                            '${prepared.updatedBrands.length + prepared.updatedVendors.length} catalog links updated',
+                          ),
+                        ),
+                      if (imageCount > 0)
+                        Chip(label: Text('$imageCount product images')),
+                      if (duplicateCount > 0)
+                        Chip(
+                          avatar: const Icon(
+                            Icons.warning_amber_rounded,
+                            size: 18,
+                          ),
+                          label: Text('$duplicateCount possible duplicates'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (duplicateCount == 0)
+                    const Text(
+                      'Every row creates a new inventory item.',
+                      style: TextStyle(color: Color(0xffaeb5c5)),
+                    )
+                  else ...[
+                    const Text(
+                      'Possible duplicates share an item ID, or a type and name, with existing inventory.',
+                      style: TextStyle(color: Color(0xffaeb5c5)),
+                    ),
+                    const SizedBox(height: 8),
+                    SegmentedButton<bool>(
+                      key: const Key('inventory-import-duplicates'),
+                      segments: [
+                        ButtonSegment(
+                          value: true,
+                          icon: const Icon(Icons.filter_alt_off_outlined),
+                          label: Text('Skip $duplicateCount duplicates'),
+                        ),
+                        const ButtonSegment(
+                          value: false,
+                          icon: Icon(Icons.library_add_outlined),
+                          label: Text('Import them as new items'),
+                        ),
+                      ],
+                      selected: {skipDuplicates},
+                      onSelectionChanged: (selection) => setDialogState(
+                        () => skipDuplicates = selection.single,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: reviewItems.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = reviewItems[index];
+                        final duplicate = duplicates.contains(index);
+                        final skipped = duplicate && skipDuplicates;
+                        return Opacity(
+                          opacity: skipped ? .45 : 1,
+                          child: ListTile(
+                            key: Key('inventory-import-row-$index'),
+                            dense: true,
+                            leading: Icon(
+                              duplicate
+                                  ? Icons.warning_amber_rounded
+                                  : _typeIcon(item.type),
+                              color: duplicate
+                                  ? const Color(0xffffc15c)
+                                  : null,
+                            ),
+                            title: Text(item.name),
+                            subtitle: Text(
+                              [
+                                _itemTypeDisplayLabel(item),
+                                if (item.materialName.isNotEmpty)
+                                  item.materialName,
+                                'qty ${_formatBomQuantity(item.quantity)}',
+                                '\$${item.cost.toStringAsFixed(2)}',
+                                if (item.archived) 'Archived',
+                                if (duplicate)
+                                  skipped
+                                      ? 'Possible duplicate · skipped'
+                                      : 'Possible duplicate',
+                              ].join(' · '),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                key: const Key('confirm-inventory-json-import'),
+                onPressed:
+                    skipDuplicates && duplicateCount == reviewItems.length
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.file_download_done_outlined),
+                label: Text(
+                  'Import ${skipDuplicates ? reviewItems.length - duplicateCount : reviewItems.length} items',
+                ),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              key: const Key('confirm-inventory-json-import'),
-              onPressed: () => Navigator.pop(dialogContext, true),
-              icon: const Icon(Icons.file_download_done_outlined),
-              label: const Text('Import items'),
-            ),
-          ],
         ),
       );
       if (confirmed != true || !mounted) return false;
+      var drafts = parsed.items;
+      if (skipDuplicates && duplicates.isNotEmpty) {
+        drafts = [
+          for (var index = 0; index < drafts.length; index++)
+            if (!duplicates.contains(index)) drafts[index],
+        ];
+        // Re-prepare so skipped rows add no materials, vendors or brands.
+        prepared = prepareInventoryJsonImport(drafts);
+      }
+      final keptImageCount = drafts
+          .where((draft) => draft.imageUrl.isNotEmpty)
+          .length;
       var importedItems = prepared.items;
       var importedImageCount = 0;
       var failedImageCount = 0;
-      if (imageCount > 0) {
+      if (keptImageCount > 0) {
         final imageProgress = ValueNotifier<int>(0);
         final progressDialog = showDialog<void>(
           context: context,
@@ -10993,10 +11259,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       LinearProgressIndicator(
-                        value: imageCount == 0 ? null : completed / imageCount,
+                        value: completed / keptImageCount,
                       ),
                       const SizedBox(height: 12),
-                      Text('$completed of $imageCount images'),
+                      Text('$completed of $keptImageCount images'),
                     ],
                   ),
                 ),
@@ -11007,7 +11273,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         await WidgetsBinding.instance.endOfFrame;
         final imageResult = await downloadInventoryJsonImages(
           prepared.items,
-          parsed.items,
+          drafts,
           onProgress: (completed, _) => imageProgress.value = completed,
         );
         importedItems = imageResult.items;
@@ -11041,7 +11307,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           _recordAddition(item);
           _recordAudit('import', 'inventory', item.id, {
             'name': item.name,
-            'source': 'JSON',
+            'source': sourceLabel,
           });
         }
         currentPage = 0;
@@ -11052,7 +11318,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         SnackBar(
           content: Text(
             [
-              '${prepared.items.length} inventory items imported.',
+              '${importedItems.length} inventory items imported.',
+              if (skipDuplicates && duplicateCount > 0)
+                '$duplicateCount duplicates skipped.',
               if (importedImageCount > 0) '$importedImageCount images added.',
               if (failedImageCount > 0)
                 '$failedImageCount images could not be downloaded.',
@@ -11064,13 +11332,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     } on FormatException catch (error) {
       if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('JSON import failed: ${error.message}')),
+        SnackBar(content: Text('$sourceLabel import failed: ${error.message}')),
       );
-      return false;
-    } catch (error) {
-      if (!mounted) return false;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('JSON import failed: $error')));
       return false;
     }
   }
@@ -11096,6 +11359,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final updatedBrands = <String, BrandRecord>{};
     final errors = <String>[];
     final now = DateTime.now();
+    final usedIds = <String>{};
     for (final draft in drafts) {
       final customType = customItemTypes
           .where(
@@ -11235,9 +11499,18 @@ class _InventoryHomeState extends State<InventoryHome> {
           : draft.color.startsWith('#')
           ? ''
           : draft.color;
+      // Keep the source's ID when it is free so an exported inventory
+      // re-imports as the same records.
+      final draftId = draft.id.trim();
+      final id =
+          draftId.isNotEmpty &&
+              !_inventoryContainsId(draftId) &&
+              usedIds.add(draftId)
+          ? draftId
+          : _newInventoryId();
       preparedItems.add(
         InventoryItem(
-          id: _newInventoryId(),
+          id: id,
           name: draft.name,
           type: type,
           customTypeId: customType?.id ?? '',
@@ -11257,6 +11530,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           barcode: draft.barcode,
           productUrl: draft.productUrl,
           amsCompatible: type == InventoryType.filament && draft.amsCompatible,
+          archived: draft.archived,
         ),
       );
     }
@@ -17602,18 +17876,20 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool enabled = true,
     String? disabledMessage,
   }) => Tooltip(
-    message: 'Import inventory items from JSON',
-    child: _glassQuickAction(
-      key: const Key('open-inventory-json-import'),
-      onPressed: enabled && currentRole.canCreateInventory
-          ? _importInventoryJson
-          : null,
-      icon: Icons.data_object_rounded,
-      label: 'JSON',
-      iconOnly: iconOnly,
-      iconOnlyWidth: iconOnlyWidth,
-      tight: tight,
-      disabledMessage: disabledMessage,
+    message: 'Import or export inventory (CSV, XLSX, JSON)',
+    child: Builder(
+      builder: (buttonContext) => _glassQuickAction(
+        key: const Key('open-inventory-json-import'),
+        onPressed: enabled
+            ? () => unawaited(_showInventoryDataMenu(buttonContext))
+            : null,
+        icon: Icons.import_export_rounded,
+        label: 'Data',
+        iconOnly: iconOnly,
+        iconOnlyWidth: iconOnlyWidth,
+        tight: tight,
+        disabledMessage: disabledMessage,
+      ),
     ),
   );
 
@@ -33287,6 +33563,122 @@ InventoryType? smartMatchInventoryType(
   return !tied && bestDistance <= allowedDistance ? bestType : null;
 }
 
+/// Identifies Inventorinator's portable JSON export. Importers reject a
+/// newer [portableInventoryVersion] rather than guessing at its layout.
+const portableInventoryFormat = 'inventorinator-portable';
+const portableInventoryVersion = 1;
+
+/// Spreadsheet columns written on export. Their headers are the importer's
+/// field labels, so an exported sheet maps back automatically.
+final inventoryExportFields = [
+  for (final field in InventorySpreadsheetField.values)
+    if (field != InventorySpreadsheetField.imageUrl) field,
+];
+
+Object _exportNumber(double value) =>
+    value == value.roundToDouble() && value.abs() < 1e15 ? value.toInt() : value;
+
+Object? _inventoryExportValue(
+  InventoryItem item,
+  InventorySpreadsheetField field,
+  String typeLabel, {
+  required bool spreadsheet,
+}) => switch (field) {
+  InventorySpreadsheetField.id => item.id,
+  InventorySpreadsheetField.name => item.name,
+  InventorySpreadsheetField.type => typeLabel,
+  InventorySpreadsheetField.quantity => _exportNumber(item.quantity),
+  InventorySpreadsheetField.cost => _exportNumber(item.cost),
+  InventorySpreadsheetField.material => item.materialName,
+  InventorySpreadsheetField.color => item.itemColorName,
+  InventorySpreadsheetField.colorName => item.itemColorLabel,
+  InventorySpreadsheetField.brand => item.brand,
+  InventorySpreadsheetField.vendor => item.vendor,
+  InventorySpreadsheetField.storageLocation => item.storageLocation,
+  InventorySpreadsheetField.barcode => item.barcode,
+  InventorySpreadsheetField.productUrl => item.productUrl,
+  InventorySpreadsheetField.imageUrl => '',
+  InventorySpreadsheetField.compatibility =>
+    spreadsheet ? item.compatibility.join('; ') : item.compatibility,
+  InventorySpreadsheetField.amsCompatible => item.amsCompatible,
+  InventorySpreadsheetField.archived => item.archived,
+};
+
+/// The header row and one row per item, for CSV and XLSX export.
+List<List<Object?>> inventoryExportTable(
+  Iterable<InventoryItem> items, {
+  required String Function(InventoryItem item) typeLabel,
+}) => [
+  [for (final field in inventoryExportFields) field.label],
+  for (final item in items)
+    [
+      for (final field in inventoryExportFields)
+        _inventoryExportValue(item, field, typeLabel(item), spreadsheet: true),
+    ],
+];
+
+/// A versioned, self-describing export. `items` re-imports through the
+/// inventory importer; kits and the shopping list travel with it for other
+/// tools. Connection settings and credentials are never included.
+Map<String, Object?> portableInventoryDocument(
+  Iterable<InventoryItem> items, {
+  required String Function(InventoryItem item) typeLabel,
+  Iterable<KitRecord> kits = const [],
+  Iterable<ShoppingListEntry> shoppingList = const [],
+  DateTime? exportedAt,
+}) => {
+  'format': portableInventoryFormat,
+  'version': portableInventoryVersion,
+  'exportedAt': (exportedAt ?? DateTime.now()).toUtc().toIso8601String(),
+  'items': [
+    for (final item in items)
+      {
+        for (final field in inventoryExportFields)
+          field.key: _inventoryExportValue(
+            item,
+            field,
+            typeLabel(item),
+            spreadsheet: false,
+          ),
+      },
+  ],
+  if (kits.isNotEmpty)
+    'kits': [
+      for (final kit in kits)
+        {
+          'id': kit.id,
+          'name': kit.name,
+          'sections': kit.sections,
+          'bom': [
+            for (final line in kit.bom)
+              {
+                'id': line.id,
+                'productId': line.productId,
+                'name': ?line.name,
+                'quantity': _exportNumber(line.quantity),
+                'section': line.section,
+              },
+          ],
+        },
+    ],
+  if (shoppingList.isNotEmpty)
+    'shoppingList': [
+      for (final entry in shoppingList)
+        {
+          'id': entry.id,
+          'name': entry.name,
+          'productId': entry.productId,
+          'quantityNeeded': _exportNumber(entry.quantityNeeded),
+          'quantityOrdered': _exportNumber(entry.quantityOrdered),
+          'quantityReceived': _exportNumber(entry.quantityReceived),
+          'kitId': ?entry.kitId,
+          'bomLineId': ?entry.bomLineId,
+          'sourceUrl': entry.sourceUrl,
+          'status': entry.status.name,
+        },
+    ],
+};
+
 InventoryJsonParseResult parseInventoryJson(String source) {
   Object? decoded;
   try {
@@ -33305,6 +33697,18 @@ InventoryJsonParseResult parseInventoryJson(String source) {
       for (final entry in decoded.entries)
         _normalizeJsonColumn(entry.key.toString()): entry.value,
     };
+    final version = normalizedRoot['version'];
+    if (normalizedRoot['format'] == portableInventoryFormat &&
+        version is num &&
+        version > portableInventoryVersion) {
+      return InventoryJsonParseResult(
+        items: const [],
+        errors: [
+          'This file was exported by a newer Inventorinator '
+              '(portable format v$version). Update the app to import it.',
+        ],
+      );
+    }
     final collection =
         normalizedRoot['items'] ??
         normalizedRoot['inventory'] ??
@@ -33402,6 +33806,7 @@ InventoryJsonParseResult parseInventoryJson(String source) {
     }
     items.add(
       InventoryJsonDraft(
+        id: _jsonText(_jsonRowValue(row, const ['id', 'itemid', 'inventoryid'])),
         rowNumber: rowNumber,
         name: name,
         typeName: _jsonText(
@@ -33469,6 +33874,7 @@ InventoryJsonParseResult parseInventoryJson(String source) {
             'ams',
           ]),
         ),
+        archived: _jsonBool(_jsonRowValue(row, const ['archived', 'isarchived'])),
       ),
     );
   }

@@ -51,6 +51,10 @@ dependencies:
   camera_windows: ^0.2.6+5
   google_mlkit_text_recognition: ^0.17.1
   pdf: ^3.13.0
+  # XLSX import/export: already resolved via image/pdf; listed directly
+  # because lib/inventory_spreadsheet.dart imports them.
+  archive: ^4.0.9
+  xml: ^7.0.1
   printing: ^5.15.0
   markdown_editor_live: ^0.6.0
 dev_dependencies:

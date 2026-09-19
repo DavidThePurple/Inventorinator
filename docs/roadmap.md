@@ -540,7 +540,22 @@ Status: to do; build on the existing onboarding and Help entry points.
 
 ### Spreadsheet import/export and portable JSON
 
-Status: to do; review existing data-transfer features before extending them.
+Status: shipped in alpha.2 for inventory items. The bottom bar's Data button
+imports CSV, XLSX or JSON and exports CSV, XLSX or portable JSON. Spreadsheet
+imports get a column-matching step (guessed from headers, one field per column,
+live preview, Name required); every format then shares the JSON importer's
+validation and review, with an explicit choice to skip possible duplicates
+(same item ID, or same type and name) or import them as new items. Item IDs
+are kept when free, so export and re-import is a lossless round trip for the
+exported fields; tests cover CSV, XLSX and portable JSON, and exported XLSX was
+checked against LibreOffice in both directions. Portable JSON is versioned
+(`inventorinator-portable` v1), rejects newer versions, and also carries kits
+and the shopping list; no connection settings are exported. Export scope is
+either all items (including archived) or the current view.
+
+Remaining: import kits and shopping lists from portable JSON (they are
+exported only), export product images or image URLs, and keep storage
+location links (locations travel as text).
 
 - Support spreadsheet import/export, including CSV and XLSX, and portable JSON
   export for inventory and relevant kit/shopping-list data.

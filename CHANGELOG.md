@@ -24,6 +24,8 @@ All notable changes to Inventorinator will be recorded here.
 
 ### Added
 
+- The bottom bar's Data button imports CSV, XLSX or JSON and exports CSV, XLSX or versioned portable JSON (which also carries kits and the shopping list). Spreadsheet imports start with a column-matching preview, every import offers to skip or keep possible duplicates, and item IDs survive an export and re-import.
+
 - Personalization > Visual effects > Renderer chooses Skia or Impeller for the next launch. Linux defaults to Skia, which scrolls about four times faster there; Windows and Android keep Impeller.
 
 - On Linux and Windows, tapping a text field on a touchscreen shows the on-screen keyboard.

@@ -10670,7 +10670,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   IconData _filamentStatusIcon(FilamentStatus status) => switch (status) {
     FilamentStatus.ready => Icons.check_rounded,
     FilamentStatus.deployed => Icons.lock_outline_rounded,
-    FilamentStatus.drying => Icons.water_drop_outlined,
+    FilamentStatus.drying => Icons.local_fire_department_rounded,
     FilamentStatus.queuedForDrying => Icons.water_drop_rounded,
   };
 
@@ -34203,7 +34203,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
             _statusChip(
               FilamentStatus.drying,
               'Drying',
-              Icons.water_drop_outlined,
+              Icons.local_fire_department_rounded,
               const Color(0xffffa552),
             ),
             _statusChip(
@@ -38617,7 +38617,7 @@ class CountdownRing extends StatelessWidget {
                   children: [
                     Icon(
                       active
-                          ? Icons.water_drop_outlined
+                          ? Icons.local_fire_department_rounded
                           : queued
                           ? Icons.water_drop_rounded
                           : deployed

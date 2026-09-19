@@ -10883,6 +10883,17 @@ class _InventoryHomeState extends State<InventoryHome> {
             label: 'Import CSV, XLSX or JSON…',
           ),
         ),
+        PopupMenuItem(
+          value: 'rapidizer',
+          enabled: currentRole.canCreateInventory,
+          height: 52,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: const _PopupActionRow(
+            actionKey: 'inventory-rapidizer',
+            icon: Icons.bolt_rounded,
+            label: 'Rapidizer…',
+          ),
+        ),
         const PopupMenuItem(
           value: 'export',
           height: 52,
@@ -10897,6 +10908,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (!mounted) return;
     if (action == 'import') await _importInventoryFile();
+    if (action == 'rapidizer') await _openRapidizer();
     if (action == 'export') await exportInventory();
   }
 
@@ -17880,15 +17892,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool enabled = true,
     String? disabledMessage,
   }) => Tooltip(
-    message: 'Import or export inventory (CSV, XLSX, JSON)',
+    message: 'Bulk import or export inventory (CSV, XLSX, JSON, Rapidizer)',
     child: Builder(
       builder: (buttonContext) => _glassQuickAction(
         key: const Key('open-inventory-json-import'),
         onPressed: enabled
             ? () => unawaited(_showInventoryDataMenu(buttonContext))
             : null,
-        icon: Icons.import_export_rounded,
-        label: 'Data',
+        icon: Icons.table_chart_rounded,
+        label: 'Bulk Import',
         iconOnly: iconOnly,
         iconOnlyWidth: iconOnlyWidth,
         tight: tight,

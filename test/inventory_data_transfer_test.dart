@@ -238,6 +238,28 @@ void main() {
     expect(await result, isFalse);
   });
 
+  testWidgets('Bulk Import flyout offers import, Rapidizer and export', (
+    tester,
+  ) async {
+    await pumpHome(tester);
+    final button = find.byKey(const Key('open-inventory-json-import'));
+    expect(
+      find.descendant(of: button, matching: find.text('Bulk Import')),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('Import CSV, XLSX or JSON…'), findsOneWidget);
+    expect(find.text('Rapidizer…'), findsOneWidget);
+    expect(find.text('Export inventory…'), findsOneWidget);
+
+    await tester.tap(find.text('Rapidizer…'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RapidizerDialog), findsOneWidget);
+  });
+
   testWidgets('export writes the chosen format and scope', (tester) async {
     final dynamic home = await pumpHome(tester);
     String? savedName;

@@ -540,7 +540,7 @@ Status: to do; build on the existing onboarding and Help entry points.
 
 ### Spreadsheet import/export and portable JSON
 
-Status: shipped in alpha.2 for inventory items. The bottom bar's Data button
+Status: shipped in alpha.2 for inventory items. The bottom bar's Bulk Import button
 imports CSV, XLSX or JSON and exports CSV, XLSX or portable JSON. Spreadsheet
 imports get a column-matching step (guessed from headers, one field per column,
 live preview, Name required); every format then shares the JSON importer's

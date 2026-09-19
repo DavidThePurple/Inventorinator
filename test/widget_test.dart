@@ -7832,6 +7832,58 @@ Bed Temperature: 80°C
     await tester.pumpWidget(mountedRing());
     expect(find.byKey(ValueKey('status-ring-${item.id}')), findsOneWidget);
   });
+  testWidgets('card countdown rings tick without the card rebuilding', (
+    tester,
+  ) async {
+    final started = DateTime(2026, 8, 25, 12);
+    addTearDown(() => countdownClock.debugNow = null);
+    countdownClock.debugNow = started;
+    final item = sampleInventory.first.copyWith(
+      id: 'INV-TICKING-RING',
+      filamentStatus: FilamentStatus.drying,
+      dryingMinutes: 300,
+      dryingRemaining: 300,
+      dryingStartedAt: started,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 286,
+            child: InventoryCard(item: item, onOpen: () {}, onAction: (_) {}),
+          ),
+        ),
+      ),
+    );
+    final ring = find.byKey(const Key('inventory-card-timer-INV-TICKING-RING'));
+    expect(tester.getSemantics(ring).value, '300 minutes');
+    final card = tester.widget<InventoryCard>(find.byType(InventoryCard));
+
+    countdownClock.debugNow = started.add(const Duration(minutes: 61));
+    await tester.pump();
+    expect(tester.getSemantics(ring).value, '239 minutes');
+    expect(
+      identical(tester.widget<InventoryCard>(find.byType(InventoryCard)), card),
+      isTrue,
+    );
+  });
+
+  testWidgets('the countdown clock only runs while a ring listens', (
+    tester,
+  ) async {
+    final clock = CountdownClock();
+    var ticks = 0;
+    void listener() => ticks++;
+    clock.addListener(listener);
+    await tester.pump(const Duration(seconds: 25));
+    expect(ticks, 2);
+    // A timer left running would also fail the test when it ends.
+    clock.removeListener(listener);
+    await tester.pump(const Duration(minutes: 1));
+    expect(ticks, 2);
+  });
+
   test('drying countdown derives remaining time from its start timestamp', () {
     final started = DateTime(2026, 8, 25, 12);
     final item = sampleInventory.first.copyWith(

@@ -38415,18 +38415,65 @@ class InventoryRow extends StatelessWidget {
   );
 }
 
+/// Shared clock for card countdown rings.
+///
+/// A ring works out its remaining drying and moisture time when it builds,
+/// so it needs regular rebuilds. One timer, running only while a ring is on
+/// screen, rebuilds just the rings rather than whole cards; scrolling no
+/// longer rebuilds cards, so it cannot be relied on to refresh them.
+class CountdownClock extends ChangeNotifier
+    implements ValueListenable<DateTime> {
+  CountdownClock({this.interval = const Duration(seconds: 10)});
+
+  final Duration interval;
+  Timer? _timer;
+  DateTime? _fixedNow;
+
+  @override
+  DateTime get value => _fixedNow ?? DateTime.now();
+
+  /// Pins the time rings see, or restores the real clock when null.
+  @visibleForTesting
+  set debugNow(DateTime? now) {
+    _fixedNow = now;
+    notifyListeners();
+  }
+
+  @override
+  void addListener(VoidCallback listener) {
+    super.addListener(listener);
+    _timer ??= Timer.periodic(interval, (_) => notifyListeners());
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (!hasListeners) {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+}
+
+final countdownClock = CountdownClock();
+
 class CountdownRing extends StatelessWidget {
   const CountdownRing({super.key, required this.item, this.compact = false});
   final InventoryItem item;
   final bool compact;
   @override
-  Widget build(BuildContext context) {
-    final dryingRemaining = _dryingTimeRemaining(item);
-    final remaining = dryingMinutesRemaining(item);
+  Widget build(BuildContext context) => ValueListenableBuilder<DateTime>(
+    valueListenable: countdownClock,
+    builder: (context, now, _) => _buildRing(context, now),
+  );
+
+  Widget _buildRing(BuildContext context, DateTime now) {
+    final dryingRemaining = _dryingTimeRemaining(item, now: now);
+    final remaining = dryingMinutesRemaining(item, now: now);
     final total = item.dryingMinutes;
     final filament = item.type == InventoryType.filament;
     final lowStock = _isLowStock(item);
-    final moistureRemaining = _moistureRemaining(item);
+    final moistureRemaining = _moistureRemaining(item, now: now);
     final active =
         filament &&
         item.filamentStatus == FilamentStatus.drying &&
@@ -38450,7 +38497,7 @@ class CountdownRing extends StatelessWidget {
     final progress = active
         ? (1 - (dryingRemaining.inSeconds / (total * 60))).clamp(0.0, 1.0)
         : moistureRemaining != null
-        ? moistureLifeProgress(item)
+        ? moistureLifeProgress(item, now: now)
         : 1.0;
     final size = compact ? 46.0 : 58.0;
     final statusColor = active
@@ -38464,7 +38511,7 @@ class CountdownRing extends StatelessWidget {
         : lowStock
         ? const Color(0xffffc857)
         : const Color(0xff45d2bd);
-    final moistureLabel = _moistureRemainingLabel(item);
+    final moistureLabel = _moistureRemainingLabel(item, now: now);
     final lightTheme = Theme.of(context).brightness == Brightness.light;
     final statusHsl = HSLColor.fromColor(statusColor);
     final baseTone = statusHsl

@@ -6,6 +6,8 @@ All notable changes to Inventorinator will be recorded here.
 
 ### Fixed
 
+- Deleting a kit returns the parts its unfinished builds had reserved to available stock. The builds and the parts they already used are kept.
+
 - Scrolling a large inventory window no longer rebuilds every visible card on each frame; a maximized 2560×1440 window builds frames about 20× faster. Card −/+ quantity buttons are lighter to build and keep their tooltip, hover, keyboard and disabled behavior.
 
 - Changing an item's quantity no longer blanks its photo card.

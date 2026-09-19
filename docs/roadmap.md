@@ -191,11 +191,23 @@ Implementation status: complete in the current v0.2 development branch.
   consequences before creating either.
 - Keep onboarding skippable, resumable, and available again from Help.
 
-### Windows camera compatibility and recovery
+### Windows and Linux camera compatibility and recovery
 
-Implementation status: verified in build 10. The Z13-KJP front and rear
+Implementation status: Windows verified in build 10. The Z13-KJP front and rear
 cameras work, and XREAL integration has been verified. Keep the diagnostics and
 recovery requirements below as regression coverage for future camera changes.
+
+Linux webcams were fixed in alpha.2 and verified with a Logitech C270
+(fixed focus) and C930e:
+
+- MJPEG frames that omit Huffman tables (common on UVC webcams) are decoded by
+  inserting the standard tables; previously no C270 frame could be read.
+- Find mode decodes QR codes only and Ingest ignores GS1 DataBar, which webcam
+  sensor noise produced as phantom reads that ended the scan.
+- A rejected code no longer stops scanning, and soft frames get an unsharp-mask
+  retry before giving up.
+- Cameras without focus control skip the focus sweep; while scanning, in-camera
+  sharpening is raised and exposure capped at one frame, then restored.
 
 - Retain the verified ROG Flow Z13 Kojima Edition (`z13-kjp`) front/rear and
   XREAL workflows as camera regression cases.
@@ -219,8 +231,12 @@ camera-claim regressions.
 
 ### Print-ready PDF lists
 
-Implementation status: not started. This must land before external attachment
-storage so users have printable, portable shopping and kit lists first.
+Implementation status: shipped in alpha.2. Reports and change log → Reports /
+printable lists generates a shopping list (done, needed, ordered, received,
+still needed, status, source) and per-kit shortage lists (nested kits expanded,
+buildable count, existing reservations excluded) as PDFs, rendered locally in a
+worker isolate with preview, save, share and print and no Remote Sync needed.
+Remaining: optional locations and notes on shopping-list rows.
 
 - Generate a print-ready PDF shopping list with item names, quantities, units,
   optional locations, notes, and checkboxes.
@@ -539,7 +555,14 @@ Status: to do; review existing data-transfer features before extending them.
 
 ### Kit deletion returns items to inventory
 
-Status: correctness verification required; fix any failures found.
+Status: fixed in alpha.2. Kits never held stock themselves; unfinished builds
+reserve the parts they still need, and deleting a kit kept its builds and their
+reservations, so those parts never became available again. Only builds whose
+kit still exists now reserve stock. Deleted kits' builds keep their records and
+the parts already used (never recreated), and because availability is derived
+rather than stored, the release is exactly once, persists across restarts and
+follows the kit's deletion through Remote Sync. Covered by a regression test
+spanning a shared part, a partially used build and a restart.
 
 - Ensure deleting a kit returns its held/reserved items to the main inventory
   and makes them visible and available again without deleting their records.

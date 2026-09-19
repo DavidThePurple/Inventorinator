@@ -7544,7 +7544,7 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('delete-kit')));
     await tester.pumpAndSettle();
-    expect(find.text('You have 1 build in progress.'), findsOneWidget);
+    expect(find.textContaining('You have 1 build in progress.'), findsOneWidget);
     expect(find.text('Delete Kit (permanent)'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
@@ -7563,6 +7563,111 @@ Bed Temperature: 80°C
       find.byKey(const Key('catalog-record-BUILD-ACTIVE')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('deleting a kit returns its reserved parts to stock once', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    // Five bolts; kit A's unfinished build has used one (stock is now four)
+    // and still reserves the other two it needs.
+    final bolts = InventoryItem(
+      id: 'INV-BOLT',
+      name: 'M4 bolt',
+      type: InventoryType.fastener,
+      compatibility: const [],
+      added: DateTime(2026),
+      cost: 0,
+      color: Colors.grey,
+      quantity: 4,
+    );
+    KitRecord kit(String id) => KitRecord(
+      id: id,
+      name: 'Kit $id',
+      added: DateTime(2027),
+      bom: const [
+        KitBomEntry(
+          id: 'LINE-BOLT',
+          productId: 'INV-BOLT',
+          quantity: 3,
+          name: 'M4 bolt',
+          section: 'Frame',
+        ),
+      ],
+    );
+    final build = BuildRecord(
+      id: 'BUILD-A',
+      kitId: 'KIT-A',
+      name: 'Kit A build',
+      createdAt: DateTime(2026, 6),
+      createdBy: 'Linux workstation',
+      lines: const [
+        BuildLine(
+          id: 'LINE-BOLT',
+          productId: 'INV-BOLT',
+          name: 'M4 bolt',
+          section: 'Frame',
+          requiredQuantity: 3,
+          usedQuantity: 1,
+          consumedInventoryIds: ['INV-BOLT'],
+        ),
+      ],
+    );
+    String state(List<KitRecord> kits) => encodeWorkshopState(
+      inventory: [bolts],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      kits: kits,
+      builds: [build],
+    );
+    Future<void> sortByAdded() async {
+      await tester.tap(find.byKey(const Key('sort-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
+      await tester.pumpAndSettle();
+    }
+
+    Finder kitB(String builds) => find.descendant(
+      of: find.byKey(const Key('catalog-record-KIT-B')),
+      matching: find.textContaining('$builds builds available'),
+    );
+
+    await tester.pumpWidget(
+      InventorinatorApp(persistedState: state([kit('KIT-A'), kit('KIT-B')])),
+    );
+    await sortByAdded();
+    // Four in stock minus two reserved leaves two: not enough for kit B.
+    expect(kitB('0'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('catalog-record-KIT-A')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('delete-kit')));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('parts not yet used return to available stock'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('confirm-delete-kit')));
+    await tester.pumpAndSettle();
+
+    // The reservation is released: all four bolts are available to kit B.
+    expect(find.byKey(const Key('catalog-record-KIT-A')), findsNothing);
+    expect(kitB('1'), findsOneWidget);
+    // The used bolt is not recreated, and the build keeps its record.
+    expect(find.text('×4'), findsOneWidget);
+    expect(find.byKey(const Key('catalog-record-BUILD-A')), findsOneWidget);
+
+    // A restart, or another device applying the deletion, sees the same.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      InventorinatorApp(persistedState: state([kit('KIT-B')])),
+    );
+    await sortByAdded();
+    expect(kitB('1'), findsOneWidget);
+    expect(find.text('×4'), findsOneWidget);
   });
 
   testWidgets('kit and build views expose missing stock in red cards', (

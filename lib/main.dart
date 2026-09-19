@@ -10189,7 +10189,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         content: Text(
           unfinishedBuilds == 0
               ? 'This permanently deletes $summary.'
-              : 'This permanently deletes $summary. $unfinishedBuilds unfinished ${unfinishedBuilds == 1 ? 'build references' : 'builds reference'} the selected kits and will be preserved.',
+              : 'This permanently deletes $summary. $unfinishedBuilds unfinished ${unfinishedBuilds == 1 ? 'build references' : 'builds reference'} the selected kits and will be kept; parts they have not used yet return to available stock.',
         ),
         actions: [
           TextButton(
@@ -12938,10 +12938,23 @@ class _InventoryHomeState extends State<InventoryHome> {
     return productId.isEmpty ? 'name:$normalizedName' : 'product:$productId';
   }
 
+  /// Unfinished builds that hold stock for the parts they still need.
+  ///
+  /// A build whose kit was deleted keeps its record and the parts already
+  /// used (those left inventory when used), but stops reserving the rest, so
+  /// deleting a kit returns those parts to available stock. Because this is
+  /// derived rather than stored, the release happens exactly once, survives
+  /// restarts and follows the kit's deletion through Remote Sync.
+  Iterable<BuildRecord> get _reservingBuilds {
+    final kitIds = {for (final kit in kits) kit.id};
+    return builds.where(
+      (build) => build.completedAt == null && kitIds.contains(build.kitId),
+    );
+  }
+
   double _reservedInventoryQuantity(String productId, String name) {
     final key = _stockKey(productId, name);
-    return builds
-        .where((build) => build.completedAt == null)
+    return _reservingBuilds
         .expand((build) => build.lines)
         .where((line) => _stockKey(line.productId, line.name) == key)
         .fold<double>(
@@ -12982,7 +12995,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
 
     final reservedByKey = <String, double>{};
-    for (final build in builds.where((build) => build.completedAt == null)) {
+    for (final build in _reservingBuilds) {
       for (final line in build.lines) {
         final remaining = (line.requiredQuantity - line.usedQuantity).clamp(
           0,
@@ -13500,7 +13513,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         title: Text('Delete ${kit.name}?'),
         content: Text(
           unfinishedBuilds > 0
-              ? 'You have $unfinishedBuilds ${unfinishedBuilds == 1 ? 'build' : 'builds'} in progress.'
+              ? 'You have $unfinishedBuilds ${unfinishedBuilds == 1 ? 'build' : 'builds'} in progress. '
+                    '${unfinishedBuilds == 1 ? 'It is' : 'They are'} kept with the parts already used; parts not yet used return to available stock.'
               : 'This permanently deletes the kit and its BOM.',
         ),
         actions: [

@@ -17,7 +17,7 @@ extract full administrator access. Therefore:
 - servers older than v21 are rejected to preserve inventory protocol compatibility;
 - the connector never exposes the PostgreSQL password to an app client.
 
-Current schema: **v29**. Schema v29 makes queued deletions take precedence over earlier local edits, so they no longer produce false sync conflicts. Schema v28 preserves Scratch Pad note links. Schema v27 adds opt-in Scratch Pad sharing, while v26 adds per-device Scratch Pad backup and removed-device review. Schema v24 adds owner-only Mouser credentials. Schema v23 adds owner-only DigiKey credentials. Schema v22 adds owner-only role templates; these
+Current schema: **v30**. Schema v30 adds guarded import undo that protects edited or referenced items. Schema v29 makes queued deletions take precedence over earlier local edits, so they no longer produce false sync conflicts. Schema v28 preserves Scratch Pad note links. Schema v27 adds opt-in Scratch Pad sharing, while v26 adds per-device Scratch Pad backup and removed-device review. Schema v24 adds owner-only Mouser credentials. Schema v23 adds owner-only DigiKey credentials. Schema v22 adds owner-only role templates; these
 are drafts and do not grant device permissions.
  Schema v12 replaces whole-inventory snapshot transfers
 with per-record revisions, deletion markers, and client outboxes. Schema v13
@@ -131,4 +131,4 @@ flutter run \
 Never place the dashboard password, database password, JWT secret, or
 Supabase service-role key in the Flutter app.
 
-See [v29 server update instructions](../docs/server-update-v29.md) for the supported upgrade path.
+See [v30 server update instructions](../docs/server-update-v30.md) for the supported upgrade path.

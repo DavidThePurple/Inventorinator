@@ -31,6 +31,8 @@ import 'label_ocr.dart';
 import 'qr_scanner.dart';
 import 'renderer_preference.dart';
 import 'inventory_data_dialogs.dart';
+import 'import_review_dialog.dart';
+import 'import_batches.dart';
 import 'inventory_spreadsheet.dart';
 import 'cloud_sync_dialog.dart';
 import 'supabase_sync.dart';
@@ -10884,6 +10886,15 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
         ),
         PopupMenuItem(
+          value: 'import-history',
+          enabled: widget.database != null,
+          child: const _PopupActionRow(
+            actionKey: 'inventory-import-history',
+            icon: Icons.history_rounded,
+            label: 'Import history / undo…',
+          ),
+        ),
+        PopupMenuItem(
           value: 'rapidizer',
           enabled: currentRole.canCreateInventory,
           height: 52,
@@ -10899,6 +10910,192 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (!mounted) return;
     if (action == 'import') await _importInventoryFile();
     if (action == 'rapidizer') await _openRapidizer();
+    if (action == 'import-history') await openImportHistory();
+  }
+
+  String get _importScope {
+    final raw = widget.database?.loadSyncConfig();
+    if (raw == null) return 'local';
+    final config = SupabaseConfig.fromJson(jsonDecode(raw));
+    return config.workspaceId == null
+        ? 'local'
+        : '${config.url}|${config.workspaceId}';
+  }
+
+  @visibleForTesting
+  Future<void> openImportHistory() async {
+    final database = widget.database;
+    if (database == null) return;
+    final scope = _importScope;
+    final store = ImportBatchStore(database, scope);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, update) {
+          final batches = store.list();
+          return AlertDialog(
+            title: const Text('Import history / undo'),
+            content: SizedBox(
+              width: 600,
+              height: 420,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Undo removes unchanged items from a file import. Edited or referenced items are protected. Catalog entries and audit history remain. Shared undo needs server schema 30; offline requests wait for sync.',
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: batches.isEmpty
+                        ? const Text('No file imports recorded on this device.')
+                        : ListView.builder(
+                            itemCount: batches.length,
+                            itemBuilder: (_, i) {
+                              final batch = batches[i];
+                              final detail = store.load(batch['id'] as String)!;
+                              final remaining =
+                                  (detail['items'] as List).length -
+                                  (detail['undone'] as List).length;
+                              return ListTile(
+                                title: Text(batch['fileName'] as String),
+                                subtitle: Text(
+                                  '${batch['count']} items · ${batch['createdAt']} · $remaining remaining',
+                                ),
+                                trailing: TextButton(
+                                  key: Key('undo-import-${batch['id']}'),
+                                  onPressed:
+                                      remaining == 0 ||
+                                          !currentRole.canHardDeleteItems
+                                      ? null
+                                      : () async {
+                                          final confirmed =
+                                              await showDialog<bool>(
+                                                context: dialogContext,
+                                                builder: (c) => AlertDialog(
+                                                  title: const Text(
+                                                    'Undo this import?',
+                                                  ),
+                                                  content: const Text(
+                                                    'Remove unchanged imported items? Items edited or used elsewhere will be kept. This also removes eligible items from shared inventory after sync.',
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () =>
+                                                          Navigator.pop(
+                                                            c,
+                                                            false,
+                                                          ),
+                                                      child: const Text(
+                                                        'Cancel',
+                                                      ),
+                                                    ),
+                                                    FilledButton(
+                                                      key: const Key(
+                                                        'confirm-undo-import',
+                                                      ),
+                                                      onPressed: () =>
+                                                          Navigator.pop(
+                                                            c,
+                                                            true,
+                                                          ),
+                                                      child: const Text(
+                                                        'Undo import',
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                          if (confirmed != true || !mounted) {
+                                            return;
+                                          }
+                                          try {
+                                            final result =
+                                                await undoInventoryImport(
+                                                  batch['id'] as String,
+                                                  expectedScope: scope,
+                                                );
+                                            if (dialogContext.mounted) {
+                                              update(() {});
+                                            }
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    '${result.removed} items removed; ${result.protected} changed or referenced items kept.',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          } catch (error) {
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Undo was not completed: $error',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
+                                  child: const Text('Undo import'),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  @visibleForTesting
+  Future<({int removed, int protected})> undoInventoryImport(
+    String batchId, {
+    String? expectedScope,
+  }) async {
+    final database = widget.database;
+    if (database == null || !currentRole.canHardDeleteItems) {
+      throw StateError('Delete permission is required.');
+    }
+    final scope = expectedScope ?? _importScope;
+    if (_syncing || _quantityCommitTimers.isNotEmpty) {
+      throw StateError('Changes are saving or syncing. Retry in a moment.');
+    }
+    _persist();
+    await database.waitForPendingWrites();
+    if (!mounted ||
+        _syncing ||
+        scope != _importScope ||
+        !currentRole.canHardDeleteItems ||
+        _quantityCommitTimers.isNotEmpty) {
+      throw StateError(
+        'Inventory changed while preparing undo. Retry in a moment.',
+      );
+    }
+    final result = ImportBatchStore(database, scope).undo(batchId);
+    _applyRemoteEntityChanges(result.changes);
+    _recordAudit('undo_import', 'inventory', batchId, {
+      'removed': '${result.changes.length}',
+      'protected': '${result.protected}',
+    });
+    _localStateRevision++;
+    _scheduleAutomaticSync();
+    return (removed: result.changes.length, protected: result.protected);
   }
 
   /// Asks for a format and scope, then saves the inventory export.
@@ -10966,9 +11163,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Export failed: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Export failed: $error')));
     }
   }
 
@@ -11002,9 +11198,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       return await importInventoryData(await picked.readAsBytes(), picked.name);
     } catch (error) {
       if (!mounted) return false;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Import failed: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Import failed: $error')));
       return false;
     }
   }
@@ -11014,6 +11209,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   /// validation, review and duplicate handling.
   @visibleForTesting
   Future<bool> importInventoryData(Uint8List bytes, String fileName) async {
+    if (!currentRole.canCreateInventory) return false;
+    final importScope = _importScope;
     final lowerName = fileName.toLowerCase();
     final spreadsheet =
         lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx');
@@ -11045,196 +11242,24 @@ class _InventoryHomeState extends State<InventoryHome> {
         await _showInventoryJsonErrors(parsed.errors);
         return false;
       }
-      var prepared = prepareInventoryJsonImport(parsed.items);
+      if (!mounted) return false;
+      final drafts = await showDialog<List<InventoryJsonDraft>>(
+        context: context,
+        builder: (_) => ImportReviewDialog(
+          drafts: parsed.items,
+          validate: (draft) => prepareInventoryJsonImport([draft]).errors,
+          isDuplicate: (draft) {
+            final preview = prepareInventoryJsonImport([draft]);
+            return preview.items.isNotEmpty &&
+                _isImportDuplicate(draft, preview.items.single);
+          },
+        ),
+      );
+      if (drafts == null || !mounted) return false;
+      var prepared = prepareInventoryJsonImport(drafts);
       if (prepared.errors.isNotEmpty) {
         await _showInventoryJsonErrors(prepared.errors);
         return false;
-      }
-      if (!mounted) return false;
-      // Drafts and prepared items line up one to one once there are no errors.
-      final duplicates = <int>{
-        for (var index = 0; index < prepared.items.length; index++)
-          if (_isImportDuplicate(parsed.items[index], prepared.items[index]))
-            index,
-      };
-      final duplicateCount = duplicates.length;
-      final imageCount = parsed.items
-          .where((draft) => draft.imageUrl.isNotEmpty)
-          .length;
-      var skipDuplicates = true;
-      final reviewItems = prepared.items;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (dialogContext, setDialogState) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(
-                  spreadsheet
-                      ? Icons.table_chart_outlined
-                      : Icons.data_object_rounded,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text('Import ${reviewItems.length} items?'),
-                ),
-              ],
-            ),
-            content: SizedBox(
-              width: 720,
-              height: 600,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      Chip(label: Text('${reviewItems.length} rows')),
-                      if (prepared.newMaterials.isNotEmpty)
-                        Chip(
-                          label: Text(
-                            '${prepared.newMaterials.length} new materials',
-                          ),
-                        ),
-                      if (prepared.newVendors.isNotEmpty)
-                        Chip(
-                          label: Text(
-                            '${prepared.newVendors.length} new vendors',
-                          ),
-                        ),
-                      if (prepared.newBrands.isNotEmpty)
-                        Chip(
-                          label: Text(
-                            '${prepared.newBrands.length} new brands',
-                          ),
-                        ),
-                      if (prepared.updatedBrands.isNotEmpty ||
-                          prepared.updatedVendors.isNotEmpty)
-                        Chip(
-                          label: Text(
-                            '${prepared.updatedBrands.length + prepared.updatedVendors.length} catalog links updated',
-                          ),
-                        ),
-                      if (imageCount > 0)
-                        Chip(label: Text('$imageCount product images')),
-                      if (duplicateCount > 0)
-                        Chip(
-                          avatar: const Icon(
-                            Icons.warning_amber_rounded,
-                            size: 18,
-                          ),
-                          label: Text('$duplicateCount possible duplicates'),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  if (duplicateCount == 0)
-                    const Text(
-                      'Every row creates a new inventory item.',
-                      style: TextStyle(color: Color(0xffaeb5c5)),
-                    )
-                  else ...[
-                    const Text(
-                      'Possible duplicates share an item ID, or a type and name, with existing inventory.',
-                      style: TextStyle(color: Color(0xffaeb5c5)),
-                    ),
-                    const SizedBox(height: 8),
-                    SegmentedButton<bool>(
-                      key: const Key('inventory-import-duplicates'),
-                      segments: [
-                        ButtonSegment(
-                          value: true,
-                          icon: const Icon(Icons.filter_alt_off_outlined),
-                          label: Text('Skip $duplicateCount duplicates'),
-                        ),
-                        const ButtonSegment(
-                          value: false,
-                          icon: Icon(Icons.library_add_outlined),
-                          label: Text('Import them as new items'),
-                        ),
-                      ],
-                      selected: {skipDuplicates},
-                      onSelectionChanged: (selection) => setDialogState(
-                        () => skipDuplicates = selection.single,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: ListView.separated(
-                      itemCount: reviewItems.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item = reviewItems[index];
-                        final duplicate = duplicates.contains(index);
-                        final skipped = duplicate && skipDuplicates;
-                        return Opacity(
-                          opacity: skipped ? .45 : 1,
-                          child: ListTile(
-                            key: Key('inventory-import-row-$index'),
-                            dense: true,
-                            leading: Icon(
-                              duplicate
-                                  ? Icons.warning_amber_rounded
-                                  : _typeIcon(item.type),
-                              color: duplicate
-                                  ? const Color(0xffffc15c)
-                                  : null,
-                            ),
-                            title: Text(item.name),
-                            subtitle: Text(
-                              [
-                                _itemTypeDisplayLabel(item),
-                                if (item.materialName.isNotEmpty)
-                                  item.materialName,
-                                'qty ${_formatBomQuantity(item.quantity)}',
-                                '\$${item.cost.toStringAsFixed(2)}',
-                                if (item.archived) 'Archived',
-                                if (duplicate)
-                                  skipped
-                                      ? 'Possible duplicate · skipped'
-                                      : 'Possible duplicate',
-                              ].join(' · '),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton.icon(
-                key: const Key('confirm-inventory-json-import'),
-                onPressed:
-                    skipDuplicates && duplicateCount == reviewItems.length
-                    ? null
-                    : () => Navigator.pop(dialogContext, true),
-                icon: const Icon(Icons.file_download_done_outlined),
-                label: Text(
-                  'Import ${skipDuplicates ? reviewItems.length - duplicateCount : reviewItems.length} items',
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (confirmed != true || !mounted) return false;
-      var drafts = parsed.items;
-      if (skipDuplicates && duplicates.isNotEmpty) {
-        drafts = [
-          for (var index = 0; index < drafts.length; index++)
-            if (!duplicates.contains(index)) drafts[index],
-        ];
-        // Re-prepare so skipped rows add no materials, vendors or brands.
-        prepared = prepareInventoryJsonImport(drafts);
       }
       final keptImageCount = drafts
           .where((draft) => draft.imageUrl.isNotEmpty)
@@ -11286,7 +11311,64 @@ class _InventoryHomeState extends State<InventoryHome> {
         }
         imageProgress.dispose();
       }
-      if (!mounted) return false;
+      if (!mounted ||
+          !currentRole.canCreateInventory ||
+          importScope != _importScope) {
+        return false;
+      }
+      final database = widget.database;
+      if (database != null) await database.waitForPendingWrites();
+      if (!mounted ||
+          !currentRole.canCreateInventory ||
+          importScope != _importScope) {
+        return false;
+      }
+      // Re-resolve IDs and catalog links after every await; sync may have
+      // changed them while review or image downloads were open.
+      prepared = prepareInventoryJsonImport(drafts);
+      if (prepared.errors.isNotEmpty) {
+        await _showInventoryJsonErrors(prepared.errors);
+        return false;
+      }
+      importedItems = [
+        for (var i = 0; i < prepared.items.length; i++)
+          prepared.items[i].copyWith(
+            imageBytes: importedItems[i].imageBytes,
+            thumbnailBytes: importedItems[i].thumbnailBytes,
+          ),
+      ];
+      if (database != null) {
+        ImportBatchStore(database, importScope).commit(
+          fileName,
+          importedItems.map(_inventoryItemJson).toList(),
+          catalog: [
+            for (final record in prepared.newMaterials)
+              WorkshopEntityChange(
+                entityType: 'materials',
+                entityId: record.id,
+                fields: encodeWorkshopEntityPayload('materials', record),
+              ),
+            for (final record in [
+              ...prepared.newVendors,
+              ...prepared.updatedVendors.values,
+            ])
+              WorkshopEntityChange(
+                entityType: 'vendors',
+                entityId: record.id,
+                fields: encodeWorkshopEntityPayload('vendors', record),
+              ),
+            for (final record in [
+              ...prepared.newBrands,
+              ...prepared.updatedBrands.values,
+            ])
+              WorkshopEntityChange(
+                entityType: 'brands',
+                entityId: record.id,
+                fields: encodeWorkshopEntityPayload('brands', record),
+              ),
+          ],
+        );
+      }
       setState(() {
         materials.addAll(prepared.newMaterials);
         for (final replacement in prepared.updatedVendors.values) {
@@ -11320,8 +11402,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           content: Text(
             [
               '${importedItems.length} inventory items imported.',
-              if (skipDuplicates && duplicateCount > 0)
-                '$duplicateCount duplicates skipped.',
+              if (drafts.length < parsed.items.length)
+                '${parsed.items.length - drafts.length} rows skipped.',
               if (importedImageCount > 0) '$importedImageCount images added.',
               if (failedImageCount > 0)
                 '$failedImageCount images could not be downloaded.',
@@ -15048,6 +15130,20 @@ class _InventoryHomeState extends State<InventoryHome> {
         entityType: local.entityType,
         entityId: local.entityId,
       );
+      if (local.deleted &&
+          local.baseFields?['(importUndo)'] == true &&
+          remote?.deleted != true) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: local.entityType,
+            entityId: local.entityId,
+            field: '(deleted)',
+            localValue: null,
+            remoteValue: remote?.fields ?? local.baseFields?['(deleted)'],
+          ),
+        );
+        continue;
+      }
       if (local.deleted) {
         // Deletes intentionally apply after the remote record.  They replace
         // any queued local edit and never need manual conflict resolution.
@@ -15931,6 +16027,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       pending =
           _conflictStore?.readyForUpload(
             pending,
+            serverSchema: installedSchema,
             atomicBuilds:
                 currentRole.canOperateBuilds && !currentRole.canEditInventory,
           ) ??
@@ -21432,6 +21529,16 @@ class _InventoryHomeState extends State<InventoryHome> {
               ),
             ]);
           } else {
+            if (database.loadPendingWorkshopChanges().any(
+              (p) =>
+                  p.change.entityType == row['entityType'] &&
+                  p.change.entityId == row['entityId'] &&
+                  p.change.baseFields?['(importUndo)'] == true,
+            )) {
+              throw StateError(
+                'This import undo was protected because the item changed or is referenced. Choose the remote value to keep it.',
+              );
+            }
             // The person explicitly chose their local change after reviewing
             // the remote value, so retry it without the stale baseline.
             database.rebasePendingWorkshopChange(

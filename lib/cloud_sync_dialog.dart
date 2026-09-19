@@ -1087,7 +1087,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     bool replaceLocal = false,
   }) async {
     final workspaceId = config.workspaceId!;
-    final conflicts = SyncConflictStore(widget.database, '${config.url}|$workspaceId');
+    final serverSchema = await service.requireInventorySchema(session);
+    final conflicts = SyncConflictStore(
+      widget.database,
+      '${config.url}|$workspaceId',
+    );
     await widget.database.waitForPendingWrites();
     if (replaceLocal) conflicts.save([]);
     var cursor = replaceLocal ? 0 : widget.database.loadSyncCursor(workspaceId);
@@ -1101,8 +1105,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       );
       widget.onCloudChanges?.call(applied);
     } else if (incoming.changes.isNotEmpty) {
-      final result = mergeRemoteChangesWithPending(incoming.changes,
-        widget.database.loadPendingWorkshopChanges().map((e) => e.change));
+      final result = mergeRemoteChangesWithPending(
+        incoming.changes,
+        widget.database.loadPendingWorkshopChanges().map((e) => e.change),
+      );
       conflicts.record(result.conflicts);
       final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);
@@ -1112,22 +1118,59 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     widget.database.saveSyncCursor(workspaceId, cursor);
 
     final effectiveRole = WorkspaceRole.fromServer(config.workspaceRole);
-    var pending = conflicts.readyForUpload(widget.database.loadPendingWorkshopChanges(),
-      atomicBuilds: effectiveRole.canOperateBuilds && !effectiveRole.canEditInventory);
+    var pending = conflicts.readyForUpload(
+      widget.database.loadPendingWorkshopChanges(),
+      serverSchema: serverSchema,
+      atomicBuilds:
+          effectiveRole.canOperateBuilds && !effectiveRole.canEditInventory,
+    );
     if (pending.isNotEmpty) {
       final deviceId = widget.database.loadStringPreference(
         'device_id',
         fallback: '',
       );
       final permissions = WorkspaceRole.fromServer(config.workspaceRole);
-      for (final batch in workshopUploadBatches(pending, (entry) => entry.change,
-        atomicBuilds: permissions.canOperateBuilds && !permissions.canEditInventory,
-        batchSize: _syncUploadBatchSize)) {
-        await service.uploadChanges(
-          session,
-          batch.map((entry) => entry.change),
-          deviceId: deviceId,
-        );
+      for (final batch in workshopUploadBatches(
+        pending,
+        (entry) => entry.change,
+        atomicBuilds:
+            permissions.canOperateBuilds && !permissions.canEditInventory,
+        batchSize: _syncUploadBatchSize,
+      )) {
+        try {
+          await service.uploadChanges(
+            session,
+            batch.map((entry) => entry.change),
+            deviceId: deviceId,
+          );
+        } on SupabaseSyncException catch (error) {
+          if (!error.toString().contains('Sync conflict')) rethrow;
+          final guarded = batch.where(
+            (entry) => entry.change.baseFields?['(importUndo)'] == true,
+          );
+          var held = false;
+          for (final entry in guarded) {
+            final remote = await service.loadEntity(
+              session,
+              entityType: entry.change.entityType,
+              entityId: entry.change.entityId,
+            );
+            if (remote?.deleted != true) {
+              conflicts.record([
+                WorkshopFieldConflict(
+                  entityType: entry.change.entityType,
+                  entityId: entry.change.entityId,
+                  field: '(deleted)',
+                  localValue: null,
+                  remoteValue: remote?.fields ?? entry.change.baseFields?['(deleted)'],
+                ),
+              ]);
+              held = true;
+            }
+          }
+          if (!held) rethrow;
+          continue;
+        }
         // Version matching preserves edits made while an earlier batch was in
         // flight instead of acknowledging newer local changes accidentally.
         widget.database.acknowledgePendingWorkshopChanges(batch);
@@ -1139,8 +1182,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       afterRevision: cursor,
     );
     if (confirmed.changes.isNotEmpty) {
-      final result = mergeRemoteChangesWithPending(confirmed.changes,
-        widget.database.loadPendingWorkshopChanges().map((e) => e.change));
+      final result = mergeRemoteChangesWithPending(
+        confirmed.changes,
+        widget.database.loadPendingWorkshopChanges().map((e) => e.change),
+      );
       conflicts.record(result.conflicts);
       final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);

@@ -793,9 +793,12 @@ class LocalDatabase {
     }
   }
 
-  void applyAndQueueWorkshopChanges(Iterable<WorkshopEntityChange> changes) {
+  void applyAndQueueWorkshopChanges(
+    Iterable<WorkshopEntityChange> changes, {
+    Map<String, String> localPreferences = const {},
+  }) {
     final pending = changes.toList();
-    if (pending.isEmpty) return;
+    if (pending.isEmpty && localPreferences.isEmpty) return;
     final now = DateTime.now().toUtc().toIso8601String();
     _database.execute('BEGIN IMMEDIATE');
     try {
@@ -846,6 +849,12 @@ class LocalDatabase {
           [jsonEncode(baseline), change.entityType, change.entityId],
         );
       }
+      for (final entry in localPreferences.entries) {
+        _database.execute(
+          'INSERT INTO preferences(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+          [entry.key, entry.value],
+        );
+      }
       _database.execute('COMMIT');
     } catch (_) {
       _database.execute('ROLLBACK');
@@ -854,6 +863,10 @@ class LocalDatabase {
   }
 
   Map<String, dynamic> _conflictBaseline(WorkshopEntityChange change) {
+    if (change.baseFields?['(importUndo)'] == true) {
+      return Map.of(change.baseFields!);
+    }
+
     final rows = _database.select(
       'SELECT base_json FROM sync_outbox WHERE entity_type = ? AND entity_id = ?',
       [change.entityType, change.entityId],
@@ -863,6 +876,7 @@ class LocalDatabase {
         : Map<String, dynamic>.from(
             jsonDecode(rows.first['base_json'] as String) as Map,
           );
+    if (!change.deleted && base['(importUndo)'] == true) base.clear();
     final previous =
         readEntityPayload(change.entityType, change.entityId) ?? {};
     if (change.deleted) {
@@ -879,6 +893,44 @@ class LocalDatabase {
       base.putIfAbsent(field, () => previous[field]);
     }
     return base;
+  }
+
+  Map<String, dynamic>? readFullInventoryPayload(String id) {
+    final payload = readEntityPayload('inventory', id);
+    if (payload == null) return null;
+    final images = loadInventoryImages(id);
+    return {
+      ...payload,
+      'image': images.imageBytes == null
+          ? null
+          : base64Encode(images.imageBytes!),
+      'labelImage': images.labelImageBytes == null
+          ? null
+          : base64Encode(images.labelImageBytes!),
+    };
+  }
+
+  // Conservative: protect direct IDs, inventory product references and name-based
+  // kit/build requirements. Audit/addition history intentionally survives undo.
+  bool hasImportItemReferences(String id, String name) {
+    final rows = _database.select(
+      "SELECT payload_json FROM entity_state WHERE entity_type NOT IN ('inventory','auditLog','additionHistory','workshopMetadata')",
+    );
+    bool references(dynamic value) {
+      if (value is String) {
+        return value == id ||
+            value == 'inventory:$id' ||
+            (name.isNotEmpty &&
+                value.trim().toLowerCase() == name.trim().toLowerCase());
+      }
+      if (value is List) return value.any(references);
+      if (value is Map) return value.values.any(references);
+      return false;
+    }
+
+    return rows.any(
+      (row) => references(jsonDecode(row['payload_json'] as String)),
+    );
   }
 
   Map<String, dynamic>? readEntityPayload(String type, String id) {

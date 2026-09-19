@@ -40,12 +40,17 @@ class SyncConflictStore {
   List<PendingWorkshopChange> readyForUpload(
     List<PendingWorkshopChange> pending, {
     bool atomicBuilds = false,
+    int serverSchema = 30,
   }) {
     final rows = load();
     // v29 gives queued tombstones precedence. Clear any legacy false conflict
     // row so a delete that was previously stranded can leave the outbox.
     final deletedKeys = pending
-        .where((entry) => entry.change.deleted)
+        .where(
+          (entry) =>
+              entry.change.deleted &&
+              entry.change.baseFields?['(importUndo)'] != true,
+        )
         .map(
           (entry) => '${entry.change.entityType}\u0000${entry.change.entityId}',
         )
@@ -70,6 +75,8 @@ class SyncConflictStore {
     return pending
         .where(
           (p) =>
+              !(serverSchema < 30 &&
+                  p.change.baseFields?['(importUndo)'] == true) &&
               !blocked.contains(
                 '${p.change.entityType}\u0000${p.change.entityId}',
               ) &&
@@ -148,6 +155,14 @@ class _SyncConflictDialogState extends State<SyncConflictDialog> {
                       itemCount: rows.length,
                       itemBuilder: (context, index) {
                         final row = rows[index];
+                        final protectedUndo = widget.store.database
+                            .loadPendingWorkshopChanges()
+                            .any(
+                              (p) =>
+                                  p.change.entityType == row['entityType'] &&
+                                  p.change.entityId == row['entityId'] &&
+                                  p.change.baseFields?['(importUndo)'] == true,
+                            );
                         return Card(
                           child: Padding(
                             padding: const EdgeInsets.all(12),
@@ -158,6 +173,10 @@ class _SyncConflictDialogState extends State<SyncConflictDialog> {
                                   '${row['entityType']} · ${row['entityId']} · ${row['field']}',
                                   style: Theme.of(context).textTheme.titleSmall,
                                 ),
+                                if (protectedUndo)
+                                  const Text(
+                                    'Import undo was blocked to protect this item. Keep the remote item to resolve it.',
+                                  ),
                                 const SizedBox(height: 8),
                                 Text(
                                   'Local at conflict: ${display(row['local'])}',
@@ -172,7 +191,7 @@ class _SyncConflictDialogState extends State<SyncConflictDialog> {
                                   runSpacing: 8,
                                   children: [
                                     OutlinedButton(
-                                      onPressed: busy
+                                      onPressed: busy || protectedUndo
                                           ? null
                                           : () => choose(row, false),
                                       child: const Text('Keep current local'),

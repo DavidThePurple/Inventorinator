@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 29;
+const latestInventorinatorSchemaVersion = 30;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -647,6 +647,12 @@ class SupabaseSyncService {
     final workspaceId = config.workspaceId;
     if (workspaceId == null) {
       throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    if (changes.any((change) => change.baseFields?['(importUndo)'] == true) &&
+        await requireInventorySchema(session) < 30) {
+      throw const SupabaseSyncException(
+        'Import undo is waiting for server schema 30. Update the server, then sync again.',
+      );
     }
     final requestPayload = {
       'target_workspace': workspaceId,

@@ -12,6 +12,60 @@ void main() {
     publishableKey: 'sb_publishable_test',
   );
 
+  for (final version in [29, 30]) {
+    test('guarded import undo requires schema 30 (server $version)', () async {
+      var uploads = 0;
+      final service = SupabaseSyncService(
+        config.copyWith(workspaceId: 'workspace'),
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('inventorinator_schema')) {
+            return http.Response(
+              jsonEncode([
+                {'version': version},
+              ]),
+              200,
+            );
+          }
+          uploads++;
+          expect(
+            jsonDecode(
+              request.body,
+            )['entity_changes'][0]['baseFields']['(importUndo)'],
+            true,
+          );
+          return http.Response('44', 200);
+        }),
+      );
+      final upload = service.uploadChanges(
+        const SupabaseSession(
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          userId: 'user',
+        ),
+        const [
+          WorkshopEntityChange(
+            entityType: 'inventory',
+            entityId: 'item',
+            fields: {},
+            deleted: true,
+            baseFields: {
+              '(importUndo)': true,
+              '(deleted)': {'id': 'item'},
+            },
+          ),
+        ],
+        deviceId: 'device',
+      );
+      if (version < 30) {
+        await expectLater(upload, throwsA(isA<SupabaseSyncException>()));
+        expect(uploads, 0);
+      } else {
+        expect(await upload, 44);
+        expect(uploads, 1);
+      }
+    });
+  }
+
   test('sync configuration only accepts HTTP(S) server addresses', () {
     expect(config.isConfigured, isTrue);
     expect(

@@ -24,6 +24,8 @@ All notable changes to Inventorinator will be recorded here.
 
 ### Added
 
+- File import review with per-row selection/correction and persistent batch undo. Changed or referenced items are protected; shared undo requires server schema 30.
+
 - The bottom bar's Bulk Import button imports CSV, XLSX or JSON and opens Rapidizer, which no longer has its own button. The new Export button saves CSV, XLSX or versioned portable JSON (which also carries kits and the shopping list). Spreadsheet imports start with a column-matching preview, every import offers to skip or keep possible duplicates, and item IDs survive an export and re-import.
 
 - Personalization > Visual effects > Renderer chooses Skia or Impeller for the next launch. Linux defaults to Skia, which scrolls about four times faster there; Windows and Android keep Impeller.

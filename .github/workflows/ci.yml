@@ -68,6 +68,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
       - name: Verify incremental record sync
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/incremental_entity_sync.sql
+      - name: Verify guarded import undo
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/import_undo.sql
       - name: Build connector image
         run: docker build -f supabase/connector/Dockerfile supabase
       - name: Package Supabase schema artifact

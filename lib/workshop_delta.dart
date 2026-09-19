@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'import_record_equality.dart';
+
 const workshopEntityCollections = <String>{
   'inventory',
   'customItemTypes',
@@ -57,6 +59,9 @@ class WorkshopEntityChange {
         ),
         deleted: json['deleted'] as bool? ?? false,
         revision: (json['revision'] as num?)?.toInt(),
+        baseFields: json['baseFields'] == null
+            ? null
+            : Map<String, dynamic>.from(json['baseFields'] as Map),
       );
 }
 
@@ -102,6 +107,19 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
     if (local.deleted) {
+      if (local.baseFields?['(importUndo)'] == true &&
+          !remote.deleted &&
+          !sameImportRecord(remote.fields, local.baseFields?['(deleted)'])) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: remote.entityType,
+            entityId: remote.entityId,
+            field: '(deleted)',
+            localValue: null,
+            remoteValue: remote.fields,
+          ),
+        );
+      }
       // A delete is ordered after any version already on the server.  It is a
       // deliberate tombstone, so an incoming record must not turn it into a
       // conflict merely because the local device had queued an earlier edit.

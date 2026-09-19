@@ -7,8 +7,7 @@ review the item before saving. This integration does not depend on Supabase.
 
 The first implementation uses the US catalog, English and USD. It supports
 production and sandbox endpoints, paginated keyword search, OAuth token
-reuse, and explicit authentication/rate-limit/network errors. Live responses
-have not yet been verified with a subscribed developer account.
+reuse, and explicit authentication/rate-limit/network errors. DigiKey import was confirmed working by the user on September 19, 2026.
 
 Credentials persist in device-private SQLite preferences, scoped to the server and
 workspace, and are excluded from portable inventory exports. Owners also retain

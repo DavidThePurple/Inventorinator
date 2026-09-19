@@ -4053,6 +4053,62 @@ Bed Temperature: 80°C
     expect(find.byType(MoistureDropletWaveEffect), findsNothing);
   });
 
+  testWidgets('changing status keeps a photo card mounted', (tester) async {
+    final thumbnail = Uint8List.fromList(
+      img.encodePng(img.Image(width: 2, height: 2)),
+    );
+    // Wet counts as a moisture alert and Drying does not, so this change
+    // adds and removes the card's moisture effect layer.
+    var item = sampleInventory.first.copyWith(
+      id: 'INV-STATUS-FLIP',
+      type: InventoryType.filament,
+      thumbnailBytes: thumbnail,
+      clearImageBytes: true,
+      filamentStatus: FilamentStatus.queuedForDrying,
+      dryingMinutes: 120,
+      moistureLifespanMinutes: 60,
+      lastDriedAt: DateTime.now().subtract(const Duration(hours: 5)),
+    );
+    late StateSetter setCardState;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              setCardState = setState;
+              return SizedBox(
+                width: 260,
+                height: 286,
+                child: InventoryCard(
+                  item: item,
+                  photoCard: true,
+                  onQuantityChanged: (_) {},
+                  onOpen: () {},
+                  onAction: (_) {},
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final photo = find.byKey(
+      const Key('photo-card-background-INV-STATUS-FLIP'),
+    );
+    final before = tester.element(photo);
+
+    setCardState(
+      () => item = item.copyWith(
+        filamentStatus: FilamentStatus.drying,
+        dryingStartedAt: DateTime.now(),
+        dryingRemaining: 120,
+      ),
+    );
+    await tester.pump();
+    expect(identical(tester.element(photo), before), isTrue);
+  });
+
   testWidgets('card effect layers are removed while inventory is scrolling', (
     tester,
   ) async {

@@ -37185,7 +37185,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
   }
 }
 
-class ItemCardEffects extends StatelessWidget {
+class ItemCardEffects extends StatefulWidget {
   const ItemCardEffects({
     super.key,
     required this.itemId,
@@ -37219,12 +37219,13 @@ class ItemCardEffects extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  State<ItemCardEffects> createState() => _ItemCardEffectsState();
+
+  Widget _build(Widget staticChild) {
     // SliverGrid/List already creates a repaint boundary for each child. A
     // second one inside every card adds an offscreen layer without isolating
     // more paint, which gets expensive when a wide desktop viewport shows
     // dozens of cards at once.
-    final staticChild = child;
     if (!cardEffectsEnabled) return staticChild;
     final hasRemoteEffect = remoteSyncEffectsEnabled && quantitySyncVersion > 0;
     final hasLowStockEffect =
@@ -37281,6 +37282,19 @@ class ItemCardEffects extends StatelessWidget {
           isScrolling ? cachedChild! : effects(cachedChild!),
     );
   }
+}
+
+class _ItemCardEffectsState extends State<ItemCardEffects> {
+  // Effect layers come and go with an item's state (a Wet filament has a
+  // moisture effect, a Drying one does not) and are dropped while scrolling.
+  // Each change alters the tree above the card, which would remount the
+  // whole card and make its photo load again; a global key moves the
+  // existing card subtree into the new shape instead.
+  final _contentKey = GlobalKey(debugLabel: 'item card content');
+
+  @override
+  Widget build(BuildContext context) =>
+      widget._build(KeyedSubtree(key: _contentKey, child: widget.child));
 }
 
 class _PurposeTagPill extends StatelessWidget {

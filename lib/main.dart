@@ -34204,13 +34204,13 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
               FilamentStatus.drying,
               'Drying',
               Icons.water_drop_outlined,
-              const Color(0xff9c83ff),
+              const Color(0xffffa552),
             ),
             _statusChip(
               FilamentStatus.queuedForDrying,
               'Wet',
               Icons.water_drop_rounded,
-              const Color(0xffffa552),
+              const Color(0xff9c83ff),
             ),
           ],
         )
@@ -38529,9 +38529,9 @@ class CountdownRing extends StatelessWidget {
         : 1.0;
     final size = compact ? 46.0 : 58.0;
     final statusColor = active
-        ? const Color(0xff9c83ff)
-        : queued
         ? const Color(0xffffa552)
+        : queued
+        ? const Color(0xff9c83ff)
         : moistureAlert
         ? const Color(0xffffc857)
         : deployed

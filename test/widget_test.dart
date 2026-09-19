@@ -7899,7 +7899,8 @@ Bed Temperature: 80°C
     );
     final ring = find.byKey(const Key('inventory-card-timer-INV-RING-ARC'));
 
-    // Distance from the drying arc colour at six o'clock, halfway round.
+    // Distance from the drying arc colour (#FFA552) at six o'clock, halfway
+    // round.
     Future<int> halfwayDistance(Duration elapsed) async {
       countdownClock.debugNow = started.add(elapsed);
       await tester.pumpAndSettle();
@@ -7918,7 +7919,7 @@ Bed Temperature: 80°C
       final y = (center.dy + radius).round();
       final offset = (y * bytes.$2 + x) * 4;
       final rgb = [for (var i = 0; i < 3; i++) bytes.$1.getUint8(offset + i)];
-      return (rgb[0] - 0x9c).abs() + (rgb[1] - 0x83).abs() + (rgb[2] - 0xff).abs();
+      return (rgb[0] - 0xff).abs() + (rgb[1] - 0xa5).abs() + (rgb[2] - 0x52).abs();
     }
 
     final early = await halfwayDistance(const Duration(minutes: 30));

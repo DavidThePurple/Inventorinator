@@ -16657,6 +16657,15 @@ class _InventoryHomeState extends State<InventoryHome> {
           if (config?.isConfigured == true)
             ServiceStatusLed(name: 'Supabase', statusKey: 'Supabase:$scope'),
         ];
+        final horizontalPadding = narrow ? 12.0 : 20.0;
+        // Keep the lights' right edge a gap clear of the scrollbar.
+        final indicatorInset = math.max(
+          0.0,
+          mainScrollbarWidth + 8 - horizontalPadding,
+        );
+        final indicatorSpace = indicators.isEmpty
+            ? 0.0
+            : math.min(180.0, constraints.maxWidth * .25);
         return Padding(
           padding: EdgeInsets.fromLTRB(
             narrow ? 12 : 20,
@@ -16664,30 +16673,46 @@ class _InventoryHomeState extends State<InventoryHome> {
             narrow ? 12 : 20,
             4,
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: _headerIdentity(compactLogo: narrow),
+          // The logo stays centred; status lights sit at the right edge, kept
+          // clear of the main scrollbar that overlays the page's right side.
+          child: SizedBox(
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: indicatorSpace),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: _headerIdentity(compactLogo: narrow),
+                  ),
                 ),
-              ),
-              if (indicators.isNotEmpty) ...[
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final indicator in indicators)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: indicator,
+                if (indicators.isNotEmpty)
+                  Positioned(
+                    right: indicatorInset,
+                    child: SizedBox(
+                      width: indicatorSpace - indicatorInset - 8,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (final indicator in indicators)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                child: indicator,
+                              ),
+                          ],
+                        ),
                       ),
-                  ],
-                ),
+                    ),
+                  ),
               ],
-            ],
+            ),
           ),
         );
       },

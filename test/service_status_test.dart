@@ -196,7 +196,7 @@ void main() {
   });
 
   for (final width in [360.0, 1280.0]) {
-    testWidgets('only the Supabase LED sits beside the logo at $width', (
+    testWidgets('only the Supabase LED sits at the right at $width', (
       tester,
     ) async {
       tester.view.physicalSize = Size(width, 900);
@@ -258,7 +258,11 @@ void main() {
       final logo = tester.getRect(find.byKey(const Key('inventorinator-logo')));
       final led = tester.getRect(find.byType(ServiceStatusLed));
       expect(led.left, greaterThan(logo.right));
-      expect(led.right, lessThanOrEqualTo(width));
+      // Right-aligned, clear of the default 16 px desktop scrollbar by 8 px.
+      expect(led.right, moreOrLessEquals(width - 24, epsilon: .5));
+      // The logo and title stay centred on the page.
+      final title = tester.getRect(find.byKey(const Key('app-title-block')));
+      expect(title.center.dx, moreOrLessEquals(width / 2, epsilon: 1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       db.close();

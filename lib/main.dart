@@ -7196,6 +7196,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
+    _inventoryIsScrolling.addListener(_syncCountdownClockPause);
     if (kProfileMode && _profileScrollProbe) {
       WidgetsBinding.instance.addTimingsCallback(_recordProfileScrollTimings);
       _profileScrollProbeTimer = Timer(
@@ -8056,6 +8057,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (kProfileMode && _profileScrollProbe) {
       WidgetsBinding.instance.removeTimingsCallback(_recordProfileScrollTimings);
     }
+    _inventoryIsScrolling.removeListener(_syncCountdownClockPause);
+    countdownClock.paused = false;
     _inventoryIsScrolling.dispose();
     floatingSearchFocusNode.dispose();
     bottomSearchFocusNode.dispose();
@@ -9727,6 +9730,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       ),
     );
   }
+
+  void _syncCountdownClockPause() =>
+      countdownClock.paused = _inventoryIsScrolling.value;
 
   void _beginInventoryScrollInteraction() {
     _inventoryOverlayRestore?.cancel();
@@ -38428,6 +38434,28 @@ class CountdownClock extends ChangeNotifier
   final Duration interval;
   Timer? _timer;
   DateTime? _fixedNow;
+  bool _paused = false;
+  bool _tickMissed = false;
+
+  /// Holds ticks while the inventory scrolls: a tick animates every ring
+  /// whose value changed. One catch-up tick fires when scrolling stops.
+  bool get paused => _paused;
+  set paused(bool value) {
+    if (_paused == value) return;
+    _paused = value;
+    if (!value && _tickMissed) {
+      _tickMissed = false;
+      notifyListeners();
+    }
+  }
+
+  void _tick() {
+    if (_paused) {
+      _tickMissed = true;
+    } else {
+      notifyListeners();
+    }
+  }
 
   @override
   DateTime get value => _fixedNow ?? DateTime.now();
@@ -38442,7 +38470,7 @@ class CountdownClock extends ChangeNotifier
   @override
   void addListener(VoidCallback listener) {
     super.addListener(listener);
-    _timer ??= Timer.periodic(interval, (_) => notifyListeners());
+    _timer ??= Timer.periodic(interval, (_) => _tick());
   }
 
   @override

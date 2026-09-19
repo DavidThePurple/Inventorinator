@@ -7942,6 +7942,26 @@ Bed Temperature: 80°C
     expect(ticks, 2);
   });
 
+  testWidgets('the countdown clock holds ticks while scrolling', (
+    tester,
+  ) async {
+    final clock = CountdownClock();
+    var ticks = 0;
+    void listener() => ticks++;
+    clock.addListener(listener);
+
+    clock.paused = true;
+    await tester.pump(const Duration(seconds: 35));
+    expect(ticks, 0);
+
+    // Resuming catches up with a single tick rather than replaying them.
+    clock.paused = false;
+    expect(ticks, 1);
+    await tester.pump(const Duration(seconds: 5));
+    expect(ticks, 2);
+    clock.removeListener(listener);
+  });
+
   test('drying countdown derives remaining time from its start timestamp', () {
     final started = DateTime(2026, 8, 25, 12);
     final item = sampleInventory.first.copyWith(

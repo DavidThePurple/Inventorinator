@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 31;
+const latestInventorinatorSchemaVersion = 33;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -112,6 +112,7 @@ class SupabaseConfig {
     this.lastSyncedAt,
     this.lastSyncedStateJson,
     this.remotePurgeAfterDays,
+    this.requireManualDryingTimes = false,
     this.autoSyncEnabled = true,
     this.syncIntervalSeconds = 60,
   });
@@ -129,6 +130,7 @@ class SupabaseConfig {
   final DateTime? lastSyncedAt;
   final String? lastSyncedStateJson;
   final int? remotePurgeAfterDays;
+  final bool requireManualDryingTimes;
   final bool autoSyncEnabled;
   final int syncIntervalSeconds;
 
@@ -178,6 +180,7 @@ class SupabaseConfig {
     DateTime? lastSyncedAt,
     String? lastSyncedStateJson,
     int? remotePurgeAfterDays,
+    bool? requireManualDryingTimes,
     bool? autoSyncEnabled,
     int? syncIntervalSeconds,
     bool clearLastSyncedStateJson = false,
@@ -197,6 +200,8 @@ class SupabaseConfig {
         ? null
         : lastSyncedStateJson ?? this.lastSyncedStateJson,
     remotePurgeAfterDays: remotePurgeAfterDays ?? this.remotePurgeAfterDays,
+    requireManualDryingTimes:
+        requireManualDryingTimes ?? this.requireManualDryingTimes,
     autoSyncEnabled: autoSyncEnabled ?? this.autoSyncEnabled,
     syncIntervalSeconds: syncIntervalSeconds ?? this.syncIntervalSeconds,
   );
@@ -215,6 +220,7 @@ class SupabaseConfig {
     'lastSyncedAt': lastSyncedAt?.toIso8601String(),
     'lastSyncedStateJson': lastSyncedStateJson,
     'remotePurgeAfterDays': remotePurgeAfterDays,
+    'requireManualDryingTimes': requireManualDryingTimes,
     'autoSyncEnabled': autoSyncEnabled,
     'syncIntervalSeconds': syncIntervalSeconds,
   };
@@ -237,6 +243,7 @@ class SupabaseConfig {
         : DateTime.parse(json['lastSyncedAt'] as String),
     lastSyncedStateJson: json['lastSyncedStateJson'] as String?,
     remotePurgeAfterDays: (json['remotePurgeAfterDays'] as num?)?.toInt(),
+    requireManualDryingTimes: json['requireManualDryingTimes'] == true,
     autoSyncEnabled: json['autoSyncEnabled'] as bool? ?? true,
     syncIntervalSeconds: (json['syncIntervalSeconds'] as num?)?.toInt() ?? 60,
   );
@@ -917,6 +924,22 @@ class SupabaseSyncService {
     'lock_out': lockOut,
   });
 
+  Future<bool> manualDryingTimesRequired(SupabaseSession session) async {
+    if (await schemaVersion(session) < 32) return false;
+    return await _rpc(session, 'get_inventorinator_manual_drying', {
+          'target_workspace': config.workspaceId,
+        }) ==
+        true;
+  }
+
+  Future<void> setManualDryingTimesRequired(
+    SupabaseSession session,
+    bool required,
+  ) => _rpc(session, 'set_inventorinator_manual_drying', {
+    'target_workspace': config.workspaceId,
+    'target_required': required,
+  });
+
   Future<void> backupScratchPadNotes(
     SupabaseSession session,
     Iterable<ScratchPadNote> notes, {
@@ -1040,6 +1063,8 @@ class SupabaseSyncService {
       'set_inventorinator_mouser_credentials' => (24, 'Mouser credential sync'),
       'backup_inventorinator_device_notes' ||
       'list_inventorinator_removed_device_notes' => (26, 'Scratch Pad backup'),
+      'get_inventorinator_manual_drying' ||
+      'set_inventorinator_manual_drying' => (32, 'Workspace drying policy'),
       'list_inventorinator_owner_notes' ||
       'manage_inventorinator_note' ||
       'list_inventorinator_recovered_device_notes' ||

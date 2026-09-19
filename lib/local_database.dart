@@ -889,7 +889,9 @@ class LocalDatabase {
       }
       base['(deleted)'] = remoteBaseline;
     }
+    if (change.entityType == 'inventory') base.remove('modifiedAt');
     for (final field in change.fields.keys) {
+      if (change.entityType == 'inventory' && field == 'modifiedAt') continue;
       base.putIfAbsent(field, () => previous[field]);
     }
     return base;

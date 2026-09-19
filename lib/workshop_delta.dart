@@ -138,6 +138,7 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       return local;
     }
     for (final key in local.fields.keys) {
+      if (remote.entityType == 'inventory' && key == 'modifiedAt') continue;
       if (remote.fields.containsKey(key) &&
           !_sameJson(remote.fields[key], local.fields[key]) &&
           !(local.baseFields?.containsKey(key) == true &&
@@ -156,7 +157,19 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
     return WorkshopEntityChange(
       entityType: remote.entityType,
       entityId: remote.entityId,
-      fields: {...remote.fields, ...local.fields},
+      fields: {
+        ...remote.fields,
+        ...local.fields,
+        if (remote.entityType == 'inventory' &&
+            remote.fields['modifiedAt'] is String &&
+            DateTime.tryParse(remote.fields['modifiedAt'] as String) != null &&
+            (DateTime.tryParse(local.fields['modifiedAt']?.toString() ?? '') ==
+                    null ||
+                DateTime.parse(remote.fields['modifiedAt'] as String).isAfter(
+                  DateTime.parse(local.fields['modifiedAt'] as String),
+                )))
+          'modifiedAt': remote.fields['modifiedAt'],
+      },
       revision: remote.revision,
     );
   }).toList();

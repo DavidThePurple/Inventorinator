@@ -1,5 +1,11 @@
 # Changelog
 
+- Add Modified inventory sorting, newest first, with persistent edit timestamps and legacy added-date fallback.
+
+- Give items split from a stack a fresh added date while preserving the source stack’s date.
+
+- Default filament drying timers by material and weight (1 kg fallback); add an Owner-only manual-time requirement (schema 32).
+
 - Give workspace Owners edit/delete authority over all backed-up Scratch Pad notes, with stale-backup protection (schema 31).
 
 - Fix Scratch Pad recovery for re-added devices and add explicit reassignment of legacy archived notes (schema 31).

@@ -301,6 +301,20 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     });
   }
 
+  Future<String> _saveManualDryingTimes(bool required) async {
+    final (service, session) = await _session();
+    if (!isWorkspaceOwner) {
+      throw const SupabaseSyncException(
+        'Only the workspace Owner can change drying policy.',
+      );
+    }
+    await service.setManualDryingTimesRequired(session, required);
+    _save(config.copyWith(requireManualDryingTimes: required));
+    return required
+        ? 'Manual drying times are required before starting drying.'
+        : 'Automatic material and weight estimates are enabled.';
+  }
+
   Future<String> _saveRemotePurgeAfterDays(int days) async {
     final (service, session) = await _session();
     if (!canManageRemotePurge) {
@@ -520,7 +534,12 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final joinedService = SupabaseSyncService(joined);
     await joinedService.registerDevice(session, registrationName);
     final purgeDays = await joinedService.remotePurgeAfterDays(session);
-    joined = joined.copyWith(remotePurgeAfterDays: purgeDays);
+    joined = joined.copyWith(
+      remotePurgeAfterDays: purgeDays,
+      requireManualDryingTimes: await joinedService.manualDryingTimesRequired(
+        session,
+      ),
+    );
     _save(joined);
     if (mounted) setState(() => isWorkspaceOwner = false);
     if (widget.onCloudChanges != null) {
@@ -629,9 +648,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         final roleConfig = refreshed.copyWith(
           workspaceRole: role,
           remotePurgeAfterDays: purgeDays,
+          requireManualDryingTimes: await service.manualDryingTimesRequired(
+            session,
+          ),
         );
         if (roleConfig.workspaceRole != refreshed.workspaceRole ||
-            roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays) {
+            roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays ||
+            roleConfig.requireManualDryingTimes !=
+                refreshed.requireManualDryingTimes) {
           _save(roleConfig);
         }
         config = roleConfig;
@@ -1342,6 +1366,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     restored = restored.copyWith(
       workspaceRole: role,
       remotePurgeAfterDays: purgeDays,
+      requireManualDryingTimes: await service.manualDryingTimesRequired(
+        session,
+      ),
     );
     remotePurgeAfterDays = purgeDays;
     service = SupabaseSyncService(restored);
@@ -1787,6 +1814,20 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                     ),
                   ),
                   const Divider(height: 20),
+                  SwitchListTile.adaptive(
+                    key: const Key('require-manual-drying-times'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Require manual drying times'),
+                    subtitle: const Text(
+                      'Off: estimate by filament material and spool weight (1 kg if unspecified). Only the Owner can change this.',
+                    ),
+                    value: config.requireManualDryingTimes,
+                    onChanged: isWorkspaceOwner && !busy
+                        ? (value) => unawaited(
+                            _run(() => _saveManualDryingTimes(value)),
+                          )
+                        : null,
+                  ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Remote offline-data purge'),

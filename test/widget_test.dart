@@ -8366,9 +8366,14 @@ Bed Temperature: 80°C
     );
     expect(splitButton.onPressed, isNotNull);
 
+    final splitStarted = DateTime.now();
     await tester.tap(find.byKey(const Key('split-one-item')));
     await tester.pumpAndSettle();
 
+    final split = tester.widget<ItemDetailsPanel>(find.byType(ItemDetailsPanel)).item;
+    expect(split.added.isBefore(splitStarted), isFalse);
+    expect(split.added.isAfter(DateTime.now()), isFalse);
+    expect(split.id, isNot(stack.id));
     expect(find.byKey(const Key('sidebar-item-quantity')), findsOneWidget);
     expect(
       find.descendant(
@@ -8387,6 +8392,8 @@ Bed Temperature: 80°C
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(find.text('Ten spool stack'), findsNWidgets(2));
+    final original = tester.widgetList<InventoryCard>(find.byType(InventoryCard)).map((card) => card.item).singleWhere((item) => item.id == stack.id);
+    expect(original.added, stack.added);
     expect(find.text('×9'), findsOneWidget);
     expect(find.text('×1'), findsOneWidget);
 
@@ -9773,7 +9780,7 @@ Bed Temperature: 80°C
           .widget<TextFormField>(find.byKey(const Key('drying-duration')))
           .controller
           ?.text,
-      isNotEmpty,
+      isEmpty,
     );
     expect(
       tester

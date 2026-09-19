@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'disk_inventory_list.dart';
+import 'filament_drying.dart';
 
 import 'dart:convert';
 import 'dart:io';
@@ -1751,6 +1752,7 @@ enum InventorySort {
   type,
   quantity,
   addedDate,
+  modified,
   cost,
   dryingTime,
   moistureRemaining,
@@ -1761,6 +1763,7 @@ bool defaultInventorySortAscending(InventorySort value) => switch (value) {
   InventorySort.type => true,
   InventorySort.quantity => false,
   InventorySort.addedDate => false,
+  InventorySort.modified => false,
   InventorySort.cost => false,
   InventorySort.dryingTime => false,
   InventorySort.moistureRemaining => true,
@@ -3382,6 +3385,7 @@ class InventoryItem {
     this.purposeTags = const [],
     this.styleEntries = const [],
     required this.added,
+    this.modifiedAt,
     required this.cost,
     required this.color,
     this.itemColorName = '',
@@ -3442,6 +3446,8 @@ class InventoryItem {
   final List<String> purposeTags;
   final List<FilamentStyleEntry> styleEntries;
   final DateTime added;
+  final DateTime? modifiedAt;
+  DateTime get effectiveModifiedAt => modifiedAt ?? added;
   final double cost;
   final Color color;
   final String itemColorName;
@@ -3503,6 +3509,7 @@ class InventoryItem {
     List<String>? purposeTags,
     List<FilamentStyleEntry>? styleEntries,
     DateTime? added,
+    DateTime? modifiedAt,
     double? cost,
     Color? color,
     String? itemColorName,
@@ -3570,6 +3577,7 @@ class InventoryItem {
         ? const []
         : styleEntries ?? this.styleEntries,
     added: added ?? this.added,
+    modifiedAt: modifiedAt ?? this.modifiedAt,
     cost: cost ?? this.cost,
     color: color ?? this.color,
     itemColorName: itemColorName ?? this.itemColorName,
@@ -4897,6 +4905,8 @@ Map<String, dynamic> _inventoryItemJson(
   'purposeTags': item.purposeTags,
   'styleEntries': item.styleEntries.map((entry) => entry.toJson()).toList(),
   'added': item.added.toIso8601String(),
+  if (item.modifiedAt != null)
+    'modifiedAt': item.modifiedAt!.toUtc().toIso8601String(),
   'cost': item.cost,
   'color': item.color.toARGB32(),
   'itemColorName': item.itemColorName,
@@ -5269,6 +5279,7 @@ InventoryItem _inventoryItemFromJson(
       )
       .toList(),
   added: DateTime.parse(item['added'] as String),
+  modifiedAt: DateTime.tryParse(item['modifiedAt'] as String? ?? ''),
   cost: (item['cost'] as num).toDouble(),
   color: Color(item['color'] as int),
   itemColorName: _decodedItemColorName(item, schemaVersion),
@@ -8055,7 +8066,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         if (current != null && widget.database != null) {
           _saveInventoryEntity(
             widget.database!,
-            current,
+            current.copyWith(modifiedAt: DateTime.now().toUtc()),
             previous: entry.value,
           );
         }
@@ -9053,6 +9064,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       InventorySort.cost => "json_extract(payload_json, '\$.cost')",
       InventorySort.addedDate =>
         "julianday(json_extract(payload_json, '\$.added'))",
+      InventorySort.modified => "julianday(coalesce(json_extract(payload_json, '\$.modifiedAt'), json_extract(payload_json, '\$.added')))",
       InventorySort.dryingTime =>
         "coalesce(json_extract(payload_json, '\$.dryingMinutes'), -1)",
       _ => null,
@@ -9925,11 +9937,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  void _publishInventoryItem(InventoryItem item) {
+  void _publishInventoryItem(InventoryItem item, {bool markModified = true}) {
     final index =
         _diskInventory?.indexOfId(item.id) ??
         inventory.indexWhere((candidate) => candidate.id == item.id);
     if (index < 0) return;
+    if (markModified &&
+        !_applyingCloudState &&
+        _changedInventoryFields(inventory[index], item).isNotEmpty) {
+      item = item.copyWith(modifiedAt: DateTime.now().toUtc());
+    }
     inventory[index] = item;
     final notifier = _inventoryItemNotifiers.putIfAbsent(
       item.id,
@@ -10647,7 +10664,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                 subtitle: status == FilamentStatus.ready
                     ? const Text('Ready to use; marks a drying cycle complete.')
                     : status == FilamentStatus.drying
-                    ? const Text('Uses each item’s configured drying duration.')
+                    ? const Text(
+                        'Uses a saved time or an estimate for each material and spool weight.',
+                      )
                     : null,
               ),
             ),
@@ -10657,12 +10676,17 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (choice == null || !mounted) return;
     if (choice == FilamentStatus.drying &&
         selected.any(
-          (item) => item.dryingMinutes == null || item.dryingMinutes! <= 0,
+          (item) =>
+              filamentDryingDuration(
+                item,
+                requireManual: manualDryingTimesRequired(widget.database),
+              ) ==
+              null,
         )) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Set a drying duration on every selected filament before starting drying.',
+            'The workspace Owner requires a manual drying time for each selected filament.',
           ),
         ),
       );
@@ -10676,7 +10700,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             filamentStatus: choice,
             deployed: choice == FilamentStatus.deployed,
             dryingRemaining: choice == FilamentStatus.drying
-                ? item.dryingMinutes
+                ? filamentDryingDuration(
+                    item,
+                    requireManual: manualDryingTimesRequired(widget.database),
+                  )
                 : 0,
             dryingStartedAt: choice == FilamentStatus.drying
                 ? now
@@ -11705,8 +11732,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _discardLoadedFullImages(Iterable<InventoryItem> items) {
     for (final item in items) {
       if (item.imageBytes == null && item.labelImageBytes == null) continue;
-      final lightweight = _withoutFullInventoryImages(item);
-      _publishInventoryItem(lightweight);
+      final current = inventory
+          .where((value) => value.id == item.id)
+          .firstOrNull;
+      final lightweight = _withoutFullInventoryImages(item)
+          .copyWith(modifiedAt: current?.modifiedAt);
+      _publishInventoryItem(lightweight, markModified: false);
       if (_diskInventory != null) {
         _diskInventory!.acknowledge(lightweight.id);
       } else {
@@ -11733,6 +11764,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           alignment: Alignment.centerRight,
           child: ItemDetailsPanel(
             item: detailedItem,
+            requireManualDryingTimes: manualDryingTimesRequired(
+              widget.database,
+            ),
             typeLabel: _itemTypeDisplayLabel(detailedItem),
             typeIcon: _itemTypeIcon(detailedItem),
             typeIconImageBytes: _iconImageBytesFromKey(
@@ -11972,6 +12006,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     final splitItem = detailedSource.copyWith(
       id: _newInventoryId(),
       quantity: 1,
+      added: DateTime.now(),
+      modifiedAt: DateTime.now().toUtc(),
     );
     setState(() {
       _publishInventoryItem(current.copyWith(quantity: current.quantity - 1));
@@ -12014,16 +12050,24 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
         );
       case ItemAction.resetDryTimer:
-        if (item.dryingMinutes == null) {
+        final duration = filamentDryingDuration(
+          item,
+          requireManual: manualDryingTimesRequired(widget.database),
+        );
+        if (duration == null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('This item has no drying timer.')),
+            const SnackBar(
+              content: Text(
+                'The workspace Owner requires a manual drying time.',
+              ),
+            ),
           );
           return;
         }
         _replaceItem(
           item,
           item.copyWith(
-            dryingRemaining: item.dryingMinutes,
+            dryingRemaining: duration,
             dryingStartedAt: DateTime.now(),
             filamentStatus: FilamentStatus.drying,
             deployed: false,
@@ -12054,6 +12098,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           id: _newInventoryId(),
           name: '${item.name} copy',
           added: DateTime.now(),
+          modifiedAt: DateTime.now().toUtc(),
           archived: false,
         );
         setState(() {
@@ -12168,6 +12213,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             (_lowStockAnimationVersions[newItem.id] ?? 0) + 1;
       }
     });
+    newItem = inventory.firstWhere((item) => item.id == newItem.id);
     if (_diskInventory != null && widget.database != null) {
       _saveInventoryEntity(widget.database!, newItem, previous: oldItem);
       _diskInventory!.acknowledge(newItem.id);
@@ -12239,6 +12285,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     setState(() {
       spoolUsage.insert(0, entry);
+      final spool = inventory
+          .where((item) => item.id == entry.spoolId)
+          .firstOrNull;
+      if (spool != null) {
+        _publishInventoryItem(
+          spool.copyWith(modifiedAt: DateTime.now().toUtc()),
+        );
+      }
       _recordAudit('spool_usage', 'inventory', entry.spoolId, {
         'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
         'outcome': entry.outcome.name,
@@ -12258,6 +12312,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (index < 0) return;
     setState(() {
       spoolUsage[index] = entry;
+      final spool = inventory
+          .where((item) => item.id == entry.spoolId)
+          .firstOrNull;
+      if (spool != null) {
+        _publishInventoryItem(
+          spool.copyWith(modifiedAt: DateTime.now().toUtc()),
+        );
+      }
       _recordAudit('edit', 'spool_usage', entry.spoolId, {
         'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
         'outcome': entry.outcome.name,
@@ -12277,6 +12339,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (index < 0) return;
     setState(() {
       spoolUsage.removeAt(index);
+      final spool = inventory
+          .where((item) => item.id == entry.spoolId)
+          .firstOrNull;
+      if (spool != null) {
+        _publishInventoryItem(
+          spool.copyWith(modifiedAt: DateTime.now().toUtc()),
+        );
+      }
       _recordAudit('delete', 'spool_usage', entry.spoolId, {
         'grams': '${entry.totalGrams.toStringAsFixed(1)} g',
         'outcome': entry.outcome.name,
@@ -12299,7 +12369,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     _quantityCommitOriginals.putIfAbsent(item.id, () => current);
     _localSaveFeedbackTimer?.cancel();
     _localSaveFeedback.value = LocalSaveFeedback.saving;
-    _publishInventoryItem(current.copyWith(quantity: quantity));
+    _publishInventoryItem(
+      current.copyWith(quantity: quantity),
+      markModified: false,
+    );
     _invalidateSearchCaches();
     _quantityCommitTimers.remove(item.id)?.cancel();
     _quantityCommitTimers[item.id] = Timer(
@@ -12322,8 +12395,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     final current = inventory
         .where((candidate) => candidate.id == itemId)
         .firstOrNull;
-    if (current != null) _publishInventoryItem(current.copyWith());
-    if (current != null) _persistInventoryItem(current);
+    if (current != null) {
+      _publishInventoryItem(
+        current.copyWith(modifiedAt: DateTime.now().toUtc()),
+      );
+      _persistInventoryItem(inventory.firstWhere((item) => item.id == itemId));
+      if (sort == InventorySort.modified) setState(() {});
+    }
     if (_quantityCommitTimers.isEmpty) {
       _localSaveFeedback.value = LocalSaveFeedback.saved;
       _localSaveFeedbackTimer = Timer(const Duration(seconds: 2), () {
@@ -12422,27 +12500,38 @@ class _InventoryHomeState extends State<InventoryHome> {
           if (index >= 0) materials[index] = material;
           for (var index = 0; index < inventory.length; index++) {
             if (inventory[index].materialId == material.id) {
-              inventory[index] = previous?.typeKey == material.typeKey
-                  ? inventory[index].copyWith(materialName: material.name)
-                  : inventory[index].copyWith(materialId: '', materialName: '');
+              _publishInventoryItem(
+                previous?.typeKey == material.typeKey
+                    ? inventory[index].copyWith(materialName: material.name)
+                    : inventory[index].copyWith(
+                        materialId: '',
+                        materialName: '',
+                      ),
+              );
             }
             if (inventory[index].spoolMaterialId == material.id) {
-              inventory[index] = previous?.typeKey == material.typeKey
-                  ? inventory[index].copyWith(spoolMaterialName: material.name)
-                  : inventory[index].copyWith(
-                      spoolMaterialId: '',
-                      spoolMaterialName: '',
-                    );
+              _publishInventoryItem(
+                previous?.typeKey == material.typeKey
+                    ? inventory[index].copyWith(
+                        spoolMaterialName: material.name,
+                      )
+                    : inventory[index].copyWith(
+                        spoolMaterialId: '',
+                        spoolMaterialName: '',
+                      ),
+              );
             }
             if (inventory[index].masterSpoolMaterialId == material.id) {
-              inventory[index] = previous?.typeKey == material.typeKey
-                  ? inventory[index].copyWith(
-                      masterSpoolMaterialName: material.name,
-                    )
-                  : inventory[index].copyWith(
-                      masterSpoolMaterialId: '',
-                      masterSpoolMaterialName: '',
-                    );
+              _publishInventoryItem(
+                previous?.typeKey == material.typeKey
+                    ? inventory[index].copyWith(
+                        masterSpoolMaterialName: material.name,
+                      )
+                    : inventory[index].copyWith(
+                        masterSpoolMaterialId: '',
+                        masterSpoolMaterialName: '',
+                      ),
+              );
             }
           }
         });
@@ -12453,21 +12542,24 @@ class _InventoryHomeState extends State<InventoryHome> {
           materials.removeWhere((candidate) => candidate.id == material.id);
           for (var index = 0; index < inventory.length; index++) {
             if (inventory[index].materialId == material.id) {
-              inventory[index] = inventory[index].copyWith(
-                materialId: '',
-                materialName: '',
+              _publishInventoryItem(
+                inventory[index].copyWith(materialId: '', materialName: ''),
               );
             }
             if (inventory[index].spoolMaterialId == material.id) {
-              inventory[index] = inventory[index].copyWith(
-                spoolMaterialId: '',
-                spoolMaterialName: '',
+              _publishInventoryItem(
+                inventory[index].copyWith(
+                  spoolMaterialId: '',
+                  spoolMaterialName: '',
+                ),
               );
             }
             if (inventory[index].masterSpoolMaterialId == material.id) {
-              inventory[index] = inventory[index].copyWith(
-                masterSpoolMaterialId: '',
-                masterSpoolMaterialName: '',
+              _publishInventoryItem(
+                inventory[index].copyWith(
+                  masterSpoolMaterialId: '',
+                  masterSpoolMaterialName: '',
+                ),
               );
             }
           }
@@ -12487,7 +12579,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           for (var index = 0; index < inventory.length; index++) {
             final item = inventory[index];
             if (item.customTypeId == customType.id) {
-              inventory[index] = item.copyWith(customTypeName: customType.name);
+              _publishInventoryItem(
+                item.copyWith(customTypeName: customType.name),
+              );
             }
           }
         });
@@ -12501,13 +12595,15 @@ class _InventoryHomeState extends State<InventoryHome> {
           for (var index = 0; index < inventory.length; index++) {
             final item = inventory[index];
             if (item.customTypeId == customType.id) {
-              inventory[index] = item.copyWith(
-                type: InventoryType.other,
-                customTypeId: '',
-                customTypeName: '',
-                customFieldValues: const {},
-                materialId: '',
-                materialName: '',
+              _publishInventoryItem(
+                item.copyWith(
+                  type: InventoryType.other,
+                  customTypeId: '',
+                  customTypeName: '',
+                  customFieldValues: const {},
+                  materialId: '',
+                  materialName: '',
+                ),
               );
             }
           }
@@ -13043,7 +13139,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           for (var index = 0; index < inventory.length; index++) {
             final item = inventory[index];
             if (item.type == deletedType) {
-              inventory[index] = item.copyWith(type: InventoryType.other);
+              _publishInventoryItem(item.copyWith(type: InventoryType.other));
             }
           }
           for (var index = 0; index < products.length; index++) {
@@ -13801,10 +13897,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       consumed.removeLast();
     }
     setState(() {
-      replaceInventoryItemById(
-        inventory,
-        item!.id,
-        item.copyWith(quantity: item.quantity + (use ? -amount : amount)),
+      _publishInventoryItem(
+        item!.copyWith(quantity: item.quantity + (use ? -amount : amount)),
       );
       build.lines[lineIndex] = line.copyWith(
         usedQuantity: line.usedQuantity + (use ? amount : -amount),
@@ -15485,10 +15579,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           rebuildRoot = true;
         } else {
           final previous = inventory[index];
-          _publishInventoryItem(lightweightItem);
+          _publishInventoryItem(lightweightItem, markModified: false);
           if (previous.name != lightweightItem.name ||
               previous.type != lightweightItem.type ||
               previous.archived != lightweightItem.archived ||
+              sort == InventorySort.modified &&
+                  previous.effectiveModifiedAt !=
+                      lightweightItem.effectiveModifiedAt ||
               previous.itemColorName != lightweightItem.itemColorName ||
               sort == InventorySort.quantity &&
                   previous.quantity != lightweightItem.quantity ||
@@ -15895,11 +15992,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       try {
         final role = await service.currentRole(session);
         final remotePurgeDays = await service.remotePurgeAfterDays(session);
+        final manualDrying = installedSchema >= 32
+            ? await service.manualDryingTimesRequired(session)
+            : false;
         final roleChanged = config.workspaceRole != role;
-        final policyChanged = config.remotePurgeAfterDays != remotePurgeDays;
+        final policyChanged =
+            config.remotePurgeAfterDays != remotePurgeDays ||
+            config.requireManualDryingTimes != manualDrying;
         config = config.copyWith(
           workspaceRole: role,
           remotePurgeAfterDays: remotePurgeDays,
+          requireManualDryingTimes: manualDrying,
         );
         if (roleChanged || policyChanged) {
           database.saveSyncConfig(jsonEncode(config.toJson()));
@@ -17490,6 +17593,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       InventorySort.type => 'Type',
       InventorySort.quantity => 'Quantity',
       InventorySort.addedDate => 'Added date',
+      InventorySort.modified => 'Modified',
       InventorySort.cost => 'Cost',
       InventorySort.dryingTime => 'Drying time',
       // This is the remaining usable moisture-life window before a spool is
@@ -17501,6 +17605,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       InventorySort.type => Icons.category_outlined,
       InventorySort.quantity => Icons.numbers_rounded,
       InventorySort.addedDate => Icons.calendar_today_outlined,
+      InventorySort.modified => Icons.update_outlined,
       InventorySort.cost => Icons.attach_money_rounded,
       InventorySort.dryingTime => Icons.local_fire_department_outlined,
       InventorySort.moistureRemaining => Icons.water_drop_outlined,
@@ -30023,6 +30128,33 @@ typedef FilamentInstructionTemplate = ({
   String storage,
 });
 
+bool manualDryingTimesRequired(LocalDatabase? database) {
+  final raw = database?.loadSyncConfig();
+  if (raw == null) return false;
+  try {
+    final config = SupabaseConfig.fromJson(
+      jsonDecode(raw) as Map<String, dynamic>,
+    );
+    return config.syncMode == 'supabase' &&
+        config.workspaceId != null &&
+        config.requireManualDryingTimes;
+  } catch (_) {
+    return false;
+  }
+}
+
+int? filamentDryingDuration(InventoryItem item, {bool requireManual = false}) {
+  if (item.type != InventoryType.filament) return null;
+  if (item.dryingMinutes != null && item.dryingMinutes! > 0) {
+    return item.dryingMinutes;
+  }
+  if (requireManual) return null;
+  return defaultFilamentDryingMinutes(
+    material: item.materialName.isNotEmpty ? item.materialName : item.name,
+    weightGrams: item.filamentWeightGrams,
+  );
+}
+
 typedef DryingSettings = ({int? temperatureC, int? durationMinutes});
 
 DryingSettings parseDryingSettings(String text) {
@@ -30464,6 +30596,18 @@ class _AddItemDialogState extends State<AddItemDialog>
     Navigator.of(context).pop();
   }
 
+  int get _automaticDryingMinutes => defaultFilamentDryingMinutes(
+    material:
+        widget.materials.where((m) => m.id == materialId).firstOrNull?.name ??
+        nameController.text,
+    weightGrams: double.tryParse(filamentWeightController.text),
+  );
+  int? get _effectiveDryingMinutes =>
+      int.tryParse(dryingController.text) ??
+      (manualDryingTimesRequired(widget.database)
+          ? null
+          : _automaticDryingMinutes);
+
   @override
   void setState(VoidCallback fn) {
     super.setState(fn);
@@ -30879,7 +31023,7 @@ class _AddItemDialogState extends State<AddItemDialog>
       final settings = parseDryingSettings(inferredFilament.drying);
       dryingTemperatureController.text =
           settings.temperatureC?.toString() ?? '';
-      dryingController.text = settings.durationMinutes?.toString() ?? '';
+
       if (printingController.text.isEmpty) {
         printingController.text = inferredFilament.printing;
       }
@@ -31576,9 +31720,7 @@ class _AddItemDialogState extends State<AddItemDialog>
           dryingTemperatureController.text =
               drying.temperatureC?.toString() ?? '';
         }
-        if (dryingController.text.trim().isEmpty) {
-          dryingController.text = drying.durationMinutes?.toString() ?? '';
-        }
+
         if (storageController.text.trim().isEmpty) {
           storageController.text = template.storage;
         }
@@ -32504,8 +32646,9 @@ class _AddItemDialogState extends State<AddItemDialog>
                                       suffixText: 'g',
                                     ),
                                     validator: _validateOptionalPositiveNumber,
-                                    onChanged: (_) =>
-                                        filamentWeightManuallyEdited = true,
+                                    onChanged: (_) => setState(
+                                      () => filamentWeightManuallyEdited = true,
+                                    ),
                                   ),
                                   TextFormField(
                                     key: const Key('spool-tare-weight'),
@@ -32812,15 +32955,31 @@ class _AddItemDialogState extends State<AddItemDialog>
                               key: const Key('drying-duration'),
                               controller: dryingController,
                               keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                labelText: 'Drying duration',
+                              decoration: InputDecoration(
+                                labelText: 'Drying duration override',
                                 suffixText: 'min',
+                                hintText:
+                                    'Automatic: $_automaticDryingMinutes min',
+                                helperText:
+                                    manualDryingTimesRequired(widget.database)
+                                    ? 'Owner requires a manual time before drying.'
+                                    : 'Blank uses a material/weight estimate; missing weight = 1 kg.',
+                                helperMaxLines: 2,
                               ),
                               validator: (value) {
-                                if (!drying) return null;
+                                if ((value ?? '').trim().isEmpty) {
+                                  return drying &&
+                                          widget.initialItem?.filamentStatus !=
+                                              FilamentStatus.drying &&
+                                          manualDryingTimesRequired(
+                                            widget.database,
+                                          )
+                                      ? 'Owner requires a manual drying time'
+                                      : null;
+                                }
                                 final minutes = int.tryParse(value ?? '');
                                 return minutes == null || minutes <= 0
-                                    ? 'Required while drying'
+                                    ? 'Enter a positive number of minutes'
                                     : null;
                               },
                             ),
@@ -33063,12 +33222,16 @@ class _AddItemDialogState extends State<AddItemDialog>
           : null,
       dryingRemaining: type == InventoryType.filament
           ? drying
-                ? widget.initialItem?.dryingRemaining ??
-                      int.tryParse(dryingController.text)
+                ? (widget.initialItem?.filamentStatus == FilamentStatus.drying
+                      ? widget.initialItem?.dryingRemaining ??
+                            _effectiveDryingMinutes
+                      : _effectiveDryingMinutes)
                 : 0
           : null,
       dryingStartedAt: type == InventoryType.filament && drying
-          ? widget.initialItem?.dryingStartedAt ?? DateTime.now()
+          ? (widget.initialItem?.filamentStatus == FilamentStatus.drying
+                ? widget.initialItem?.dryingStartedAt ?? DateTime.now()
+                : DateTime.now())
           : null,
       moistureLifespanMinutes: type == InventoryType.filament
           ? _minutesFromAmount(
@@ -33094,7 +33257,9 @@ class _AddItemDialogState extends State<AddItemDialog>
       dryingInstructions:
           type.supportsDrying &&
               dryingTemperatureController.text.trim().isNotEmpty
-          ? 'Dry at ${dryingTemperatureController.text.trim()}°C for ${dryingController.text.trim()} minutes.'
+          ? (dryingController.text.trim().isEmpty
+                ? 'Dry at ${dryingTemperatureController.text.trim()}°C; use the automatic timer estimate.'
+                : 'Dry at ${dryingTemperatureController.text.trim()}°C for ${dryingController.text.trim()} minutes.')
           : type.supportsDrying
           ? dryingInstructionsController.text.trim()
           : '',
@@ -33227,11 +33392,7 @@ class _AddItemDialogState extends State<AddItemDialog>
             dryingTemperatureController.text = settings.temperatureC.toString();
             filled++;
           }
-          if (dryingController.text.isEmpty &&
-              settings.durationMinutes != null) {
-            dryingController.text = settings.durationMinutes.toString();
-            filled++;
-          }
+
           if (printingController.text.isEmpty && template.printing.isNotEmpty) {
             printingController.text = template.printing;
             filled++;
@@ -33540,6 +33701,7 @@ class _AddItemDialogState extends State<AddItemDialog>
             dryingTemperatureController.text = settings.temperatureC.toString();
           }
           if (dryingController.text.isEmpty &&
+              !instructions.drying.startsWith('Generic ') &&
               settings.durationMinutes != null) {
             dryingController.text = settings.durationMinutes.toString();
           }
@@ -33794,7 +33956,9 @@ class _AddItemDialogState extends State<AddItemDialog>
       final settings = parseDryingSettings(product.dryingInstructions);
       dryingTemperatureController.text =
           settings.temperatureC?.toString() ?? '';
-      if (dryingController.text.isEmpty && settings.durationMinutes != null) {
+      if (dryingController.text.isEmpty &&
+          !product.dryingInstructions.startsWith('Generic ') &&
+          settings.durationMinutes != null) {
         dryingController.text = settings.durationMinutes.toString();
       }
       storageController.text = product.storageInstructions;
@@ -34737,6 +34901,7 @@ class ItemDetailsPanel extends StatefulWidget {
     this.fullscreen = false,
     this.onFullscreenChanged,
     this.canEdit = true,
+    this.requireManualDryingTimes = false,
     this.canArchive = true,
     this.canMarkDepleted = true,
     this.showStatus = true,
@@ -34762,6 +34927,7 @@ class ItemDetailsPanel extends StatefulWidget {
   final bool fullscreen;
   final ValueChanged<bool>? onFullscreenChanged;
   final bool canEdit;
+  final bool requireManualDryingTimes;
   final bool canArchive;
   final bool canMarkDepleted;
   final bool showStatus;
@@ -35786,7 +35952,10 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     final effectiveDrying = _effectiveDryingInstructions(item);
     final effectiveStorage = _effectiveStorageInstructions(item);
     final dryingSettings = parseDryingSettings(effectiveDrying);
-    final dryingDuration = item.dryingMinutes ?? dryingSettings.durationMinutes;
+    final dryingDuration = filamentDryingDuration(
+      item,
+      requireManual: widget.requireManualDryingTimes,
+    );
     final desktopResizable = Platform.isLinux || Platform.isWindows;
     final availableWidth = MediaQuery.sizeOf(context).width;
     final minimumWidth = math.min(380.0, availableWidth);
@@ -36355,12 +36524,17 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   );
 
   void _setFilamentStatus(FilamentStatus status) {
-    final duration = item.dryingMinutes;
+    final duration = filamentDryingDuration(
+      item,
+      requireManual: widget.requireManualDryingTimes,
+    );
     if (status == FilamentStatus.drying &&
         (duration == null || duration <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Add a drying duration in Edit before starting.'),
+          content: Text(
+            'The workspace Owner requires a manual drying time. Set it in Edit.',
+          ),
         ),
       );
       return;
@@ -36450,7 +36624,8 @@ String _timeSinceDried(DateTime? lastDriedAt) {
 }
 
 Duration _dryingTimeRemaining(InventoryItem item, {DateTime? now}) {
-  final baselineMinutes = item.dryingRemaining ?? item.dryingMinutes ?? 0;
+  final baselineMinutes =
+      item.dryingRemaining ?? filamentDryingDuration(item) ?? 0;
   final startedAt = item.dryingStartedAt;
   if (startedAt == null) return Duration(minutes: baselineMinutes);
   final remaining =
@@ -36533,6 +36708,9 @@ int compareInventoryItems(
     InventorySort.type => left.typeLabel.compareTo(right.typeLabel),
     InventorySort.quantity => left.quantity.compareTo(right.quantity),
     InventorySort.addedDate => left.added.compareTo(right.added),
+    InventorySort.modified => left.effectiveModifiedAt.compareTo(
+      right.effectiveModifiedAt,
+    ),
     InventorySort.cost => left.cost.compareTo(right.cost),
     InventorySort.dryingTime => (left.dryingMinutes ?? -1).compareTo(
       right.dryingMinutes ?? -1,
@@ -39325,7 +39503,10 @@ class CountdownRing extends StatelessWidget {
   Widget _buildRing(BuildContext context, DateTime now) {
     final dryingRemaining = _dryingTimeRemaining(item, now: now);
     final remaining = dryingMinutesRemaining(item, now: now);
-    final total = item.dryingMinutes;
+    final total =
+        item.dryingMinutes ??
+        item.dryingRemaining ??
+        filamentDryingDuration(item);
     final filament = item.type == InventoryType.filament;
     final lowStock = _isLowStock(item);
     final moistureRemaining = _moistureRemaining(item, now: now);

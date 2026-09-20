@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'disk_inventory_list.dart';
 import 'filament_drying.dart';
+import 'build_commit_label.dart';
 
 import 'dart:convert';
 import 'dart:io';
@@ -32,6 +33,7 @@ import 'label_ocr.dart';
 import 'qr_scanner.dart';
 import 'renderer_preference.dart';
 import 'inventory_data_dialogs.dart';
+import 'import_format_dialog.dart';
 import 'import_review_dialog.dart';
 import 'import_batches.dart';
 import 'inventory_spreadsheet.dart';
@@ -11215,6 +11217,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       _showPermissionDenied('Your role cannot add inventory items.');
       return false;
     }
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (_) => const ImportFormatDialog(chooseFile: true),
+    );
+    if (proceed != true || !mounted) return false;
     final picked = await FilePicker.pickFile(
       dialogTitle: 'Import inventory from CSV, XLSX or JSON',
       type: FileType.custom,
@@ -17223,9 +17230,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           mainScrollbarWidth + 8 - horizontalPadding,
         );
         // Minimum room kept for the lights beside the logo on narrow windows.
-        final indicatorSpace = indicators.isEmpty
-            ? 0.0
-            : math.min(120.0, constraints.maxWidth * .2);
+        final indicatorSpace = math.min(120.0, constraints.maxWidth * .2);
         return Padding(
           padding: EdgeInsets.fromLTRB(
             narrow ? 12 : 20,
@@ -17238,7 +17243,14 @@ class _InventoryHomeState extends State<InventoryHome> {
           // main scrollbar that overlays the page's right side.
           child: Row(
             children: [
-              const Expanded(child: SizedBox()),
+              const Expanded(
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: BuildCommitLabel(),
+                  ),
+                ),
+              ),
               ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: math.max(

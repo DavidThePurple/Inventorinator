@@ -10,6 +10,10 @@ const inventorinatorBuildHash = String.fromEnvironment(
   defaultValue: 'local',
 );
 
+const inventorinatorHasLocalChanges = bool.fromEnvironment(
+  'INVENTORINATOR_LOCAL_CHANGES',
+);
+
 const inventorinatorProjectUrl =
     'https://github.com/DavidThePurple/Inventorinator';
 

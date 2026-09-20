@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated September 19, 2026. Current release: [v0.1.1 checklist](release-checklist.md).
+Updated September 20, 2026. Current release: [v0.1.1 checklist](release-checklist.md).
 
 ## v0.1.1 — finish before release
 
@@ -15,6 +15,7 @@ Details: [import review and undo](import-review-and-undo.md). Shared undo requir
 - [ ] **Project tools:** Kanban and Visual Relationship Architect (design to follow).
 - [ ] **Scratch Pad editor:** alignment, bold, italic, font selection, and a formatting toolbar.
 - [ ] **Catalog:** better contextual visuals, smarter ordering, and drag and drop.
+- [ ] **Sub-Types:** organize items into sub-types within their main inventory type.
 - [ ] **Stockroom:** improve workflows and add individual items directly to shopping lists.
 - [ ] **Checkout system:** check items out to a person or project, track quantities and expected returns, and record full or partial returns without changing total owned stock. Show who has each item and what remains available.
 - [ ] **Browser add-on:** selectively capture web content and import it on Linux/Windows.
@@ -23,6 +24,10 @@ Details: [import review and undo](import-review-and-undo.md). Shared undo requir
 - [ ] **Note privacy:** explore locked shared notes and sharing to selected devices; inter-device messaging is an alternative, not a settled design.
 - [ ] **Custom interface:** reorder controls and add custom buttons for workflow and accessibility needs.
 - [ ] **Notifications:** push notifications and/or ntfy integration.
+- [ ] **Machine timers:** set timers and completion notifications for dryers, printers, and other machines.
+- [ ] **Status indicator experiment:** try a larger, more animated indicator that makes status easier to notice.
+- [ ] **3D timer carousel:** showcase drying timers and life-remaining timers in a 3D carousel at the top of the interface.
+- [ ] **New-item carousel:** a separate carousel showcasing newly added items.
 - [ ] **Nextcloud:** view 3D files inside Inventorinator, including a printed-parts queue.
 - [ ] **Restart camera:** release and reopen the selected camera using its saved device address when it stalls or fails at startup.
 

@@ -1,5 +1,7 @@
 # Changelog
 
+- Show import column formats, defaults, and copyable CSV/JSON examples before choosing a file and during spreadsheet mapping.
+
 - Add Modified inventory sorting, newest first, with persistent edit timestamps and legacy added-date fallback.
 
 - Give items split from a stack a fresh added date while preserving the source stack’s date.

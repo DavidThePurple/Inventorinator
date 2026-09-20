@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'inventory_spreadsheet.dart';
+import 'import_format_dialog.dart';
 
 /// Lets the user confirm which inventory field each spreadsheet column holds,
 /// with a live preview of the first rows. Pops the mapping, or null.
@@ -72,6 +73,17 @@ class _SpreadsheetMappingDialogState extends State<SpreadsheetMappingDialog> {
               '${widget.fileName} · ${table.rows.length} rows. '
               'Choose what each column holds; unmatched columns are skipped.',
               style: TextStyle(color: muted),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => const ImportFormatDialog(),
+                ),
+                icon: const Icon(Icons.help_outline),
+                label: const Text('Column formats & examples'),
+              ),
             ),
             const SizedBox(height: 10),
             Expanded(

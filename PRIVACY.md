@@ -11,8 +11,9 @@ private LAN installations, but it is not encrypted; use HTTPS across untrusted
 networks.
 
 Barcode and QR recognition is performed on the device. Android label OCR uses
-Google ML Kit's on-device text-recognition SDK. Linux label OCR uses the bundled
-Tesseract data and the compatible system libraries. Importing a product URL
+Google ML Kit's on-device text-recognition SDK. Linux and Windows label OCR use
+the bundled Tesseract engine and English language data, or a compatible
+Tesseract already installed on the device. Importing a product URL
 contacts that website directly. **Search web** opens the selected search
 provider in the device's browser, subject to that provider's privacy policy.
 Using **Search FilamentColors.xyz** sends the entered brand, material, and

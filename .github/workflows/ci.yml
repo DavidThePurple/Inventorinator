@@ -198,8 +198,8 @@ jobs:
       - name: Verify Android package contents
         run: |
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
-            if unzip -l "$apk" | grep -q 'assets/flutter_assets/assets/ocr/linux_x64/'; then
-              echo "Linux OCR assets leaked into Android package: $apk" >&2
+            if unzip -l "$apk" | grep -q 'assets/flutter_assets/assets/ocr/'; then
+              echo "Desktop OCR assets leaked into Android package: $apk" >&2
               exit 1
             fi
           done
@@ -249,6 +249,9 @@ jobs:
           $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
           $buildHash = $env:GITHUB_SHA.Substring(0, 12)
           flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
+      - name: Verify bundled label OCR engine
+        shell: pwsh
+        run: ./tool/verify_windows_ocr.ps1
       - name: Compute artifact name
         id: artifact
         shell: bash

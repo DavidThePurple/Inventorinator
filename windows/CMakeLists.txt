@@ -102,6 +102,26 @@ install(CODE "
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 
+# Windows-only OCR payload. Keep this outside Flutter's cross-platform asset
+# bundle so Android and Linux do not ship a Windows executable. The language
+# data is platform independent, so it is reused from the Linux bundle rather
+# than committing the same file twice.
+set(OCR_WINDOWS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/windows_x64")
+set(OCR_TESSDATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ocr/linux_x64")
+install(DIRECTORY "${OCR_WINDOWS_DIR}/"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/windows_x64"
+  COMPONENT Runtime
+  PATTERN "tesseract.exe" EXCLUDE)
+install(PROGRAMS "${OCR_WINDOWS_DIR}/tesseract.exe"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/windows_x64"
+  COMPONENT Runtime)
+install(FILES "${OCR_TESSDATA_DIR}/tessdata/eng.traineddata"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/windows_x64/tessdata"
+  COMPONENT Runtime)
+install(FILES "${OCR_TESSDATA_DIR}/LICENSE-tessdata.txt"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/ocr/windows_x64"
+  COMPONENT Runtime)
+
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release

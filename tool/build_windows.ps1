@@ -16,6 +16,7 @@ $buildHash = (git rev-parse --short=12 HEAD).Trim()
 flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
 
 $bundle = Join-Path $PWD 'build\windows\x64\runner\Release'
+& (Join-Path $PSScriptRoot 'verify_windows_ocr.ps1') -Bundle $bundle
 $archive = Join-Path $PWD 'build\Inventorinator-Windows-x64.zip'
 if (Test-Path $archive) {
   Remove-Item $archive

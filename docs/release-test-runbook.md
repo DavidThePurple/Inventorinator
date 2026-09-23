@@ -481,6 +481,12 @@ Use only the disposable test workspace for this section.
   - Upgrade a populated v1.0 install, verify data, then uninstall.
   - Pass: upgrade preserves data and uninstall behavior matches the documentation.
 
+- [ ] **WIN-05 — Label OCR**
+  - On a Windows machine with no Tesseract installed, open Scan, choose OCR,
+    and capture a clear English product label with the webcam.
+  - Pass: the item form is prefilled from the label text, with no "not
+    available" or "engine is not installed" message and no console window flash.
+
 ## 14. Automated checks and final artifacts
 
 Run these from the exact commit used for the artifacts:

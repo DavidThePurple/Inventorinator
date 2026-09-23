@@ -1,5 +1,7 @@
 # Changelog
 
+- Add Windows label OCR using a bundled Tesseract engine, matching Linux and Android (no server change).
+
 - Show import column formats, defaults, and copyable CSV/JSON examples before choosing a file and during spreadsheet mapping.
 
 - Add Modified inventory sorting, newest first, with persistent edit timestamps and legacy added-date fallback.

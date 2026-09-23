@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 
 class LabelOcrUnavailable implements Exception {
   const LabelOcrUnavailable(this.message);
@@ -36,8 +38,8 @@ class LabelOcrDraft {
 Future<LabelOcrDraft> recognizeProductLabel(Uint8List imageBytes) async {
   final text = Platform.isAndroid || Platform.isIOS
       ? await _recognizeMobile(imageBytes)
-      : Platform.isLinux
-      ? await _recognizeLinux(imageBytes)
+      : Platform.isLinux || Platform.isWindows
+      ? await _recognizeDesktop(imageBytes)
       : throw const LabelOcrUnavailable(
           'On-device label OCR is not available on this platform yet.',
         );
@@ -65,7 +67,7 @@ Future<String> _recognizeMobile(Uint8List bytes) async {
   }
 }
 
-Future<String> _recognizeLinux(Uint8List bytes) async {
+Future<String> _recognizeDesktop(Uint8List bytes) async {
   final directory = await Directory.systemTemp.createTemp(
     'inventorinator-ocr-',
   );
@@ -75,7 +77,9 @@ Future<String> _recognizeLinux(Uint8List bytes) async {
     try {
       await Process.run(executable, ['--version']);
     } on ProcessException {
-      final bundled = await _prepareBundledLinuxTesseract(directory);
+      final bundled = Platform.isWindows
+          ? locateBundledWindowsTesseract(Platform.resolvedExecutable)
+          : await _prepareBundledLinuxTesseract(directory);
       executable = bundled.$1;
       environment = {'TESSDATA_PREFIX': bundled.$2};
     }
@@ -149,14 +153,12 @@ Future<String> _recognizeLinux(Uint8List bytes) async {
         '${directory.path}/label-${candidate.angle}-${candidate.pageMode}.jpg',
       );
       await file.writeAsBytes(candidate.bytes, flush: true);
-      final result = await Process.run(executable, [
-        file.path,
-        'stdout',
-        '-l',
-        'eng',
-        '--psm',
-        '${candidate.pageMode}',
-      ], environment: environment);
+      final result = await Process.run(
+        executable,
+        [file.path, 'stdout', '-l', 'eng', '--psm', '${candidate.pageMode}'],
+        environment: environment,
+        stdoutEncoding: utf8,
+      );
       if (result.exitCode != 0) continue;
       final text = result.stdout.toString();
       recognizedCandidates.add(text);
@@ -243,9 +245,7 @@ Future<(String, String)> _prepareBundledLinuxTesseract(
     '${File(Platform.resolvedExecutable).parent.path}/data/ocr/linux_x64',
   );
   final bundledExecutable = File('${bundledRoot.path}/tesseract');
-  final bundledLanguage = File(
-    '${bundledRoot.path}/tessdata/eng.traineddata',
-  );
+  final bundledLanguage = File('${bundledRoot.path}/tessdata/eng.traineddata');
   if (!await bundledExecutable.exists() || !await bundledLanguage.exists()) {
     throw const LabelOcrUnavailable(
       'The bundled Linux OCR engine is not installed with this build.',
@@ -255,10 +255,8 @@ Future<(String, String)> _prepareBundledLinuxTesseract(
     await bundledExecutable.readAsBytes(),
     flush: true,
   );
-  await File('${tessdata.path}/eng.traineddata').writeAsBytes(
-    await bundledLanguage.readAsBytes(),
-    flush: true,
-  );
+  await File('${tessdata.path}/eng.traineddata')
+      .writeAsBytes(await bundledLanguage.readAsBytes(), flush: true);
   final chmod = await Process.run('chmod', ['700', executable.path]);
   if (chmod.exitCode != 0) {
     throw LabelOcrUnavailable(
@@ -266,6 +264,27 @@ Future<(String, String)> _prepareBundledLinuxTesseract(
     );
   }
   return (executable.path, tessdata.path);
+}
+
+/// Finds the Tesseract engine that the Windows build installs beside the app.
+/// Windows runs it in place: unlike Linux there is no execute bit to restore,
+/// so nothing needs copying into a temporary directory first.
+(String, String) locateBundledWindowsTesseract(String resolvedExecutable) {
+  final root = p.join(
+    p.dirname(resolvedExecutable),
+    'data',
+    'ocr',
+    'windows_x64',
+  );
+  final executable = p.join(root, 'tesseract.exe');
+  final tessdata = p.join(root, 'tessdata');
+  if (!File(executable).existsSync() ||
+      !File(p.join(tessdata, 'eng.traineddata')).existsSync()) {
+    throw const LabelOcrUnavailable(
+      'The bundled Windows OCR engine is not installed with this build.',
+    );
+  }
+  return (executable, tessdata);
 }
 
 LabelOcrDraft parseProductLabelText(String rawText, Uint8List imageBytes) {

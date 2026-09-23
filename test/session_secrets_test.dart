@@ -419,4 +419,87 @@ void main() {
 
     expect(exported.contains('refresh-token-BBBB'), isFalse);
   });
+
+  group('owner recovery key', () {
+    const workspace = '10000000-0000-0000-0000-000000000001';
+    const recovery = 'RECOVERY-KEY-1234-ABCD';
+
+    test('moves into the keyring and out of the database file', () async {
+      final database = await open();
+      database.saveWorkspaceRecoveryKey(workspace, recovery);
+
+      await database.enableSecureSessionStorage(vault: vault);
+
+      expect(database.loadWorkspaceRecoveryKey(workspace), recovery);
+      expect(vault.entries.values.join(), contains(recovery));
+      expect(rawStoredSession(database).contains(recovery), isFalse);
+    });
+
+    test('a key saved while enabled never reaches the database', () async {
+      final database = await open();
+      await database.enableSecureSessionStorage(vault: vault);
+
+      database.saveWorkspaceRecoveryKey(workspace, recovery);
+      await database.waitForPendingWrites();
+
+      expect(database.loadWorkspaceRecoveryKey(workspace), recovery);
+      expect(vault.entries.values.join(), contains(recovery));
+      expect(rawStoredSession(database).contains(recovery), isFalse);
+    });
+
+    test('survives a restart and comes back when turned off', () async {
+      var database = await open();
+      database.saveWorkspaceRecoveryKey(workspace, recovery);
+      await database.enableSecureSessionStorage(vault: vault);
+      database.close();
+
+      database = await open();
+      expect(database.loadWorkspaceRecoveryKey(workspace), recovery);
+
+      expect(await database.disableSecureSessionStorage(), isTrue);
+      expect(database.loadWorkspaceRecoveryKey(workspace), recovery);
+      expect(vault.entries, isEmpty);
+      database.close();
+      final plain = await open();
+      expect(plain.secureSessionStorageEnabled, isFalse);
+      expect(plain.loadWorkspaceRecoveryKey(workspace), recovery);
+    });
+
+    test('a locked keyring hides the key without deleting it', () async {
+      var database = await open();
+      database.saveWorkspaceRecoveryKey(workspace, recovery);
+      await database.enableSecureSessionStorage(vault: vault);
+      database.close();
+
+      vault.available = false;
+      database = await open();
+      expect(database.loadWorkspaceRecoveryKey(workspace), isNull);
+      database.saveSyncConfig(
+        jsonEncode(
+          const SupabaseConfig(
+            url: 'https://sync.example.test',
+            publishableKey: 'k',
+          ).toJson(),
+        ),
+      );
+      await database.waitForPendingWrites();
+      vault.available = true;
+      expect(vault.entries.values.join(), contains(recovery));
+
+      database.close();
+      final unlocked = await open();
+      expect(unlocked.loadWorkspaceRecoveryKey(workspace), recovery);
+    });
+
+    test('deleting local data clears it from the keyring', () async {
+      final database = await open();
+      database.saveWorkspaceRecoveryKey(workspace, recovery);
+      await database.enableSecureSessionStorage(vault: vault);
+
+      await database.deleteAndRecreate();
+
+      expect(vault.entries, isEmpty);
+      expect(database.loadWorkspaceRecoveryKey(workspace), isNull);
+    });
+  });
 }

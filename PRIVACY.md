@@ -8,7 +8,8 @@ images, custom Type icons, and captured label images—is sent to the hosted or
 self-hosted Supabase instance chosen by the user. Authentication and refresh
 tokens are stored on the device so it can reconnect. By default they are kept
 in the local database. **Secure sign-in storage** in Remote Settings is an
-experimental option that keeps them in the operating system's keyring instead
+experimental option that keeps them, and the Owner's workspace recovery key, in
+the operating system's keyring instead
 (Windows Credential Manager, Android Keystore, or the Linux Secret Service),
 so a copy of the database file does not contain them. Copies of the database
 made before you turn it on may still hold earlier tokens, which stop working

@@ -1905,7 +1905,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                   title: const Text('Secure sign-in storage (experimental)'),
                   subtitle: Text(
                     widget.database.secureSessionStorageEnabled
-                        ? 'On. This device\'s sign-in is kept in the system keyring, not in the database.'
+                        ? 'On. This device\'s sign-in and Owner recovery key are kept in the system keyring, not in the database.'
                         : 'Off. The sign-in is stored in this device\'s database. Turn on to keep it in the system keyring instead.',
                   ),
                   value: widget.database.secureSessionStorageEnabled,
@@ -1993,12 +1993,15 @@ class _SecureStorageWarningDialog extends StatelessWidget {
         'It keeps this device\'s Remote Sync sign-in in the system keyring '
         '(Windows Credential Manager, Android Keystore, or the Linux Secret '
         'Service) instead of the Inventorinator database, so a copy of the '
-        'database file no longer contains it.\n\n'
+        'database file no longer contains it. If this device is an Owner, its '
+        'workspace recovery key moves into the keyring too.\n\n'
         'If the keyring is reset, locked, or lost, for example after '
         'reinstalling the operating system or creating a new user profile, '
         'Inventorinator cannot recover the sign-in. Restoring it is up to your '
         'system. You would sign in to Remote Sync again on this device. Your '
-        'inventory and the shared inventory are not affected.\n\n'
+        'inventory and the shared inventory are not affected. Owners: save your '
+        'recovery key somewhere else first, because this device\'s copy would '
+        'be lost with the keyring.\n\n'
         'You can turn this off at any time.',
       ),
     ),

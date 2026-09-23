@@ -111,16 +111,17 @@ class SessionTokens {
   int get hashCode => Object.hash(accessToken, refreshToken);
 }
 
-/// In-memory copy of the session tokens kept in a [SecretVault].
+/// In-memory copy of the secrets kept in a [SecretVault]: the Remote Sync
+/// session tokens and the Owner's workspace recovery keys.
 ///
-/// Sync code reads the Remote Sync config synchronously, but keyrings are
-/// asynchronous. This loads the tokens once at startup, answers reads from
-/// memory, and writes changes through to the vault in order.
+/// Sync code reads these synchronously, but keyrings are asynchronous. This
+/// loads the values once at startup, answers reads from memory, and writes
+/// changes through to the vault in order. Each value lives in a named slot.
 class SessionSecretCache {
   static const _probeKey = 'inventorinator.probe';
 
   SecretVault? _vault;
-  final Map<String, SessionTokens> _tokens = {};
+  final Map<String, String> _values = {};
 
   /// Slots whose vault contents are known, either read or written. A slot that
   /// could not be read must never be deleted: an unreadable entry is not an
@@ -135,10 +136,11 @@ class SessionSecretCache {
 
   static String keyFor(String slot) => 'inventorinator.session.$slot';
 
-  SessionTokens tokensFor(String slot) => _tokens[slot] ?? SessionTokens.empty;
+  String? valueFor(String slot) => _values[slot];
 
-  Iterable<String> get workspaceSlots =>
-      {..._tokens.keys, ..._known}.where((slot) => slot.startsWith('ws:'));
+  /// Slots that start with [prefix], whether or not they currently hold a value.
+  Iterable<String> slotsWithPrefix(String prefix) =>
+      {..._values.keys, ..._known}.where((slot) => slot.startsWith(prefix));
 
   Future<void> flush() => _tail;
 
@@ -153,15 +155,15 @@ class SessionSecretCache {
     await vault.delete(_probeKey);
   }
 
-  /// Startup with the feature already on: reads each slot's stored tokens.
+  /// Startup with the feature already on: reads each slot's stored value.
   Future<void> restore(SecretVault vault, Iterable<String> slots) async {
     _vault = vault;
     await Future.wait([
       for (final slot in slots)
         () async {
           try {
-            final tokens = SessionTokens.decode(await vault.read(keyFor(slot)));
-            if (!tokens.isEmpty) _tokens[slot] = tokens;
+            final value = await vault.read(keyFor(slot));
+            if (value != null && value.isNotEmpty) _values[slot] = value;
             _known.add(slot);
           } on SecretVaultUnavailable catch (failure) {
             error = failure;
@@ -170,19 +172,16 @@ class SessionSecretCache {
     ]);
   }
 
-  /// Copies [tokens] into [vault] and reads them back to prove the round trip.
+  /// Copies [values] into [vault] and reads them back to prove the round trip.
   /// Throws [SecretVaultUnavailable] without changing this cache on failure.
-  Future<void> adopt(
-    SecretVault vault,
-    Map<String, SessionTokens> tokens,
-  ) async {
-    for (final entry in tokens.entries) {
+  Future<void> adopt(SecretVault vault, Map<String, String> values) async {
+    for (final entry in values.entries) {
       if (entry.value.isEmpty) continue;
       final key = keyFor(entry.key);
-      await vault.write(key, entry.value.encode());
-      if (SessionTokens.decode(await vault.read(key)) != entry.value) {
+      await vault.write(key, entry.value);
+      if (await vault.read(key) != entry.value) {
         throw const SecretVaultUnavailable(
-          'The system keyring did not return the stored sign-in.',
+          'The system keyring did not return the stored value.',
         );
       }
     }
@@ -200,29 +199,31 @@ class SessionSecretCache {
   }
 
   /// Switches to [vault] after [adopt] succeeded. Synchronous on purpose.
-  void activate(SecretVault vault, Map<String, SessionTokens> tokens) {
+  void activate(SecretVault vault, Map<String, String> values) {
     _vault = vault;
-    _tokens
+    _values
       ..clear()
       ..addAll({
-        for (final entry in tokens.entries)
-          if (!entry.value.isEmpty) entry.key: entry.value,
+        for (final entry in values.entries)
+          if (entry.value.isNotEmpty) entry.key: entry.value,
       });
     _known
       ..clear()
-      ..addAll(tokens.keys);
+      ..addAll(values.keys);
     error = null;
   }
 
-  /// Records new tokens for [slot] and writes them through to the vault.
-  void put(String slot, SessionTokens tokens) {
+  /// Records a new value for [slot] (null or empty removes it) and writes it
+  /// through to the vault.
+  void put(String slot, String? value) {
+    final present = value != null && value.isNotEmpty;
     final unchanged =
         _known.contains(slot) &&
-        (tokens.isEmpty ? !_tokens.containsKey(slot) : _tokens[slot] == tokens);
-    if (tokens.isEmpty) {
-      _tokens.remove(slot);
+        (present ? _values[slot] == value : !_values.containsKey(slot));
+    if (present) {
+      _values[slot] = value;
     } else {
-      _tokens[slot] = tokens;
+      _values.remove(slot);
     }
     if (unchanged) return;
     _tail = _tail.then((_) => _writeThrough(slot));
@@ -231,11 +232,11 @@ class SessionSecretCache {
   Future<void> _writeThrough(String slot) async {
     final vault = _vault;
     if (vault == null) return;
-    // Read at run time so a burst of updates writes only the newest tokens.
-    final tokens = _tokens[slot];
+    // Read at run time so a burst of updates writes only the newest value.
+    final value = _values[slot];
     try {
-      if (tokens != null) {
-        await vault.write(keyFor(slot), tokens.encode());
+      if (value != null) {
+        await vault.write(keyFor(slot), value);
         _known.add(slot);
         error = null;
       } else if (_known.contains(slot)) {
@@ -254,7 +255,7 @@ class SessionSecretCache {
     final keys = _known.map(keyFor).toList();
     final pending = _tail;
     _vault = null;
-    _tokens.clear();
+    _values.clear();
     _known.clear();
     error = null;
     return _deleteAll(vault, keys, pending);

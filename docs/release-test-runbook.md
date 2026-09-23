@@ -424,7 +424,8 @@ Use only the disposable test workspace for this section.
     confirming, Remote Sync keeps working across a restart with no new sign-in.
     Reading `sync_config.config_json` in the database file (for example
     `sqlite3 inventorinator.sqlite3 "select config_json from sync_config"`) shows
-    no `accessToken` or `refreshToken`.
+    no `accessToken` or `refreshToken`, and on an Owner device the
+    `workspace_recovery_key_*` rows in `preferences` are empty.
   - Turn it off. Pass: sync still works and the tokens are back in the database.
   - With it on, lock or remove the keyring entry and restart. Pass: the app shows
     it is signed out, asks to reopen Remote Sync, and does not start owner

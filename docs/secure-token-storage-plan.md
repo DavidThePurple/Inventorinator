@@ -52,7 +52,7 @@ where a routine token failure silently ran the destructive
 - Linux needs a running Secret Service (GNOME Keyring, KDE Wallet) at runtime and nothing extra to build.
 - Windows builds need the C++ ATL libraries (part of Visual Studio Build Tools). Confirm the CI runner has them.
 - Android needs minSdk 24, which is already Flutter's default. Auto-backup can restore the encrypted preferences without the Keystore key; the plugin resets its storage on that error, which shows up as "signed out". No backup rules were added.
-- Recovery keys are still stored in the database and are not covered by this change. Moving them is a possible follow-up.
+- The Owner's workspace recovery key is covered too. It is worth more than a session token, since it can transfer ownership. Owners should keep their own copy, because the device's copy is lost with the keyring.
 
 ## Tests
 

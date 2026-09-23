@@ -1,6 +1,8 @@
 # Optional secure token storage (issue #20)
 
-Status: planned. Remote Sync access and refresh tokens are stored in plaintext in
+Status: implemented as an experimental, off-by-default setting.
+
+Remote Sync access and refresh tokens are stored in plaintext in
 `sync_config.config_json`. Anyone who can read or copy the database file gets
 long-lived workspace access.
 
@@ -26,7 +28,8 @@ where a routine token failure silently ran the destructive
 
 ## Design
 
-- Add `flutter_secure_storage`.
+- Add `flutter_secure_storage`, with `flutter_secure_storage_linux_secret_service` as the Linux implementation. The default Linux implementation links `libsecret` at build and startup, which would stop the whole app from launching on systems without it, even for people who never turn this on. The secret-service package talks to GNOME Keyring or KDE Wallet over D-Bus in pure Dart, so there is no new system library.
+- Tokens live in two places, not one: `sync_config.config_json` and the `known_supabase_workspaces` preference (the list used to switch between inventories). Both are covered.
 - Keep the change inside `LocalDatabase`. About 15 places read the sync config
   synchronously through `loadSyncConfig()`, and secure storage is asynchronous.
   Load the secrets once at startup into an in-memory copy. `loadSyncConfig()` merges
@@ -40,14 +43,16 @@ where a routine token failure silently ran the destructive
   the row untouched and stay off.
 - Disabling: write the tokens back into the row, then delete the keyring entry.
 - Signing out and deleting the local database clear the keyring entry too.
-- Exports and backups must not carry live tokens while the feature is on.
+- Portable database exports already contain only `app_state`, never the sync config, so they carry no tokens either way.
+- A keyring entry that could not be read is never deleted. A locked keyring at startup means "signed out", and routine saves must not wipe the stored sign-in.
+- Enabling uses `secure_delete` and a WAL checkpoint so the old token text is overwritten in the database file. Copies of the file made before enabling, and any older backups, may still hold earlier tokens; those stop working once the tokens refresh.
 
 ## Platform notes
 
-- Linux needs `libsecret-1-dev` in CI and release builds, and a running secret
-  service at runtime.
-- Android backup rules must exclude the secure-storage preferences.
-- Windows uses Credential Manager and needs no extra setup.
+- Linux needs a running Secret Service (GNOME Keyring, KDE Wallet) at runtime and nothing extra to build.
+- Windows builds need the C++ ATL libraries (part of Visual Studio Build Tools). Confirm the CI runner has them.
+- Android needs minSdk 24, which is already Flutter's default. Auto-backup can restore the encrypted preferences without the Keystore key; the plugin resets its storage on that error, which shows up as "signed out". No backup rules were added.
+- Recovery keys are still stored in the database and are not covered by this change. Moving them is a possible follow-up.
 
 ## Tests
 

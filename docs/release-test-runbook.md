@@ -417,6 +417,44 @@ Use only the disposable test workspace for this section.
   - Pass: local data survives, edits propagate, and all visible wording says
     Remote Sync/Remote—not Cloud Sync or Cloud session.
 
+- [ ] **SYNC-15 — Secure sign-in storage (experimental)**
+  - On each platform with a keyring, connect Remote Sync, open Remote Settings,
+    and turn on **Secure sign-in storage**.
+  - Pass: an experimental warning appears first and Cancel changes nothing. After
+    confirming, Remote Sync keeps working across a restart with no new sign-in.
+    Reading `sync_config.config_json` in the database file (for example
+    `sqlite3 inventorinator.sqlite3 "select config_json from sync_config"`) shows
+    no `accessToken` or `refreshToken`.
+  - Turn it off. Pass: sync still works and the tokens are back in the database.
+  - With it on, lock or remove the keyring entry and restart. Pass: the app shows
+    it is signed out, asks to reopen Remote Sync, and does not start owner
+    recovery.
+
+## 10a. App lock (PIN)
+
+- [ ] **LOCK-01 — Optional and quiet by default**
+  - With no PIN set, look for a lock button and start the app several times.
+  - Pass: no lock button, no lock screen, nothing asked.
+
+- [ ] **LOCK-02 — Set, lock, unlock**
+  - Personalization settings → App lock → Set PIN. Save the unlock key shown.
+  - Pass: a lock button appears at the top right. Clicking it hides everything
+    except a lock icon and **Unlock with PIN**. The PIN restores the same screen,
+    including half-typed text. Restarting asks for the PIN once.
+
+- [ ] **LOCK-03 — Inactivity timeout**
+  - Set a 1 minute timeout, leave the app alone, then use it again after locking.
+  - Pass: it locks after about a minute of no input and not while in use.
+
+- [ ] **LOCK-04 — Lost PIN**
+  - Lock, choose **Forgot PIN?**, enter the unlock key, set a new PIN.
+  - Pass: a new key is shown and the app will not open until it is confirmed saved.
+    The old key and old PIN no longer work.
+
+- [ ] **LOCK-05 — Wrong attempts**
+  - Enter a wrong PIN five times, then restart the app.
+  - Pass: attempts pause for 30 seconds, including after the restart.
+
 ## 11. Linux checks
 
 - [ ] **LINUX-01 — X11 packaged build**

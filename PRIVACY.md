@@ -6,7 +6,13 @@ in a local SQLite database unless the user enables synchronization.
 When synchronization is enabled, the complete workshop state—including item
 images, custom Type icons, and captured label images—is sent to the hosted or
 self-hosted Supabase instance chosen by the user. Authentication and refresh
-tokens are stored on the device so it can reconnect. A plain HTTP server address is supported for
+tokens are stored on the device so it can reconnect. By default they are kept
+in the local database. **Secure sign-in storage** in Remote Settings is an
+experimental option that keeps them in the operating system's keyring instead
+(Windows Credential Manager, Android Keystore, or the Linux Secret Service),
+so a copy of the database file does not contain them. Copies of the database
+made before you turn it on may still hold earlier tokens, which stop working
+once they refresh. A plain HTTP server address is supported for
 private LAN installations, but it is not encrypted; use HTTPS across untrusted
 networks.
 

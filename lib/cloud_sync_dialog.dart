@@ -19,6 +19,7 @@ import 'digikey_settings.dart';
 import 'mouser_settings.dart';
 import 'mouser_credentials.dart';
 import 'service_status.dart';
+import 'session_secrets.dart';
 import 'digikey_credentials.dart';
 import 'workshop_merge.dart';
 import 'workshop_delta.dart';
@@ -1407,6 +1408,28 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         : 'Connected to the selected inventory.';
   }
 
+  Future<String> _setSecureSessionStorage(bool enable) async {
+    final database = widget.database;
+    if (!enable) {
+      final cleared = await database.disableSecureSessionStorage();
+      return cleared
+          ? 'The sign-in is stored in this device\'s database again.'
+          : 'The sign-in is stored in this device\'s database again, but some '
+                'entries could not be removed from the system keyring.';
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _SecureStorageWarningDialog(),
+    );
+    if (confirmed != true) return '';
+    try {
+      await database.enableSecureSessionStorage();
+      return 'The sign-in is now stored in the system keyring.';
+    } on SecretVaultUnavailable catch (error) {
+      return 'Secure storage was not turned on. ${error.message}';
+    }
+  }
+
   void _disconnect() {
     final next = _formConfig();
     _rememberWorkspace(next);
@@ -1875,6 +1898,34 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                   ),
                   const SizedBox(height: 4),
                 ],
+                const Divider(height: 20),
+                SwitchListTile.adaptive(
+                  key: const Key('secure-session-storage'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Secure sign-in storage (experimental)'),
+                  subtitle: Text(
+                    widget.database.secureSessionStorageEnabled
+                        ? 'On. This device\'s sign-in is kept in the system keyring, not in the database.'
+                        : 'Off. The sign-in is stored in this device\'s database. Turn on to keep it in the system keyring instead.',
+                  ),
+                  value: widget.database.secureSessionStorageEnabled,
+                  onChanged: busy
+                      ? null
+                      : (value) => unawaited(
+                          _run(() => _setSecureSessionStorage(value)),
+                        ),
+                ),
+                if (widget.database.secureSessionStorageEnabled &&
+                    widget.database.secureSessionError != null)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'The system keyring is not available, so this device cannot '
+                      'reconnect until it is unlocked. Unlock it and restart '
+                      'Inventorinator, or turn secure storage off and sign in again.',
+                      key: Key('secure-session-keyring-error'),
+                    ),
+                  ),
                 TextField(
                   key: const Key('supabase-url'),
                   controller: urlController,
@@ -1926,6 +1977,42 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         ),
       ),
     ),
+  );
+}
+
+class _SecureStorageWarningDialog extends StatelessWidget {
+  const _SecureStorageWarningDialog();
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('secure-session-warning'),
+    title: const Text('Turn on secure sign-in storage?'),
+    content: const SingleChildScrollView(
+      child: Text(
+        'This feature is experimental.\n\n'
+        'It keeps this device\'s Remote Sync sign-in in the system keyring '
+        '(Windows Credential Manager, Android Keystore, or the Linux Secret '
+        'Service) instead of the Inventorinator database, so a copy of the '
+        'database file no longer contains it.\n\n'
+        'If the keyring is reset, locked, or lost, for example after '
+        'reinstalling the operating system or creating a new user profile, '
+        'Inventorinator cannot recover the sign-in. Restoring it is up to your '
+        'system. You would sign in to Remote Sync again on this device. Your '
+        'inventory and the shared inventory are not affected.\n\n'
+        'You can turn this off at any time.',
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(false),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('secure-session-confirm'),
+        onPressed: () => Navigator.of(context).pop(true),
+        child: const Text('Turn on'),
+      ),
+    ],
   );
 }
 

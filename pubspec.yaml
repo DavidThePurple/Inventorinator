@@ -57,6 +57,9 @@ dependencies:
   xml: ^7.0.1
   printing: ^5.15.0
   markdown_editor_live: ^0.6.0
+  flutter_secure_storage: ^11.2.0
+  flutter_secure_storage_linux_secret_service: ^0.1.0
+  crypto: ^3.0.7
 dev_dependencies:
   flutter_test:
     sdk: flutter

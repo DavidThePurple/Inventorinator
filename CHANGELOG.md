@@ -1,5 +1,9 @@
 # Changelog
 
+- Add an optional PIN lock with a top-right lock button, an unlock key for lost PINs, and an optional inactivity timeout. Off by default; a screen lock, not encryption. See [App lock](docs/app-lock.md).
+
+- Add an optional, experimental **Secure sign-in storage** setting that keeps Remote Sync tokens in the system keyring instead of the database. Off by default.
+
 - Add Windows label OCR using a bundled Tesseract engine, matching Linux and Android (no server change).
 
 - Show import column formats, defaults, and copyable CSV/JSON examples before choosing a file and during spreadsheet mapping.

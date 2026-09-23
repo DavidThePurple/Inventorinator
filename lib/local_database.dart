@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path_util;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'session_secrets.dart';
 import 'workshop_delta.dart';
 
 class PendingWorkshopChange {
@@ -42,6 +43,12 @@ class LocalDatabaseAlreadyOpenException implements Exception {
 class LocalDatabase {
   LocalDatabase._(this.path, this._database, this._instanceLock);
 
+  /// Preference holding the list of other workspaces this device can switch to.
+  /// Each entry is a serialized `SupabaseConfig`, tokens included.
+  static const knownWorkspacesPreference = 'known_supabase_workspaces';
+  static const _secureSessionPreference = 'secure_session_storage';
+  static const _currentSessionSlot = 'current';
+
   final String path;
   Database _database;
   final RandomAccessFile? _instanceLock;
@@ -50,6 +57,15 @@ class LocalDatabase {
   Future<void> _syncSessionTail = Future<void>.value();
   Future<void> _writeTail = Future<void>.value();
   final Map<String, WorkshopEntityChange> _queuedWrites = {};
+  final SessionSecretCache _secrets = SessionSecretCache();
+
+  /// Keyring used when turning secure storage on. Tests supply a fake; the app
+  /// leaves it null and uses the operating system's keyring.
+  SecretVault? _preferredVault;
+
+  /// Counts writes of session config, so enabling secure storage can tell that
+  /// a token refresh landed while it was copying tokens to the keyring.
+  int _sessionWrites = 0;
 
   Future<T> withSyncSessionLock<T>(Future<T> Function() action) async {
     final previous = _syncSessionTail;
@@ -126,11 +142,15 @@ class LocalDatabase {
     ]);
   }
 
-  Future<void> waitForPendingWrites() => _writeTail;
+  Future<void> waitForPendingWrites() =>
+      Future.wait([_writeTail, _secrets.flush()]);
 
   bool get isClosed => _closed;
 
-  static Future<LocalDatabase> open({String? overridePath}) async {
+  static Future<LocalDatabase> open({
+    String? overridePath,
+    SecretVault? secretVault,
+  }) async {
     final databasePath =
         overridePath ??
         path_util.join(
@@ -150,11 +170,18 @@ class LocalDatabase {
       }
     }
     final database = sqlite3.open(databasePath);
-    final result = LocalDatabase._(databasePath, database, instanceLock);
+    final result = LocalDatabase._(databasePath, database, instanceLock)
+      .._preferredVault = secretVault;
     result._createSchema();
     result._seedEntityStateFromSnapshot();
     result._migrateInventoryImages();
     await _hardenLocalPermissions(databasePath);
+    if (result.loadBoolPreference(_secureSessionPreference, fallback: false)) {
+      await result._secrets.restore(
+        secretVault ?? KeyringSecretVault(),
+        result._persistedSessionSlots(),
+      );
+    }
     return result;
   }
 
@@ -338,7 +365,10 @@ class LocalDatabase {
       'SELECT value FROM preferences WHERE key = ?',
       [key],
     );
-    return rows.isEmpty ? fallback : rows.first['value'] as String;
+    final value = rows.isEmpty ? fallback : rows.first['value'] as String;
+    return key == knownWorkspacesPreference && _secrets.attached
+        ? _withWorkspaceTokens(value)
+        : value;
   }
 
   void saveBoolPreference(String key, bool value) {
@@ -352,12 +382,17 @@ class LocalDatabase {
   }
 
   void saveStringPreference(String key, String value) {
+    var stored = value;
+    if (key == knownWorkspacesPreference) {
+      _sessionWrites++;
+      if (_secrets.attached) stored = _stripWorkspaceTokens(value);
+    }
     _database.execute(
       '''
       INSERT INTO preferences (key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
       ''',
-      [key, value],
+      [key, stored],
     );
   }
 
@@ -397,10 +432,18 @@ class LocalDatabase {
     final rows = _database.select(
       'SELECT config_json FROM sync_config WHERE id = 1',
     );
-    return rows.isEmpty ? null : rows.first['config_json'] as String;
+    if (rows.isEmpty) return null;
+    final source = rows.first['config_json'] as String;
+    return _secrets.attached
+        ? _withSessionTokens(source, _secrets.tokensFor(_currentSessionSlot))
+        : source;
   }
 
   void saveSyncConfig(String configJson) {
+    _sessionWrites++;
+    final stored = _secrets.attached
+        ? _stripCurrentSessionTokens(configJson)
+        : configJson;
     _database.execute(
       '''
       INSERT INTO sync_config (id, config_json, updated_at)
@@ -409,8 +452,261 @@ class LocalDatabase {
         config_json = excluded.config_json,
         updated_at = excluded.updated_at
       ''',
-      [configJson, DateTime.now().toUtc().toIso8601String()],
+      [stored, DateTime.now().toUtc().toIso8601String()],
     );
+  }
+
+  /// Whether Remote Sync sign-in tokens are kept in the system keyring rather
+  /// than in this database.
+  bool get secureSessionStorageEnabled => _secrets.attached;
+
+  /// The latest keyring failure, or null when the keyring is working.
+  Object? get secureSessionError => _secrets.error;
+
+  /// Moves the Remote Sync tokens into the system keyring. Nothing changes if
+  /// the keyring cannot store and return them; throws [SecretVaultUnavailable].
+  Future<void> enableSecureSessionStorage({SecretVault? vault}) async {
+    if (_secrets.attached) return;
+    final target = vault ?? _preferredVault ?? KeyringSecretVault();
+    await _secrets.probe(target);
+    var tokens = const <String, SessionTokens>{};
+    try {
+      for (var attempt = 0; attempt < 5; attempt++) {
+        final writes = _sessionWrites;
+        tokens = _storedSessionTokens();
+        await _secrets.adopt(target, tokens);
+        // A token refresh may have landed while the keyring was busy. Copy
+        // again rather than strip newer tokens that were never stored.
+        if (writes != _sessionWrites) continue;
+        _moveSessionTokensOutOfSql();
+        _secrets.activate(target, tokens);
+        return;
+      }
+      throw const SecretVaultUnavailable(
+        'The sign-in changed repeatedly while it was being moved. Try again.',
+      );
+    } catch (_) {
+      await _secrets.discard(target, tokens.keys);
+      rethrow;
+    }
+  }
+
+  /// Moves the tokens back into this database and removes them from the
+  /// keyring. Resolves to false if a keyring entry could not be removed.
+  Future<bool> disableSecureSessionStorage() {
+    if (!_secrets.attached) return Future.value(true);
+    _restoreSessionTokensToSql();
+    return _secrets.release();
+  }
+
+  static String? _workspaceSlot(Map<String, dynamic> entry) {
+    final url = entry['url'];
+    final id = entry['workspaceId'];
+    if (url is! String || id is! String || url.isEmpty || id.isEmpty) {
+      return null;
+    }
+    return 'ws:${Uri.encodeComponent(url)}:$id';
+  }
+
+  static List<Map<String, dynamic>>? _workspaceEntries(String source) {
+    try {
+      final decoded = jsonDecode(source);
+      return decoded is List
+          ? decoded.whereType<Map<String, dynamic>>().toList()
+          : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  String? _rawPreference(String key) {
+    final rows = _database.select(
+      'SELECT value FROM preferences WHERE key = ?',
+      [key],
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  String? _rawSyncConfig() {
+    final rows = _database.select(
+      'SELECT config_json FROM sync_config WHERE id = 1',
+    );
+    return rows.isEmpty ? null : rows.first['config_json'] as String;
+  }
+
+  Set<String> _persistedSessionSlots() => {
+    _currentSessionSlot,
+    for (final entry
+        in _workspaceEntries(_rawPreference(knownWorkspacesPreference) ?? '') ??
+            const <Map<String, dynamic>>[])
+      ?_workspaceSlot(entry),
+  };
+
+  /// The tokens currently stored in plain SQLite rows, by keyring slot.
+  Map<String, SessionTokens> _storedSessionTokens() {
+    final tokens = <String, SessionTokens>{};
+    final config = _rawSyncConfig();
+    if (config != null) {
+      try {
+        final json = jsonDecode(config);
+        if (json is Map<String, dynamic>) {
+          tokens[_currentSessionSlot] = SessionTokens.fromJson(json);
+        }
+      } on FormatException {
+        // An unreadable config holds no usable tokens.
+      }
+    }
+    for (final entry
+        in _workspaceEntries(_rawPreference(knownWorkspacesPreference) ?? '') ??
+            const <Map<String, dynamic>>[]) {
+      final slot = _workspaceSlot(entry);
+      if (slot != null) tokens[slot] = SessionTokens.fromJson(entry);
+    }
+    return tokens;
+  }
+
+  /// Rewrites the stored rows without tokens and records that the keyring is
+  /// in use, atomically. SQLite is told to overwrite freed pages so the old
+  /// token text does not linger in the file.
+  void _moveSessionTokensOutOfSql() {
+    final previous = _database
+        .select('PRAGMA secure_delete')
+        .first
+        .values
+        .first;
+    _database.execute('PRAGMA secure_delete = ON');
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      final config = _rawSyncConfig();
+      if (config != null) {
+        _database.execute(
+          'UPDATE sync_config SET config_json = ? WHERE id = 1',
+          [_stripTokensFromConfigText(config)],
+        );
+      }
+      final known = _rawPreference(knownWorkspacesPreference);
+      final entries = known == null ? null : _workspaceEntries(known);
+      if (entries != null) {
+        _database.execute('UPDATE preferences SET value = ? WHERE key = ?', [
+          jsonEncode([for (final entry in entries) SessionTokens.strip(entry)]),
+          knownWorkspacesPreference,
+        ]);
+      }
+      _database.execute(
+        '''
+        INSERT INTO preferences (key, value) VALUES (?, 'true')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        ''',
+        [_secureSessionPreference],
+      );
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    } finally {
+      _database.execute('PRAGMA secure_delete = $previous');
+    }
+    _database.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+  }
+
+  void _restoreSessionTokensToSql() {
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      final config = _rawSyncConfig();
+      if (config != null) {
+        _database.execute(
+          'UPDATE sync_config SET config_json = ? WHERE id = 1',
+          [_withSessionTokens(config, _secrets.tokensFor(_currentSessionSlot))],
+        );
+      }
+      final known = _rawPreference(knownWorkspacesPreference);
+      if (known != null) {
+        _database.execute('UPDATE preferences SET value = ? WHERE key = ?', [
+          _withWorkspaceTokens(known),
+          knownWorkspacesPreference,
+        ]);
+      }
+      _database.execute('DELETE FROM preferences WHERE key = ?', [
+        _secureSessionPreference,
+      ]);
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  static String _stripTokensFromConfigText(String config) {
+    try {
+      final json = jsonDecode(config);
+      return json is Map<String, dynamic>
+          ? jsonEncode(SessionTokens.strip(json))
+          : config;
+    } on FormatException {
+      return config;
+    }
+  }
+
+  String _stripCurrentSessionTokens(String configJson) {
+    try {
+      final json = jsonDecode(configJson);
+      if (json is! Map<String, dynamic>) return configJson;
+      _secrets.put(_currentSessionSlot, SessionTokens.fromJson(json));
+      return jsonEncode(SessionTokens.strip(json));
+    } on FormatException {
+      return configJson;
+    }
+  }
+
+  static String _withSessionTokens(String source, SessionTokens tokens) {
+    if (tokens.isEmpty) return source;
+    // The stored text is a JSON object written by jsonEncode, so the tokens
+    // can be spliced in after the opening brace. That avoids re-parsing the
+    // config, which carries a snapshot of the whole inventory.
+    if (source.length > 2 && source.startsWith('{') && source[1] != '}') {
+      return '{"accessToken":${jsonEncode(tokens.accessToken)},'
+          '"refreshToken":${jsonEncode(tokens.refreshToken)},'
+          '${source.substring(1)}';
+    }
+    try {
+      final json = jsonDecode(source);
+      return json is Map<String, dynamic>
+          ? jsonEncode(tokens.mergeInto(json))
+          : source;
+    } on FormatException {
+      return source;
+    }
+  }
+
+  String _withWorkspaceTokens(String source) {
+    final entries = _workspaceEntries(source);
+    if (entries == null) return source;
+    return jsonEncode([
+      for (final entry in entries)
+        switch (_workspaceSlot(entry)) {
+          final slot? => _secrets.tokensFor(slot).mergeInto(entry),
+          null => entry,
+        },
+    ]);
+  }
+
+  String _stripWorkspaceTokens(String source) {
+    final entries = _workspaceEntries(source);
+    if (entries == null) return source;
+    final listed = <String>{};
+    for (final entry in entries) {
+      final slot = _workspaceSlot(entry);
+      if (slot == null) continue;
+      listed.add(slot);
+      _secrets.put(slot, SessionTokens.fromJson(entry));
+    }
+    // A workspace dropped from the list also loses its stored sign-in.
+    for (final slot in _secrets.workspaceSlots.toList()) {
+      if (!listed.contains(slot)) _secrets.put(slot, SessionTokens.empty);
+    }
+    return jsonEncode([
+      for (final entry in entries) SessionTokens.strip(entry),
+    ]);
   }
 
   String? loadWorkspaceRecoveryKey(String workspaceId) {
@@ -1282,6 +1578,8 @@ class LocalDatabase {
   }
 
   Future<void> deleteAndRecreate() async {
+    // Deleting the local data also forgets the sign-in kept in the keyring.
+    if (_secrets.attached) await _secrets.release();
     _database.close();
     _closed = true;
     _writeGeneration++;

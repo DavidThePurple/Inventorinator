@@ -24,6 +24,7 @@ import 'package:image/image.dart' as img;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'app_lock.dart';
 import 'local_database.dart';
 import 'item_drafts.dart';
 import 'device_name_dialog.dart';
@@ -6315,10 +6316,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   late AppColorTheme colorTheme;
   late AppBrightnessMode brightnessMode;
   late Color customThemeColor;
+  late final AppLockController _appLock;
 
   @override
   void initState() {
     super.initState();
+    _appLock = AppLockController(widget.database);
     final saved = widget.database?.loadStringPreference(
       'app_color_theme',
       fallback: AppColorTheme.darkPurple.name,
@@ -6426,6 +6429,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   }
 
   @override
+  void dispose() {
+    _appLock.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = InventorinatorColors.forTheme(
       colorTheme,
@@ -6510,8 +6519,15 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Inventorinator',
-      builder: (context, child) =>
-          DesktopTouchKeyboardBridge(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => AppLockScope(
+        controller: _appLock,
+        child: DesktopTouchKeyboardBridge(
+          child: AppLockGate(
+            controller: _appLock,
+            child: child ?? const SizedBox.shrink(),
+          ),
+        ),
+      ),
       theme: ThemeData(
         brightness: brightness,
         colorScheme: scheme,
@@ -8102,7 +8118,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (event is! KeyDownEvent ||
         event.logicalKey != LogicalKeyboardKey.keyF ||
         !HardwareKeyboard.instance.isControlPressed ||
-        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        !(ModalRoute.of(context)?.isCurrent ?? false) ||
+        AppLockScope.maybeOf(context, listen: false)?.locked == true) {
       return false;
     }
     inventorySearchFocusNode.requestFocus();
@@ -21618,6 +21635,25 @@ class _InventoryHomeState extends State<InventoryHome> {
               onPressed: _openGettingStarted,
               icon: Icons.help_outline_rounded,
             ),
+            // Only shown once a PIN has been set; the lock is opt-in.
+            Builder(
+              builder: (context) {
+                final lock = AppLockScope.maybeOf(context);
+                if (lock == null || !lock.hasPin) return const SizedBox.shrink();
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _configBlockDivider(),
+                    _configBlockButton(
+                      key: const Key('app-lock'),
+                      tooltip: 'Lock inventory',
+                      onPressed: lock.lock,
+                      icon: Icons.lock_outline_rounded,
+                    ),
+                  ],
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -28916,6 +28952,13 @@ class _PersonalizationSettingsDialogState
                 ),
               ),
 
+            if (widget.database != null &&
+                AppLockScope.maybeOf(context, listen: false) != null) ...[
+              AppLockSettingsSection(
+                controller: AppLockScope.maybeOf(context, listen: false)!,
+              ),
+              const Divider(height: 28),
+            ],
             const Text(
               'Appearance',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),

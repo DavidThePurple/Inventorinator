@@ -476,6 +476,13 @@ Use only the disposable test workspace for this section.
     and light mode.
   - Pass: controls are aligned/themed and the custom resize preview remains visible.
 
+- [ ] **LINUX-05 — KDE / SteamOS launcher icon**
+  - On a KDE Plasma desktop (SteamOS desktop mode), extract the archive and run
+    `./install.sh`. Open Inventorinator from the Start menu, then pin it to the
+    taskbar.
+  - Pass: the raygun icon shows in the Start menu, the taskbar, and the window
+    switcher, on both X11 and Wayland, without logging out.
+
 ## 12. Android checks
 
 - [ ] **ANDROID-01 — Clean install**

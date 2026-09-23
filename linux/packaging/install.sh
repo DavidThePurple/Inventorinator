@@ -37,9 +37,15 @@ if [[ ! -s "$icons_root/index.theme" && -s /usr/share/icons/hicolor/index.theme 
   install -m 644 /usr/share/icons/hicolor/index.theme "$icons_root/index.theme"
 fi
 
+# Point the launcher at the icon file itself. A themed icon name only resolves
+# once the desktop environment has rescanned its icon cache, and KDE Plasma (the
+# SteamOS desktop) can leave the Start menu and taskbar blank after a per-user
+# install until it does. A file path needs no cache.
 awk \
-  -v executable="$install_dir/Inventorinator" '
+  -v executable="$install_dir/Inventorinator" \
+  -v icon="$install_dir/data/app_icon.png" '
   /^Exec=/ { print "Exec=" executable; next }
+  /^Icon=/ { print "Icon=" icon; next }
   { print }
 ' "$source_dir/share/applications/media.everlasting.inventorinator.desktop" \
   > "$applications_dir/media.everlasting.inventorinator.desktop"
@@ -51,5 +57,16 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 command -v gtk-update-icon-cache >/dev/null 2>&1 && \
   gtk-update-icon-cache -f -t "$icons_root" \
   >/dev/null 2>&1 || true
+
+# KDE Plasma keeps its own application and icon caches. Touching the theme
+# directory and rebuilding the service cache makes a new install appear without
+# logging out.
+touch "$icons_root" 2>/dev/null || true
+for rebuild in kbuildsycoca6 kbuildsycoca5; do
+  if command -v "$rebuild" >/dev/null 2>&1; then
+    "$rebuild" --noincremental >/dev/null 2>&1 || true
+    break
+  fi
+done
 
 echo "Inventorinator installed. Open it from your application menu."

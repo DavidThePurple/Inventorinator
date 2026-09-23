@@ -1,5 +1,7 @@
 # Changelog
 
+- Fix the blank application icon in the Start menu and taskbar after `./install.sh` on SteamOS/KDE: the launcher now points at the installed icon file, and KDE's caches are refreshed.
+
 - Add an optional PIN lock with a top-right lock button, an unlock key for lost PINs, and an optional inactivity timeout. Off by default; a screen lock, not encryption. See [App lock](docs/app-lock.md).
 
 - Add an optional, experimental **Secure sign-in storage** setting that keeps Remote Sync tokens and the Owner recovery key in the system keyring instead of the database. Off by default.

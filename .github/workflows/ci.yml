@@ -134,6 +134,8 @@ jobs:
           fi
           test -x build/linux/x64/release/bundle/data/ocr/linux_x64/tesseract
           test -s build/linux/x64/release/bundle/data/ocr/linux_x64/tessdata/eng.traineddata
+      - name: Verify installer launcher and icon
+        run: ./tool/check_linux_install.sh
       - name: Exercise native Code 128 decoder
         env:
           INVENTORINATOR_NATIVE_DECODER_TEST: "1"

@@ -72,6 +72,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/inventory_modified_time.sql
       - name: Verify filament drying policy
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/filament_drying_policy.sql
+      - name: Verify checkout sync
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/checkout_sync.sql
       - name: Verify Owner note authority
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/scratchpad_owner_authority.sql
       - name: Verify Scratch Pad device recovery

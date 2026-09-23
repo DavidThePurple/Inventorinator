@@ -230,6 +230,23 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
     }
   }
 
+  /// Stops the camera and starts it again, the way switching cameras does, to
+  /// recover a preview that stalled or failed to start.
+  Future<void> _restartCamera() async {
+    delivered = false;
+    try {
+      await controller.stop();
+    } catch (_) {
+      // Stopping a camera that never started is not an error worth showing.
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    try {
+      await controller.start();
+    } catch (_) {
+      // The scanner shows its own error if the camera still cannot open.
+    }
+  }
+
   @override
   void dispose() {
     xrealEyeTimer?.cancel();
@@ -296,6 +313,13 @@ class _MobileCameraScannerState extends State<_MobileCameraScanner> {
                   onPressed: () => unawaited(controller.switchCamera()),
                   icon: const Icon(Icons.cameraswitch_rounded),
                 ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  key: const Key('restart-camera'),
+                  tooltip: 'Restart camera',
+                  onPressed: () => unawaited(_restartCamera()),
+                  icon: const Icon(Icons.restart_alt_rounded),
+                ),
               ],
             ),
           ),
@@ -337,6 +361,20 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
     } else if (state == AppLifecycleState.resumed && camera == null) {
       unawaited(_initialize());
     }
+  }
+
+  /// Releases the camera and opens it again, to recover from a stall or a
+  /// failed start.
+  Future<void> _restartCamera() async {
+    final previous = camera;
+    camera = null;
+    setState(() => error = null);
+    try {
+      await previous?.dispose().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // A stalled camera may never answer; opening it again does not need it to.
+    }
+    await _initialize();
   }
 
   Future<void> _initialize() async {
@@ -406,9 +444,31 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
   @override
   Widget build(BuildContext context) {
     final active = camera;
-    if (error != null) return Center(child: Text(error!));
+    final restart = FilledButton.tonalIcon(
+      key: const Key('restart-ocr-camera'),
+      onPressed: () => unawaited(_restartCamera()),
+      icon: const Icon(Icons.restart_alt_rounded),
+      label: const Text('Restart camera'),
+    );
+    if (error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [Text(error!), const SizedBox(height: 12), restart],
+        ),
+      );
+    }
     if (active == null || !active.value.isInitialized) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            restart,
+          ],
+        ),
+      );
     }
     return GestureDetector(
       key: const Key('scanner-camera-surface'),
@@ -424,6 +484,16 @@ class _MobileOcrCameraState extends State<_MobileOcrCamera>
             ),
           ),
           const _ScanGuide(wide: true),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: IconButton.filledTonal(
+              key: const Key('restart-ocr-camera-overlay'),
+              tooltip: 'Restart camera',
+              onPressed: () => unawaited(_restartCamera()),
+              icon: const Icon(Icons.restart_alt_rounded),
+            ),
+          ),
           if (capturing)
             const ColoredBox(
               color: Color(0x55000000),
@@ -586,7 +656,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     }
   }
 
-  Future<void> _findCameras() async {
+  Future<void> _findCameras({String? keepName}) async {
     scanTimer?.cancel();
     if (mounted) {
       setState(() {
@@ -602,11 +672,17 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         const Duration(seconds: 5),
       )).toList()..sort(_compareWindowsCameras);
       if (!mounted) return;
+      // A restart reopens the camera it was using, found again by its name.
+      final kept = keepName == null
+          ? -1
+          : found.indexWhere((camera) => camera.name == keepName);
       setState(() {
         cameras = found;
-        selectedCamera = selectedCamera
-            .clamp(0, found.isEmpty ? 0 : found.length - 1)
-            .toInt();
+        selectedCamera = kept >= 0
+            ? kept
+            : selectedCamera
+                  .clamp(0, found.isEmpty ? 0 : found.length - 1)
+                  .toInt();
         initializing = false;
         error = found.isEmpty ? 'No Windows camera was found.' : null;
       });
@@ -620,8 +696,13 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
     }
   }
 
+  // Bumped whenever a camera is started or restarted, so a start that is still
+  // waiting on a stalled driver cannot replace the camera that took over.
+  int _startGeneration = 0;
+
   Future<void> _startCamera(int index) async {
     scanTimer?.cancel();
+    final generation = ++_startGeneration;
     final previous = camera;
     camera = null;
     if (mounted) {
@@ -632,6 +713,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       });
     }
     await previous?.dispose();
+    if (generation != _startGeneration) return;
     try {
       Object? lastException;
       for (final preset in const [
@@ -650,7 +732,7 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
         );
         try {
           await next.initialize();
-          if (!mounted) {
+          if (!mounted || generation != _startGeneration) {
             await next.dispose();
             return;
           }
@@ -671,12 +753,36 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
       }
       throw lastException ?? StateError('Camera initialization failed.');
     } catch (exception) {
-      if (!mounted) return;
+      if (!mounted || generation != _startGeneration) return;
       setState(() {
         initializing = false;
         error = 'Could not open ${cameras[index].name}: $exception';
       });
     }
+  }
+
+  /// Releases the camera and opens it again, the way switching cameras does.
+  /// The camera list is read again and the same camera is reopened by name, so
+  /// a stalled or failed startup can be retried without closing the scanner.
+  Future<void> _restartCamera() async {
+    final name = cameras.isEmpty ? null : cameras[selectedCamera].name;
+    // Abandon any start that is still waiting on the driver.
+    _startGeneration++;
+    scanTimer?.cancel();
+    final previous = camera;
+    camera = null;
+    if (mounted) {
+      setState(() {
+        initializing = true;
+        error = null;
+      });
+    }
+    try {
+      await previous?.dispose().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // A stalled driver may never answer; the new start does not need it to.
+    }
+    await _findCameras(keepName: name);
   }
 
   Future<Uint8List?> _takePicture() async {
@@ -930,6 +1036,13 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                         : _cycleCamera,
                     icon: const Icon(Icons.cameraswitch_rounded),
                   ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    key: const Key('restart-windows-camera'),
+                    tooltip: 'Restart camera',
+                    onPressed: _restartCamera,
+                    icon: const Icon(Icons.restart_alt_rounded),
+                  ),
                 ],
               ],
             ),
@@ -966,6 +1079,19 @@ class _WindowsCameraScannerState extends State<_WindowsCameraScanner> {
                     ),
                   ),
                 ),
+              ),
+            ),
+          ),
+        if (compact)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Align(
+              alignment: Alignment.center,
+              child: OutlinedButton.icon(
+                key: const Key('restart-windows-camera-compact'),
+                onPressed: _restartCamera,
+                icon: const Icon(Icons.restart_alt_rounded),
+                label: const Text('Restart camera'),
               ),
             ),
           ),
@@ -1023,6 +1149,10 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
   // the scanner releases that camera.
   final Map<String, Map<String, int>> restoreControls = {};
   String? error;
+  // Flags a camera that started but never produced a picture.
+  Timer? stallTimer;
+  DateTime? lastFrameAt;
+  bool restarting = false;
 
   @override
   void initState() {
@@ -1109,7 +1239,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
     }
   }
 
-  Future<void> _findCameras() async {
+  Future<void> _findCameras({String? keep}) async {
     try {
       final candidates = await Directory('/dev')
           .list()
@@ -1151,7 +1281,9 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       if (!mounted) return;
       setState(() {
         devices = entries;
-        device = entries.firstOrNull;
+        device = keep != null && entries.contains(keep)
+            ? keep
+            : entries.firstOrNull;
         error = entries.isEmpty ? 'No Linux webcam was found.' : null;
       });
       if (device != null) {
@@ -1167,6 +1299,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
     if (delivered || device == null) return;
     streamBuffer.clear();
     focusLocked = false;
+    lastFrameAt = null;
     try {
       final process = await Process.start('ffmpeg', [
         '-loglevel',
@@ -1190,6 +1323,14 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       ]);
       cameraProcess = process;
       cameraOutput = process.stdout.listen(_acceptCameraBytes);
+      stallTimer?.cancel();
+      stallTimer = Timer(const Duration(seconds: 6), () {
+        if (!mounted || cameraProcess != process || lastFrameAt != null) return;
+        setState(
+          () => error =
+              'The camera is not sending pictures. Press Restart camera.',
+        );
+      });
       final path = device!;
       final controls = await _readControls(path);
       final hasFocusMotor = controls.containsKey('focus_absolute');
@@ -1236,6 +1377,7 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
       );
       streamBuffer.removeRange(0, end + 2);
       if (!mounted) return;
+      lastFrameAt = DateTime.now();
       setState(() {
         frame = bytes;
         error = null;
@@ -1288,6 +1430,8 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
   }
 
   Future<void> _stopCamera() async {
+    stallTimer?.cancel();
+    stallTimer = null;
     final process = cameraProcess;
     cameraProcess = null;
     process?.kill();
@@ -1314,8 +1458,29 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
     unawaited(_startCamera());
   }
 
+  /// Releases the camera and opens it again, the way switching cameras does.
+  /// The device list is read again so a webcam that was unplugged and replugged
+  /// under a new /dev/video number is found. The same device is reopened when
+  /// it is still there, so a stalled or failed startup can be retried without
+  /// closing the scanner.
+  Future<void> _restartCamera() async {
+    if (restarting) return;
+    final previous = device;
+    setState(() {
+      restarting = true;
+      frame = null;
+      error = null;
+      focusLocked = false;
+      delivered = false;
+    });
+    await _stopCamera();
+    await _findCameras(keep: previous);
+    if (mounted) setState(() => restarting = false);
+  }
+
   @override
   void dispose() {
+    stallTimer?.cancel();
     cameraOutput?.cancel();
     cameraProcess?.kill();
     unawaited(_restoreScanControls());
@@ -1363,6 +1528,13 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
                     tooltip: 'Switch camera',
                     onPressed: devices.length < 2 ? null : _cycleCamera,
                     icon: const Icon(Icons.cameraswitch_rounded),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    key: const Key('restart-linux-camera'),
+                    tooltip: 'Restart camera',
+                    onPressed: restarting ? null : _restartCamera,
+                    icon: const Icon(Icons.restart_alt_rounded),
                   ),
                 ],
               ),
@@ -1423,7 +1595,21 @@ class _LinuxCameraScannerState extends State<_LinuxCameraScanner> {
             ),
           Expanded(
             child: frame == null
-                ? Center(child: Text(error ?? 'Starting webcam…'))
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(error ?? 'Starting webcam…'),
+                        const SizedBox(height: 12),
+                        FilledButton.tonalIcon(
+                          key: const Key('restart-linux-camera-retry'),
+                          onPressed: restarting ? null : _restartCamera,
+                          icon: const Icon(Icons.restart_alt_rounded),
+                          label: const Text('Restart camera'),
+                        ),
+                      ],
+                    ),
+                  )
                 : GestureDetector(
                     key: const Key('scanner-camera-surface'),
                     behavior: HitTestBehavior.opaque,

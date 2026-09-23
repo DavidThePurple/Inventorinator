@@ -1545,8 +1545,30 @@ class LocalDatabase {
     }
   }
 
+  static const _checkoutSyncPreference = 'checkout_sync_enabled';
+  bool? _checkoutSyncEnabled;
+
+  /// Whether the workspace shares checkouts between devices. The Owner or an
+  /// Admin sets it on the server; this is the copy last read. While it is off,
+  /// checkout changes wait in this device's outbox instead of uploading, and
+  /// go up together if the switch is turned on later.
+  bool get checkoutSyncEnabled => _checkoutSyncEnabled ??= loadBoolPreference(
+    _checkoutSyncPreference,
+    fallback: false,
+  );
+
+  void setCheckoutSyncEnabled(bool value) {
+    if (checkoutSyncEnabled == value) return;
+    _checkoutSyncEnabled = value;
+    saveBoolPreference(_checkoutSyncPreference, value);
+  }
+
   List<PendingWorkshopChange> loadPendingWorkshopChanges() => _database
-      .select('SELECT * FROM sync_outbox ORDER BY id')
+      .select(
+        checkoutSyncEnabled
+            ? 'SELECT * FROM sync_outbox ORDER BY id'
+            : "SELECT * FROM sync_outbox WHERE entity_type <> 'checkouts' ORDER BY id",
+      )
       .map(
         (row) => PendingWorkshopChange(
           outboxId: row['id'] as int,

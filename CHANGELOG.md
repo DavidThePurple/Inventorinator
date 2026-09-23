@@ -1,5 +1,13 @@
 # Changelog
 
+- Add a Checkout system: check an item out to a person or project with a quantity and an optional return date, record full or partial returns, and see what is out and what is still available without changing the total owned. Overdue returns raise an alert, and Stockroom has a **Checked out** tab grouped by who has what. The Owner or an Admin chooses in Remote Settings whether checkouts sync between devices (**Sync checkouts**, off by default; server schema 34).
+
+- Add **Restart camera** to the Linux, Windows and Android scanners: it releases the camera and opens it again (rescanning devices and reopening the same one), and a Linux webcam that starts but sends no pictures now says so.
+
+- Add machine timers: start a labelled timer on any machine from its details, watch the countdown, and get a chime, a message and an alert when it finishes. Timers sync with the machine.
+
+- Fix vendors and brands typed into the item editor (custom brand line, supplier and product-page imports) not being added to the Catalog. New names now join the Catalog when the item is saved, and an existing brand gains the item's vendor and type.
+
 - Fix the blank application icon in the Start menu and taskbar after `./install.sh` on SteamOS/KDE: the launcher now points at the installed icon file, and KDE's caches are refreshed.
 
 - Add an optional PIN lock with a top-right lock button, an unlock key for lost PINs, and an optional inactivity timeout. Off by default; a screen lock, not encryption. See [App lock](docs/app-lock.md).

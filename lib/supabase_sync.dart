@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 33;
+const latestInventorinatorSchemaVersion = 34;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -81,6 +81,10 @@ class WorkspaceRole {
   bool get canCreateBuilds => allows('builds.create', this != builder);
   bool get canShareBuilds => allows('builds.share', this != builder);
   bool get canOperateBuilds => allows('builds.operate', true);
+
+  /// Checkouts are bench work, so anyone who can edit inventory or operate
+  /// Builds may record them. Only the catalog and deletions stay restricted.
+  bool get canRecordCheckouts => canEditInventory || canOperateBuilds;
   @override
   bool operator ==(Object other) =>
       other is WorkspaceRole &&
@@ -938,6 +942,23 @@ class SupabaseSyncService {
   ) => _rpc(session, 'set_inventorinator_manual_drying', {
     'target_workspace': config.workspaceId,
     'target_required': required,
+  });
+
+  /// Whether the Owner or an Admin shares checkouts between devices.
+  Future<bool> checkoutSyncEnabled(SupabaseSession session) async {
+    if (await schemaVersion(session) < 34) return false;
+    return await _rpc(session, 'get_inventorinator_checkout_sync', {
+          'target_workspace': config.workspaceId,
+        }) ==
+        true;
+  }
+
+  Future<void> setCheckoutSyncEnabled(
+    SupabaseSession session,
+    bool enabled,
+  ) => _rpc(session, 'set_inventorinator_checkout_sync', {
+    'target_workspace': config.workspaceId,
+    'target_enabled': enabled,
   });
 
   Future<void> backupScratchPadNotes(

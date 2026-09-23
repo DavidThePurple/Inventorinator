@@ -1834,6 +1834,73 @@ class SpoolUsageRecord {
   );
 }
 
+enum CheckoutBorrowerKind { person, project }
+
+/// Some of an inventory item lent to a person or project.
+///
+/// The item's own quantity is what the workshop owns and never changes when
+/// something is checked out or returned. What is out, and what is still
+/// available, is worked out from the open checkouts.
+class CheckoutRecord {
+  const CheckoutRecord({
+    required this.id,
+    required this.itemId,
+    required this.itemName,
+    required this.quantity,
+    required this.borrower,
+    this.kind = CheckoutBorrowerKind.person,
+    required this.checkedOutAt,
+    this.expectedReturnAt,
+    this.returnedQuantity = 0,
+    this.lastReturnedAt,
+    this.note = '',
+  });
+
+  final String id;
+  final String itemId;
+
+  /// The item's name when it was checked out, so the record still reads well
+  /// if the item is renamed or removed later.
+  final String itemName;
+  final double quantity;
+  final String borrower;
+  final CheckoutBorrowerKind kind;
+  final DateTime checkedOutAt;
+  final DateTime? expectedReturnAt;
+
+  /// Running total of everything returned so far, so partial returns add up.
+  final double returnedQuantity;
+  final DateTime? lastReturnedAt;
+  final String note;
+
+  static const _tolerance = 0.0001;
+
+  double get outstanding {
+    final left = quantity - returnedQuantity;
+    return left < _tolerance ? 0 : left;
+  }
+
+  bool get isReturned => outstanding <= 0;
+
+  bool isOverdue(DateTime now) =>
+      !isReturned && expectedReturnAt != null && now.isAfter(expectedReturnAt!);
+
+  /// This checkout after [amount] came back, capped at what is still out.
+  CheckoutRecord returned(double amount, DateTime when) => CheckoutRecord(
+    id: id,
+    itemId: itemId,
+    itemName: itemName,
+    quantity: quantity,
+    borrower: borrower,
+    kind: kind,
+    checkedOutAt: checkedOutAt,
+    expectedReturnAt: expectedReturnAt,
+    returnedQuantity: returnedQuantity + amount.clamp(0, outstanding),
+    lastReturnedAt: when,
+    note: note,
+  );
+}
+
 enum ArchiveDisposition { archived, depleted, destroyed }
 
 enum ProductSearchProvider { google, bing, duckDuckGo, brave, custom }
@@ -2384,6 +2451,9 @@ class MachineRecord {
     this.sourceUrls = const [],
     this.imageBytes,
     this.added,
+    this.timerLabel = '',
+    this.timerStartedAt,
+    this.timerDuration,
   });
   final String id;
   final String name;
@@ -2397,6 +2467,268 @@ class MachineRecord {
   /// When this machine was added; null only for records that predate the
   /// field and carry no timestamp in their ID.
   final DateTime? added;
+
+  /// What the running timer is for, such as a print or a drying cycle.
+  final String timerLabel;
+
+  /// When the timer started and how long it runs. Both are null while no timer
+  /// is set. Only these are stored: whether it has finished is worked out from
+  /// the clock, so devices never disagree about a finish time.
+  final DateTime? timerStartedAt;
+  final Duration? timerDuration;
+
+  bool get hasTimer => timerStartedAt != null && timerDuration != null;
+
+  DateTime? get timerEndsAt =>
+      hasTimer ? timerStartedAt!.add(timerDuration!) : null;
+
+  Duration timerRemaining(DateTime now) => hasTimer
+      ? timerEndsAt!.difference(now).isNegative
+            ? Duration.zero
+            : timerEndsAt!.difference(now)
+      : Duration.zero;
+
+  bool timerFinished(DateTime now) =>
+      hasTimer && !now.isBefore(timerEndsAt!);
+
+  /// This machine with a timer running from [startedAt] for [duration].
+  MachineRecord withTimer({
+    required String label,
+    required DateTime startedAt,
+    required Duration duration,
+  }) => MachineRecord(
+    id: id,
+    name: name,
+    model: model,
+    address: address,
+    typeId: typeId,
+    kitIds: kitIds,
+    sourceUrls: sourceUrls,
+    imageBytes: imageBytes,
+    added: added,
+    timerLabel: label.trim(),
+    timerStartedAt: startedAt.toUtc(),
+    timerDuration: duration,
+  );
+
+  MachineRecord withoutTimer() => MachineRecord(
+    id: id,
+    name: name,
+    model: model,
+    address: address,
+    typeId: typeId,
+    kitIds: kitIds,
+    sourceUrls: sourceUrls,
+    imageBytes: imageBytes,
+    added: added,
+  );
+}
+
+/// Start, watch and clear the timer on a machine. It keeps its own one-second
+/// clock, so the countdown moves while the dialog is open.
+class _MachineTimerPanel extends StatefulWidget {
+  const _MachineTimerPanel({
+    required this.machineId,
+    required this.lookup,
+    required this.canChange,
+    required this.onStart,
+    required this.onClear,
+  });
+
+  final String machineId;
+  final MachineRecord? Function(String id) lookup;
+  final bool canChange;
+  final void Function(MachineRecord machine, Duration duration, String label)
+  onStart;
+  final void Function(MachineRecord machine) onClear;
+
+  @override
+  State<_MachineTimerPanel> createState() => _MachineTimerPanelState();
+}
+
+class _MachineTimerPanelState extends State<_MachineTimerPanel> {
+  static const _presets = <Duration>[
+    Duration(minutes: 30),
+    Duration(hours: 1),
+    Duration(hours: 2),
+    Duration(hours: 4),
+    Duration(hours: 8),
+    Duration(hours: 12),
+  ];
+
+  final _label = TextEditingController();
+  final _custom = TextEditingController();
+  Duration? _chosen;
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    _label.dispose();
+    _custom.dispose();
+    super.dispose();
+  }
+
+  static String presetLabel(Duration duration) => duration.inHours >= 1
+      ? '${duration.inHours} h'
+      : '${duration.inMinutes} min';
+
+  static String clock(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+  }
+
+  Duration? get _duration {
+    final custom = int.tryParse(_custom.text.trim());
+    if (custom != null && custom > 0) return Duration(minutes: custom);
+    return _chosen;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final machine = widget.lookup(widget.machineId);
+    if (machine == null) return const SizedBox.shrink();
+    final now = DateTime.now();
+    final title = Row(
+      children: [
+        const Icon(Icons.timer_outlined),
+        const SizedBox(width: 10),
+        const Text('Timer', style: TextStyle(fontWeight: FontWeight.w800)),
+        if (machine.timerLabel.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              machine.timerLabel,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Color(0xff929aac)),
+            ),
+          ),
+        ],
+      ],
+    );
+    if (machine.hasTimer) {
+      final finished = machine.timerFinished(now);
+      final remaining = machine.timerRemaining(now);
+      final total = machine.timerDuration!.inSeconds;
+      return Column(
+        key: const Key('machine-timer-panel'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          title,
+          const SizedBox(height: 8),
+          Text(
+            finished ? 'Finished' : clock(remaining),
+            key: const Key('machine-timer-status'),
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: finished ? const Color(0xff42d8c7) : null,
+            ),
+          ),
+          const SizedBox(height: 6),
+          LinearProgressIndicator(
+            value: finished || total == 0
+                ? 1
+                : 1 - remaining.inSeconds / total,
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('machine-timer-clear'),
+              onPressed: widget.canChange
+                  ? () {
+                      widget.onClear(machine);
+                      setState(() {});
+                    }
+                  : null,
+              icon: Icon(
+                finished ? Icons.done_rounded : Icons.stop_circle_outlined,
+              ),
+              label: Text(finished ? 'Dismiss' : 'Stop timer'),
+            ),
+          ),
+        ],
+      );
+    }
+    return Column(
+      key: const Key('machine-timer-panel'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        title,
+        const SizedBox(height: 8),
+        if (!widget.canChange)
+          const Text('No timer is running.')
+        else ...[
+          TextField(
+            key: const Key('machine-timer-label'),
+            controller: _label,
+            decoration: const InputDecoration(
+              labelText: 'What is it running?',
+              hintText: 'Benchy print, PETG drying…',
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final preset in _presets)
+                ChoiceChip(
+                  key: Key('machine-timer-preset-${preset.inMinutes}'),
+                  label: Text(presetLabel(preset)),
+                  selected: _chosen == preset && _custom.text.trim().isEmpty,
+                  onSelected: (_) => setState(() {
+                    _chosen = preset;
+                    _custom.clear();
+                  }),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('machine-timer-custom-minutes'),
+                  controller: _custom,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(
+                    labelText: 'Or minutes',
+                    hintText: '90',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton.icon(
+                key: const Key('machine-timer-start'),
+                onPressed: _duration == null
+                    ? null
+                    : () {
+                        widget.onStart(machine, _duration!, _label.text);
+                        setState(() {});
+                      },
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Start'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class CatalogProduct {
@@ -4834,6 +5166,7 @@ typedef WorkshopState = ({
   List<AuditEntry> auditLog,
   List<AdditionHistoryEntry> additionHistory,
   List<SpoolUsageRecord> spoolUsage,
+  List<CheckoutRecord> checkouts,
   int historyLimit,
 });
 
@@ -4987,6 +5320,7 @@ String encodeWorkshopState({
   List<AuditEntry> auditLog = const [],
   List<AdditionHistoryEntry> additionHistory = const [],
   List<SpoolUsageRecord> spoolUsage = const [],
+  List<CheckoutRecord> checkouts = const [],
   int historyLimit = 100,
 }) => jsonEncode({
   'schemaVersion': 9,
@@ -5026,6 +5360,11 @@ String encodeWorkshopState({
           'image': _bytesToJson(machine.imageBytes),
           if (machine.added != null)
             'added': machine.added!.toUtc().toIso8601String(),
+          // Always written, null when idle, so clearing a timer syncs as a
+          // change instead of looking like a field that was never sent.
+          'timerLabel': machine.timerLabel,
+          'timerStartedAt': machine.timerStartedAt?.toUtc().toIso8601String(),
+          'timerSeconds': machine.timerDuration?.inSeconds,
         },
       )
       .toList(),
@@ -5213,6 +5552,26 @@ String encodeWorkshopState({
         },
       )
       .toList(),
+  'checkouts': checkouts
+      .map(
+        (entry) => {
+          'id': entry.id,
+          'itemId': entry.itemId,
+          'itemName': entry.itemName,
+          'quantity': entry.quantity,
+          'borrower': entry.borrower,
+          'kind': entry.kind.name,
+          'checkedOutAt': entry.checkedOutAt.toUtc().toIso8601String(),
+          // Always written, null when unset, so clearing a date syncs.
+          'expectedReturnAt': entry.expectedReturnAt
+              ?.toUtc()
+              .toIso8601String(),
+          'returnedQuantity': entry.returnedQuantity,
+          'lastReturnedAt': entry.lastReturnedAt?.toUtc().toIso8601String(),
+          'note': entry.note,
+        },
+      )
+      .toList(),
   'historyLimit': historyLimit,
 });
 
@@ -5257,6 +5616,9 @@ Map<String, dynamic> encodeWorkshopEntityPayload(
           : const [],
       spoolUsage: entityType == 'spoolUsage'
           ? [record as SpoolUsageRecord]
+          : const [],
+      checkouts: entityType == 'checkouts'
+          ? [record as CheckoutRecord]
           : const [],
     ),
   ) as Map<String, dynamic>;
@@ -5558,6 +5920,14 @@ WorkshopState? decodeWorkshopState(String? source) {
                 .cast<String>(),
             imageBytes: _bytesFromJson(machine['image']),
             added: _catalogAddedFromJson(machine['added'], machine['id']),
+            timerLabel: machine['timerLabel'] as String? ?? '',
+            timerStartedAt: DateTime.tryParse(
+              machine['timerStartedAt'] as String? ?? '',
+            )?.toUtc(),
+            timerDuration: switch ((machine['timerSeconds'] as num?)?.toInt()) {
+              final seconds? when seconds > 0 => Duration(seconds: seconds),
+              _ => null,
+            },
           ),
         )
         .toList();
@@ -5736,6 +6106,34 @@ WorkshopState? decodeWorkshopState(String? source) {
           ),
         )
         .toList();
+    final checkouts = (root['checkouts'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(
+          (entry) => CheckoutRecord(
+            id: entry['id'] as String,
+            itemId: entry['itemId'] as String? ?? '',
+            itemName: entry['itemName'] as String? ?? '',
+            quantity: (entry['quantity'] as num?)?.toDouble() ?? 0,
+            borrower: entry['borrower'] as String? ?? '',
+            kind: CheckoutBorrowerKind.values.firstWhere(
+              (value) => value.name == entry['kind'],
+              orElse: () => CheckoutBorrowerKind.person,
+            ),
+            checkedOutAt:
+                DateTime.tryParse(entry['checkedOutAt'] as String? ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            expectedReturnAt: DateTime.tryParse(
+              entry['expectedReturnAt'] as String? ?? '',
+            ),
+            returnedQuantity:
+                (entry['returnedQuantity'] as num?)?.toDouble() ?? 0,
+            lastReturnedAt: DateTime.tryParse(
+              entry['lastReturnedAt'] as String? ?? '',
+            ),
+            note: entry['note'] as String? ?? '',
+          ),
+        )
+        .toList();
     return (
       inventory: inventory,
       vendors: vendors,
@@ -5759,6 +6157,7 @@ WorkshopState? decodeWorkshopState(String? source) {
       auditLog: auditLog,
       additionHistory: additionHistory,
       spoolUsage: spoolUsage,
+      checkouts: checkouts,
       historyLimit: root['historyLimit'] as int? ?? 100,
     );
   } catch (exception) {
@@ -7059,6 +7458,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
   late final List<SpoolUsageRecord> spoolUsage;
+  late final List<CheckoutRecord> checkouts;
   late int historyLimit;
   late bool alertSoundsEnabled;
   late bool lowStockAlertsEnabled;
@@ -7346,6 +7746,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             ? <AdditionHistoryEntry>[]
             : inventory.map(AdditionHistoryEntry.fromItem).toList());
     spoolUsage = restored?.spoolUsage ?? [];
+    checkouts = restored?.checkouts ?? [];
     historyLimit = restored?.historyLimit ?? 100;
     final initializedKitSections = _initializeKitSections();
     alertSoundsEnabled =
@@ -8354,6 +8755,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     _checkMoistureThresholdAnimations();
     _checkMoistureAlertChimes();
+    _checkMachineTimers(now);
   }
 
   void _checkMoistureThresholdAnimations() {
@@ -10802,6 +11204,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (item != null && mounted) {
       setState(() {
+        _addCatalogEntriesFor(item);
         _addInventoryItem(item);
         _recordAddition(item);
         _recordAudit('create', 'inventory', item.id, {'name': item.name});
@@ -10809,6 +11212,24 @@ class _InventoryHomeState extends State<InventoryHome> {
       _persist();
       _discardLoadedFullImages([item]);
     }
+  }
+
+  /// Adds the item's vendor and brand to the catalog when they are new. The
+  /// caller persists the change together with the item.
+  void _addCatalogEntriesFor(InventoryItem item) {
+    final updated = withCatalogEntriesForItem(
+      vendors: vendors,
+      brands: brands,
+      vendorName: item.vendor,
+      brandName: item.brand,
+      type: item.type,
+    );
+    vendors
+      ..clear()
+      ..addAll(updated.vendors);
+    brands
+      ..clear()
+      ..addAll(updated.brands);
   }
 
   Future<void> _openRapidizer() async {
@@ -11807,6 +12228,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             machineTypes: machineTypes,
             spoolTypes: spoolTypes,
             spoolUsage: spoolUsage,
+            checkouts: checkouts,
+            onCheckOut: currentRole.canRecordCheckouts ? _promptCheckout : null,
+            onReturn: currentRole.canRecordCheckouts ? _promptReturn : null,
             onSpoolUsageAdded: _addSpoolUsage,
             onSpoolUsageChanged: currentRole.canEditInventory
                 ? _updateSpoolUsage
@@ -12116,7 +12540,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             database: widget.database,
           ),
         );
-        if (edited != null) _replaceItem(item, edited);
+        if (edited != null) {
+          setState(() => _addCatalogEntriesFor(edited));
+          _replaceItem(item, edited);
+        }
       case ItemAction.duplicate:
         final duplicate = _withFullInventoryImages(item).copyWith(
           id: _newInventoryId(),
@@ -12886,6 +13313,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           sourceUrls: {...existing.sourceUrls, ...sourceUrls}.toList(),
           imageBytes: existing.imageBytes,
           added: existing.added,
+          timerLabel: existing.timerLabel,
+          timerStartedAt: existing.timerStartedAt,
+          timerDuration: existing.timerDuration,
         );
         importedMachineIds.add(existing.id);
         updatedMachineCount++;
@@ -13278,6 +13708,16 @@ class _InventoryHomeState extends State<InventoryHome> {
                       key: Key('machine-address-${machine.id}'),
                     ),
                   ),
+                const Divider(),
+                _MachineTimerPanel(
+                  machineId: machine.id,
+                  lookup: (id) => machines
+                      .where((candidate) => candidate.id == id)
+                      .firstOrNull,
+                  canChange: currentRole.canManageCatalog,
+                  onStart: _startMachineTimer,
+                  onClear: _clearMachineTimer,
+                ),
                 if (linkedKits.isNotEmpty) ...[
                   const Divider(),
                   const Padding(
@@ -14086,7 +14526,169 @@ class _InventoryHomeState extends State<InventoryHome> {
   Set<String> get _activeInventoryAlertKeys => {
     ..._quantityAlerts.map(_quantityAlertKey),
     ..._moistureAlerts.map(_moistureAlertKey),
+    ..._finishedMachineTimers.map(_machineTimerKey),
+    ..._overdueCheckouts.map(_overdueCheckoutKey),
   };
+
+  /// Machine timers that have run out and have not been cleared.
+  List<MachineRecord> get _finishedMachineTimers {
+    final now = DateTime.now();
+    return machines.where((machine) => machine.timerFinished(now)).toList();
+  }
+
+  String _machineTimerKey(MachineRecord machine) =>
+      'machine-timer:${machine.id}:${machine.timerStartedAt?.toIso8601String()}';
+
+  List<MachineRecord> get _unreadMachineTimerAlerts => _finishedMachineTimers
+      .where(
+        (machine) =>
+            !_readInventoryAlertKeys.contains(_machineTimerKey(machine)),
+      )
+      .toList();
+
+  /// Checkouts that are past their return date and still have stock out.
+  List<CheckoutRecord> get _overdueCheckouts {
+    final now = DateTime.now();
+    return checkouts.where((entry) => entry.isOverdue(now)).toList();
+  }
+
+  String _overdueCheckoutKey(CheckoutRecord entry) =>
+      'checkout-overdue:${entry.id}:${entry.expectedReturnAt?.toIso8601String()}';
+
+  List<CheckoutRecord> get _unreadOverdueCheckouts => _overdueCheckouts
+      .where(
+        (entry) => !_readInventoryAlertKeys.contains(_overdueCheckoutKey(entry)),
+      )
+      .toList();
+
+  double _checkedOutQuantity(String itemId) => checkouts
+      .where((entry) => entry.itemId == itemId)
+      .fold<double>(0, (sum, entry) => sum + entry.outstanding);
+
+  List<String> get _knownBorrowers {
+    final seen = <String>{};
+    return [
+      for (final entry in checkouts.reversed)
+        if (seen.add(entry.borrower.toLowerCase())) entry.borrower,
+    ];
+  }
+
+  Future<void> _promptCheckout(InventoryItem item) async {
+    if (!currentRole.canRecordCheckouts) {
+      _showPermissionDenied('Your role cannot record checkouts.');
+      return;
+    }
+    final available = math.max(0.0, item.quantity - _checkedOutQuantity(item.id));
+    final record = await showDialog<CheckoutRecord>(
+      context: context,
+      builder: (_) => _CheckoutDialog(
+        item: item,
+        available: available,
+        knownBorrowers: _knownBorrowers,
+      ),
+    );
+    if (record == null || !mounted) return;
+    setState(() {
+      checkouts.insert(0, record);
+      _recordAudit('checkout', 'inventory', record.itemId, {
+        'name': record.itemName,
+        'to': record.borrower,
+        'quantity': _formatBomQuantity(record.quantity),
+      });
+    });
+    _persist();
+  }
+
+  Future<void> _promptReturn(CheckoutRecord checkout) async {
+    if (!currentRole.canRecordCheckouts) {
+      _showPermissionDenied('Your role cannot record checkouts.');
+      return;
+    }
+    final amount = await showDialog<double>(
+      context: context,
+      builder: (_) => _ReturnDialog(checkout: checkout),
+    );
+    if (amount == null || !mounted) return;
+    final index = checkouts.indexWhere((entry) => entry.id == checkout.id);
+    if (index < 0) return;
+    setState(() {
+      checkouts[index] = checkouts[index].returned(amount, DateTime.now().toUtc());
+      _recordAudit('return', 'inventory', checkout.itemId, {
+        'name': checkout.itemName,
+        'from': checkout.borrower,
+        'quantity': _formatBomQuantity(amount),
+      });
+      _reconcileReadInventoryAlerts();
+    });
+    _persist();
+  }
+
+  // Timers already announced on this device, so each finish chimes once.
+  final Set<String> _announcedMachineTimers = {};
+
+  void _checkMachineTimers(DateTime now) {
+    final finished = machines
+        .where(
+          (machine) =>
+              machine.timerFinished(now) &&
+              !_readInventoryAlertKeys.contains(_machineTimerKey(machine)) &&
+              _announcedMachineTimers.add(_machineTimerKey(machine)),
+        )
+        .toList();
+    if (finished.isEmpty) return;
+    setState(() {});
+    unawaited(_playDryingCompleteChime());
+    final machine = finished.first;
+    final what = machine.timerLabel.isEmpty ? 'Timer' : machine.timerLabel;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          finished.length > 1
+              ? '${finished.length} machine timers finished'
+              : '${machine.name}: $what finished',
+        ),
+      ),
+    );
+  }
+
+  void _startMachineTimer(
+    MachineRecord machine,
+    Duration duration,
+    String label,
+  ) {
+    if (!currentRole.canManageCatalog) {
+      _showPermissionDenied('Your role cannot change machines.');
+      return;
+    }
+    final index = machines.indexWhere(
+      (candidate) => candidate.id == machine.id,
+    );
+    if (index < 0 || duration <= Duration.zero) return;
+    setState(() {
+      machines[index] = machines[index].withTimer(
+        label: label,
+        startedAt: DateTime.now(),
+        duration: duration,
+      );
+    });
+    _persist();
+  }
+
+  void _clearMachineTimer(MachineRecord machine) {
+    if (!currentRole.canManageCatalog) {
+      _showPermissionDenied('Your role cannot change machines.');
+      return;
+    }
+    final index = machines.indexWhere(
+      (candidate) => candidate.id == machine.id,
+    );
+    if (index < 0) return;
+    setState(() {
+      machines[index] = machines[index].withoutTimer();
+      _reconcileReadInventoryAlerts();
+    });
+    _persist();
+  }
 
   void _saveReadInventoryAlerts() {
     widget.database?.saveStringPreference(
@@ -14120,6 +14722,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   int get _inventoryAlertCount => {
     ..._unreadMoistureAlerts.map((item) => item.id),
     ..._unreadQuantityAlerts.map((item) => item.id),
+    ..._unreadMachineTimerAlerts.map((machine) => machine.id),
+    ..._unreadOverdueCheckouts.map((entry) => entry.id),
   }.length;
 
   Future<void> _openDebugPanel() async {
@@ -14299,6 +14903,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       builder: (context, setDialogState) {
         final moistureAlerts = _unreadMoistureAlerts;
         final quantityAlerts = _unreadQuantityAlerts;
+        final timerAlerts = _unreadMachineTimerAlerts;
+        final overdueAlerts = _unreadOverdueCheckouts;
         return AlertDialog(
           title: const Row(
             children: [
@@ -14317,7 +14923,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Drying-complete chime'),
                   subtitle: const Text(
-                    'This setting applies only to this device.',
+                    'Also plays when a machine timer finishes. This setting '
+                    'applies only to this device.',
                   ),
                   value: dryingCompleteChimeEnabled,
                   onChanged: (value) {
@@ -14348,7 +14955,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
                 const Divider(),
                 Expanded(
-                  child: moistureAlerts.isEmpty && quantityAlerts.isEmpty
+                  child:
+                      moistureAlerts.isEmpty &&
+                          quantityAlerts.isEmpty &&
+                          timerAlerts.isEmpty &&
+                          overdueAlerts.isEmpty
                       ? const Center(child: Text('No unread inventory alerts.'))
                       : ListView(
                           children: [
@@ -14419,6 +15030,80 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 );
                               }),
                             ],
+                            if (overdueAlerts.isNotEmpty) ...[
+                              const ListTile(
+                                dense: true,
+                                title: Text(
+                                  'OVERDUE RETURNS',
+                                  style: TextStyle(
+                                    color: Color(0xffff6b6b),
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                              ),
+                              ...overdueAlerts.map(
+                                (entry) => ListTile(
+                                  key: Key('overdue-checkout-${entry.id}'),
+                                  leading: const Icon(
+                                    Icons.assignment_late_outlined,
+                                    color: Color(0xffff6b6b),
+                                  ),
+                                  title: Text(entry.itemName),
+                                  subtitle: Text(
+                                    '${entry.borrower} has ${_formatBomQuantity(entry.outstanding)} · due ${MaterialLocalizations.of(context).formatMediumDate(entry.expectedReturnAt!.toLocal())}',
+                                  ),
+                                  onTap: () {
+                                    _markInventoryAlertRead(
+                                      _overdueCheckoutKey(entry),
+                                    );
+                                    Navigator.pop(dialogContext);
+                                    final item = inventory
+                                        .where(
+                                          (candidate) =>
+                                              candidate.id == entry.itemId,
+                                        )
+                                        .firstOrNull;
+                                    if (item != null) _openDetails(item);
+                                  },
+                                ),
+                              ),
+                            ],
+                            if (timerAlerts.isNotEmpty) ...[
+                              const ListTile(
+                                dense: true,
+                                title: Text(
+                                  'TIMERS',
+                                  style: TextStyle(
+                                    color: Color(0xff42d8c7),
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                              ),
+                              ...timerAlerts.map(
+                                (machine) => ListTile(
+                                  key: Key('machine-timer-alert-${machine.id}'),
+                                  leading: const Icon(
+                                    Icons.timer_outlined,
+                                    color: Color(0xff42d8c7),
+                                  ),
+                                  title: Text(machine.name),
+                                  subtitle: Text(
+                                    machine.timerLabel.isEmpty
+                                        ? 'Timer finished'
+                                        : '${machine.timerLabel} finished',
+                                  ),
+                                  onTap: () {
+                                    _markInventoryAlertRead(
+                                      _machineTimerKey(machine),
+                                    );
+                                    Navigator.pop(dialogContext);
+                                    unawaited(_openMachineDetails(machine));
+                                  },
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                 ),
@@ -14428,7 +15113,11 @@ class _InventoryHomeState extends State<InventoryHome> {
           actions: [
             TextButton.icon(
               key: const Key('mark-all-alerts-read'),
-              onPressed: moistureAlerts.isEmpty && quantityAlerts.isEmpty
+              onPressed:
+                  moistureAlerts.isEmpty &&
+                      quantityAlerts.isEmpty &&
+                      timerAlerts.isEmpty &&
+                      overdueAlerts.isEmpty
                   ? null
                   : () {
                       _markAllInventoryAlertsRead();
@@ -14915,6 +15604,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     'products': products,
     'additionHistory': additionHistory,
     'spoolUsage': spoolUsage,
+    'checkouts': checkouts,
   };
 
   String _entityId(Object record) => switch (record) {
@@ -14934,6 +15624,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     CatalogProduct value => value.id,
     AdditionHistoryEntry value => value.id,
     SpoolUsageRecord value => value.id,
+    CheckoutRecord value => value.id,
     _ => throw ArgumentError.value(record, 'record', 'Unknown entity type'),
   };
 
@@ -15173,6 +15864,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     auditLog: auditLog,
     additionHistory: additionHistory,
     spoolUsage: spoolUsage,
+    checkouts: checkouts,
     historyLimit: historyLimit,
   );
 
@@ -15426,6 +16118,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       spoolUsage
         ..clear()
         ..addAll(restored.spoolUsage);
+      checkouts
+        ..clear()
+        ..addAll(restored.checkouts);
       historyLimit = restored.historyLimit;
       _trimAdditionHistory();
     });
@@ -15807,6 +16502,18 @@ class _InventoryHomeState extends State<InventoryHome> {
               replaceById(spoolUsage, change.entityId, value, (e) => e.id);
             }
           }
+        case 'checkouts':
+          if (change.deleted) {
+            checkouts.removeWhere((entry) => entry.id == change.entityId);
+          } else {
+            final value = decodedEntity<CheckoutRecord>(
+              change,
+              (s) => s.checkouts.singleOrNull,
+            );
+            if (value != null) {
+              replaceById(checkouts, change.entityId, value, (e) => e.id);
+            }
+          }
       }
       rememberAppliedChange(change);
     }
@@ -16019,6 +16726,11 @@ class _InventoryHomeState extends State<InventoryHome> {
         final manualDrying = installedSchema >= 32
             ? await service.manualDryingTimesRequired(session)
             : false;
+        database.setCheckoutSyncEnabled(
+          installedSchema >= 34
+              ? await service.checkoutSyncEnabled(session)
+              : false,
+        );
         final roleChanged = config.workspaceRole != role;
         final policyChanged =
             config.remotePurgeAfterDays != remotePurgeDays ||
@@ -16448,6 +17160,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       auditLog.clear();
       additionHistory.clear();
       spoolUsage.clear();
+      checkouts.clear();
       selectedInventoryIds.clear();
       selectedBuildIds.clear();
       selectedKitIds.clear();
@@ -20339,7 +21052,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openStockroom() => showDialog<void>(
     context: context,
     builder: (dialogContext) => DefaultTabController(
-      length: 3,
+      length: 4,
       child: StatefulBuilder(
         builder: (context, refresh) {
           final compact = MediaQuery.sizeOf(context).width < 600;
@@ -20392,6 +21105,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                           ),
                           Tab(icon: _LayoutTabIcon(), text: 'Layout'),
                           Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
+                          Tab(
+                            icon: Icon(Icons.swap_horiz_rounded),
+                            text: 'Checked out',
+                          ),
                         ],
                       ),
                       Expanded(
@@ -20811,6 +21528,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                                       );
                                     },
                                   ),
+                            _stockroomCheckoutsTab(refresh),
                           ],
                         ),
                       ),
@@ -20872,6 +21590,102 @@ class _InventoryHomeState extends State<InventoryHome> {
       ),
     ),
   );
+
+  /// Everything that is out, grouped by who has it, with overdue returns first.
+  Widget _stockroomCheckoutsTab(StateSetter refresh) {
+    final now = DateTime.now();
+    final open = checkouts.where((entry) => !entry.isReturned).toList();
+    if (open.isEmpty) {
+      return const Center(
+        key: Key('checkouts-empty'),
+        child: Text(
+          'Nothing is checked out. Open an item and choose Check out.',
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    final byBorrower = <String, List<CheckoutRecord>>{};
+    for (final entry in open) {
+      byBorrower.putIfAbsent(entry.borrower.toLowerCase(), () => []).add(entry);
+    }
+    final groups = byBorrower.values.toList()
+      ..sort((a, b) {
+        final aOverdue = a.any((entry) => entry.isOverdue(now));
+        final bOverdue = b.any((entry) => entry.isOverdue(now));
+        if (aOverdue != bOverdue) return aOverdue ? -1 : 1;
+        return a.first.borrower.toLowerCase().compareTo(
+          b.first.borrower.toLowerCase(),
+        );
+      });
+    final dates = MaterialLocalizations.of(context);
+    return ListView(
+      key: const Key('checkouts-list'),
+      padding: const EdgeInsets.only(top: 10),
+      children: [
+        for (final group in groups)
+          Card(
+            key: Key('checkout-group-${group.first.borrower.toLowerCase()}'),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 8, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        group.first.kind == CheckoutBorrowerKind.project
+                            ? Icons.work_outline_rounded
+                            : Icons.person_outline_rounded,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          group.first.borrower,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      Text('${group.length} out'),
+                    ],
+                  ),
+                  for (final entry in group)
+                    ListTile(
+                      key: Key('stockroom-checkout-${entry.id}'),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        '${entry.itemName} · ${_formatBomQuantity(entry.outstanding)}'
+                        '${entry.outstanding == entry.quantity ? '' : ' of ${_formatBomQuantity(entry.quantity)}'}',
+                      ),
+                      subtitle: Text(
+                        [
+                          'Since ${dates.formatMediumDate(entry.checkedOutAt.toLocal())}',
+                          if (entry.expectedReturnAt != null)
+                            entry.isOverdue(now)
+                                ? 'overdue since ${dates.formatMediumDate(entry.expectedReturnAt!.toLocal())}'
+                                : 'due ${dates.formatMediumDate(entry.expectedReturnAt!.toLocal())}',
+                        ].join(' · '),
+                        style: entry.isOverdue(now)
+                            ? const TextStyle(color: Color(0xffff6b6b))
+                            : null,
+                      ),
+                      trailing: currentRole.canRecordCheckouts
+                          ? TextButton(
+                              key: Key('stockroom-return-${entry.id}'),
+                              onPressed: () async {
+                                await _promptReturn(entry);
+                                refresh(() {});
+                              },
+                              child: const Text('Return'),
+                            )
+                          : null,
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 
   Widget _stockroomButton({
     bool iconOnly = false,
@@ -26135,7 +26949,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                                   ),
                                   title: Text(machine.name),
                                   subtitle: Text(
-                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}',
+                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}${machine.hasTimer ? machine.timerFinished(DateTime.now()) ? ' · Timer finished' : ' · Timer running' : ''}',
                                   ),
                                   trailing: IconButton(
                                     key: Key('edit-machine-${machine.id}'),
@@ -27437,6 +28251,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     final name = machineName.text.trim();
     if (name.isEmpty || selectedMachineTypeId == null) return;
     final wasEditing = editingMachineId != null;
+    final previous = machines
+        .where((candidate) => candidate.id == editingMachineId)
+        .firstOrNull;
     final machine = MachineRecord(
       id: editingMachineId ?? _newCatalogId('MCH'),
       name: name,
@@ -27451,12 +28268,10 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               ?.sourceUrls ??
           const [],
       imageBytes: machineImage,
-      added: editingMachineId == null
-          ? DateTime.now()
-          : machines
-                .where((candidate) => candidate.id == editingMachineId)
-                .firstOrNull
-                ?.added,
+      added: editingMachineId == null ? DateTime.now() : previous?.added,
+      timerLabel: previous?.timerLabel ?? '',
+      timerStartedAt: previous?.timerStartedAt,
+      timerDuration: previous?.timerDuration,
     );
     setState(() {
       final index = machines.indexWhere(
@@ -29693,6 +30508,89 @@ String _filamentCardRemainingLabel(
 
 String _newCatalogId(String prefix) =>
     '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+/// The vendors and brands after adding any that an item names but the catalog
+/// does not have yet, so a vendor or brand typed into the item editor also
+/// appears in Catalog. Names match existing records loosely (case and
+/// punctuation ignored), as imports do, and an existing brand gains the
+/// item's vendor and type. Unchanged records are returned as they were.
+({List<VendorRecord> vendors, List<BrandRecord> brands})
+withCatalogEntriesForItem({
+  required List<VendorRecord> vendors,
+  required List<BrandRecord> brands,
+  required String vendorName,
+  required String brandName,
+  required InventoryType type,
+  String Function(String prefix) newId = _newCatalogId,
+}) {
+  String key(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final vendorLabel = vendorName.trim();
+  final brandLabel = brandName.trim();
+  final nextVendors = [...vendors];
+  final nextBrands = [...brands];
+
+  VendorRecord? vendor;
+  if (vendorLabel.isNotEmpty) {
+    final index = nextVendors.indexWhere(
+      (candidate) => key(candidate.name) == key(vendorLabel),
+    );
+    final vendorIsBrand =
+        brandLabel.isNotEmpty && key(brandLabel) == key(vendorLabel);
+    if (index < 0) {
+      vendor = VendorRecord(
+        id: newId('VEN'),
+        name: vendorLabel,
+        isBrand: vendorIsBrand,
+      );
+      nextVendors.add(vendor);
+    } else {
+      vendor = nextVendors[index];
+      if (vendorIsBrand && !vendor.isBrand) {
+        vendor = VendorRecord(
+          id: vendor.id,
+          name: vendor.name,
+          isBrand: true,
+          logoBytes: vendor.logoBytes,
+          archived: vendor.archived,
+        );
+        nextVendors[index] = vendor;
+      }
+    }
+  }
+
+  if (brandLabel.isNotEmpty) {
+    final index = nextBrands.indexWhere(
+      (candidate) => key(candidate.name) == key(brandLabel),
+    );
+    if (index < 0) {
+      nextBrands.add(
+        BrandRecord(
+          id: newId('BRAND'),
+          name: brandLabel,
+          vendorIds: {?vendor?.id},
+          categories: {type},
+        ),
+      );
+    } else {
+      final existing = nextBrands[index];
+      final vendorIds = {...existing.vendorIds, ?vendor?.id};
+      final categories = {...existing.categories, type};
+      if (vendorIds.length != existing.vendorIds.length ||
+          categories.length != existing.categories.length) {
+        nextBrands[index] = BrandRecord(
+          id: existing.id,
+          name: existing.name,
+          vendorIds: vendorIds,
+          categories: categories,
+          logoBytes: existing.logoBytes,
+          archived: existing.archived,
+        );
+      }
+    }
+  }
+  return (vendors: nextVendors, brands: nextBrands);
+}
 
 /// Reads a kit or machine's added time, falling back to the creation time
 /// embedded in IDs from [_newCatalogId] for records saved before the field
@@ -34946,6 +35844,9 @@ class ItemDetailsPanel extends StatefulWidget {
     this.onSpoolUsageAdded,
     this.onSpoolUsageChanged,
     this.onSpoolUsageDeleted,
+    this.checkouts = const [],
+    this.onCheckOut,
+    this.onReturn,
     this.onEdit,
     this.onSplitOne,
     this.typeLabel,
@@ -34972,6 +35873,11 @@ class ItemDetailsPanel extends StatefulWidget {
   final ValueChanged<SpoolUsageRecord>? onSpoolUsageAdded;
   final ValueChanged<SpoolUsageRecord>? onSpoolUsageChanged;
   final ValueChanged<SpoolUsageRecord>? onSpoolUsageDeleted;
+
+  /// Every checkout in the workspace; the panel shows the ones for its item.
+  final List<CheckoutRecord> checkouts;
+  final Future<void> Function(InventoryItem item)? onCheckOut;
+  final Future<void> Function(CheckoutRecord checkout)? onReturn;
   final Future<void> Function(InventoryItem item)? onEdit;
   final Future<void> Function(InventoryItem item)? onSplitOne;
   final String? typeLabel;
@@ -34991,6 +35897,285 @@ class ItemDetailsPanel extends StatefulWidget {
 
   @override
   State<ItemDetailsPanel> createState() => _ItemDetailsPanelState();
+}
+
+/// Asks who is taking an item, how much, and when it should come back.
+class _CheckoutDialog extends StatefulWidget {
+  const _CheckoutDialog({
+    required this.item,
+    required this.available,
+    required this.knownBorrowers,
+  });
+
+  final InventoryItem item;
+  final double available;
+  final List<String> knownBorrowers;
+
+  @override
+  State<_CheckoutDialog> createState() => _CheckoutDialogState();
+}
+
+class _CheckoutDialogState extends State<_CheckoutDialog> {
+  final _borrower = TextEditingController();
+  final _quantity = TextEditingController(text: '1');
+  final _note = TextEditingController();
+  CheckoutBorrowerKind _kind = CheckoutBorrowerKind.person;
+  DateTime? _due;
+  String? _error;
+
+  @override
+  void dispose() {
+    _borrower.dispose();
+    _quantity.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final borrower = _borrower.text.trim();
+    final quantity = double.tryParse(_quantity.text.trim());
+    if (borrower.isEmpty) {
+      setState(() => _error = 'Enter a person or project.');
+      return;
+    }
+    if (quantity == null || quantity <= 0) {
+      setState(() => _error = 'Enter a quantity above zero.');
+      return;
+    }
+    if (quantity > widget.available + 0.0001) {
+      setState(
+        () => _error =
+            'Only ${_formatBomQuantity(widget.available)} is available.',
+      );
+      return;
+    }
+    Navigator.of(context).pop(
+      CheckoutRecord(
+        id: _newCatalogId('CO'),
+        itemId: widget.item.id,
+        itemName: widget.item.name,
+        quantity: quantity,
+        borrower: borrower,
+        kind: _kind,
+        checkedOutAt: DateTime.now().toUtc(),
+        expectedReturnAt: _due?.toUtc(),
+        note: _note.text.trim(),
+      ),
+    );
+  }
+
+  Future<void> _pickDue() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _due ?? now.add(const Duration(days: 7)),
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 365 * 3)),
+    );
+    if (picked != null && mounted) {
+      // Due at the end of that day, so the item is not overdue all day.
+      setState(
+        () => _due = DateTime(picked.year, picked.month, picked.day, 23, 59),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('checkout-dialog'),
+    title: Text('Check out ${widget.item.name}'),
+    content: SizedBox(
+      width: 420,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('${_formatBomQuantity(widget.available)} available'),
+            const SizedBox(height: 12),
+            SegmentedButton<CheckoutBorrowerKind>(
+              key: const Key('checkout-kind'),
+              segments: const [
+                ButtonSegment(
+                  value: CheckoutBorrowerKind.person,
+                  icon: Icon(Icons.person_outline_rounded),
+                  label: Text('Person'),
+                ),
+                ButtonSegment(
+                  value: CheckoutBorrowerKind.project,
+                  icon: Icon(Icons.work_outline_rounded),
+                  label: Text('Project'),
+                ),
+              ],
+              selected: {_kind},
+              onSelectionChanged: (value) =>
+                  setState(() => _kind = value.single),
+            ),
+            const SizedBox(height: 12),
+            Autocomplete<String>(
+              optionsBuilder: (value) => widget.knownBorrowers.where(
+                (name) =>
+                    value.text.isNotEmpty &&
+                    name.toLowerCase().contains(value.text.toLowerCase()),
+              ),
+              onSelected: (name) => _borrower.text = name,
+              fieldViewBuilder: (context, controller, focus, onSubmitted) {
+                return TextField(
+                  key: const Key('checkout-borrower'),
+                  controller: controller,
+                  focusNode: focus,
+                  autofocus: true,
+                  onChanged: (value) => _borrower.text = value,
+                  decoration: InputDecoration(
+                    labelText: _kind == CheckoutBorrowerKind.person
+                        ? 'Who is taking it?'
+                        : 'Which project?',
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('checkout-quantity'),
+              controller: _quantity,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Quantity'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _due == null
+                        ? 'No return date'
+                        : 'Due ${MaterialLocalizations.of(context).formatMediumDate(_due!)}',
+                    key: const Key('checkout-due-label'),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('checkout-pick-due'),
+                  onPressed: _pickDue,
+                  child: Text(_due == null ? 'Set return date' : 'Change'),
+                ),
+                if (_due != null)
+                  IconButton(
+                    key: const Key('checkout-clear-due'),
+                    tooltip: 'Clear return date',
+                    onPressed: () => setState(() => _due = null),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+              ],
+            ),
+            TextField(
+              key: const Key('checkout-note'),
+              controller: _note,
+              decoration: const InputDecoration(labelText: 'Note (optional)'),
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  _error!,
+                  key: const Key('checkout-error'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('checkout-confirm'),
+        onPressed: _submit,
+        child: const Text('Check out'),
+      ),
+    ],
+  );
+}
+
+/// Asks how much of a checkout came back. Defaults to all of it.
+class _ReturnDialog extends StatefulWidget {
+  const _ReturnDialog({required this.checkout});
+
+  final CheckoutRecord checkout;
+
+  @override
+  State<_ReturnDialog> createState() => _ReturnDialogState();
+}
+
+class _ReturnDialogState extends State<_ReturnDialog> {
+  late final _quantity = TextEditingController(
+    text: _formatBomQuantity(widget.checkout.outstanding),
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _quantity.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final amount = double.tryParse(_quantity.text.trim());
+    if (amount == null || amount <= 0) {
+      setState(() => _error = 'Enter a quantity above zero.');
+      return;
+    }
+    if (amount > widget.checkout.outstanding + 0.0001) {
+      setState(
+        () => _error =
+            'Only ${_formatBomQuantity(widget.checkout.outstanding)} is still out.',
+      );
+      return;
+    }
+    Navigator.of(context).pop(amount);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('return-dialog'),
+    title: Text('Return ${widget.checkout.itemName}'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '${widget.checkout.borrower} has '
+          '${_formatBomQuantity(widget.checkout.outstanding)} out.',
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          key: const Key('return-quantity'),
+          controller: _quantity,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+            labelText: 'Quantity returned',
+            errorText: _error,
+          ),
+          onSubmitted: (_) => _submit(),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('return-confirm'),
+        onPressed: _submit,
+        child: const Text('Return'),
+      ),
+    ],
+  );
 }
 
 class _SpoolUsageDialog extends StatefulWidget {
@@ -35757,6 +36942,103 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     );
   }
 
+  /// Who has some of this item, and how much is still available. The item's
+  /// own quantity is the total owned and does not change on checkout.
+  Widget _checkoutSection() {
+    final open =
+        widget.checkouts
+            .where((entry) => entry.itemId == item.id && !entry.isReturned)
+            .toList()
+          ..sort((a, b) => a.checkedOutAt.compareTo(b.checkedOutAt));
+    if (open.isEmpty && widget.onCheckOut == null) {
+      return const SizedBox.shrink();
+    }
+    final out = open.fold<double>(0, (sum, entry) => sum + entry.outstanding);
+    final available = math.max(0.0, item.quantity - out);
+    final now = DateTime.now();
+    final dates = MaterialLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        key: const Key('item-checkouts'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.swap_horiz_rounded,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Checkouts',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              if (widget.onCheckOut != null)
+                TextButton.icon(
+                  key: const Key('check-out-item'),
+                  onPressed: available > 0
+                      ? () async {
+                          await widget.onCheckOut!(item);
+                          if (mounted) setState(() {});
+                        }
+                      : null,
+                  icon: const Icon(Icons.output_rounded),
+                  label: const Text('Check out'),
+                ),
+            ],
+          ),
+          Text(
+            '${_formatBomQuantity(item.quantity)} total · '
+            '${_formatBomQuantity(out)} out · '
+            '${_formatBomQuantity(available)} available',
+            key: const Key('checkout-summary'),
+          ),
+          for (final entry in open)
+            ListTile(
+              key: Key('item-checkout-${entry.id}'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                entry.kind == CheckoutBorrowerKind.project
+                    ? Icons.work_outline_rounded
+                    : Icons.person_outline_rounded,
+              ),
+              title: Text(
+                '${entry.borrower} · ${_formatBomQuantity(entry.outstanding)}'
+                '${entry.outstanding == entry.quantity ? '' : ' of ${_formatBomQuantity(entry.quantity)}'}',
+              ),
+              subtitle: Text(
+                [
+                  'Since ${dates.formatMediumDate(entry.checkedOutAt.toLocal())}',
+                  if (entry.expectedReturnAt != null)
+                    entry.isOverdue(now)
+                        ? 'overdue since ${dates.formatMediumDate(entry.expectedReturnAt!.toLocal())}'
+                        : 'due ${dates.formatMediumDate(entry.expectedReturnAt!.toLocal())}',
+                  if (entry.note.isNotEmpty) entry.note,
+                ].join(' · '),
+                style: entry.isOverdue(now)
+                    ? const TextStyle(color: Color(0xffff6b6b))
+                    : null,
+              ),
+              trailing: widget.onReturn == null
+                  ? null
+                  : TextButton(
+                      key: Key('return-checkout-${entry.id}'),
+                      onPressed: () async {
+                        await widget.onReturn!(entry);
+                        if (mounted) setState(() {});
+                      },
+                      child: const Text('Return'),
+                    ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _spoolUsageSection() => Padding(
     key: const Key('sidebar-usage-tracking'),
     padding: const EdgeInsets.only(bottom: 24),
@@ -36291,6 +37573,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         _sidebarColorCard(overlay: false),
                       ],
                       const SizedBox(height: 28),
+                      _checkoutSection(),
                       if (item.quantityAlertThreshold != null)
                         _DetailSection(
                           icon: Icons.notification_important_outlined,

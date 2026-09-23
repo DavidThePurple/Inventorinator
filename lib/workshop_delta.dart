@@ -19,6 +19,7 @@ const workshopEntityCollections = <String>{
   'products',
   'additionHistory',
   'spoolUsage',
+  'checkouts',
 };
 
 const workshopMetadataEntityType = 'workshopMetadata';

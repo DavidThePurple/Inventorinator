@@ -431,6 +431,28 @@ Use only the disposable test workspace for this section.
     it is signed out, asks to reopen Remote Sync, and does not start owner
     recovery.
 
+## 10b. Checkouts, machine timers and cameras
+
+- [ ] **CHECKOUT-01 — Check out and return**
+  - Open an item with a quantity of 10, choose **Check out**, give 4 to a person with a return date, then return 1, then the rest.
+  - Pass: the summary reads 10 total · 4 out · 6 available, then 3 out, then 0 out, and the item's quantity never changes.
+
+- [ ] **CHECKOUT-02 — Overdue and Stockroom**
+  - Check out an item with a return date in the past.
+  - Pass: Alerts shows an OVERDUE RETURNS entry, and Stockroom → Checked out lists it under the borrower.
+
+- [ ] **CHECKOUT-03 — Sharing is the Owner/Admin's choice**
+  - On two connected devices, check out an item on one. Then turn **Sync checkouts** on as the Owner or an Admin.
+  - Pass: before the switch the other device sees nothing; after it, both devices show the same checkouts. A non-admin cannot change the switch.
+
+- [ ] **MACHINE-01 — Machine timer**
+  - Open a machine's details, start a 1 minute timer, and wait.
+  - Pass: the countdown moves, then a chime, a message and a TIMERS alert appear when it finishes, and Dismiss clears it.
+
+- [ ] **CAMERA-01 — Restart camera**
+  - In the scanner, choose **Restart camera** with the camera running, then unplug the webcam, plug it back in and choose it again.
+  - Pass: the picture stops and returns each time without closing the scanner, and the same camera is reopened.
+
 ## 10a. App lock (PIN)
 
 - [ ] **LOCK-01 — Optional and quiet by default**

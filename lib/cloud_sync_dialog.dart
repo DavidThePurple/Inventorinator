@@ -316,6 +316,20 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         : 'Automatic material and weight estimates are enabled.';
   }
 
+  Future<String> _saveCheckoutSync(bool enabled) async {
+    final (service, session) = await _session();
+    if (!canManageRemotePurge) {
+      throw const SupabaseSyncException(
+        'Only the workspace Owner or an Admin can change checkout sync.',
+      );
+    }
+    await service.setCheckoutSyncEnabled(session, enabled);
+    widget.database.setCheckoutSyncEnabled(enabled);
+    return enabled
+        ? 'Checkouts are shared between devices. This device\'s earlier checkouts are uploading now.'
+        : 'Checkouts stay on the device that made them. Ones already shared remain visible.';
+  }
+
   Future<String> _saveRemotePurgeAfterDays(int days) async {
     final (service, session) = await _session();
     if (!canManageRemotePurge) {
@@ -541,6 +555,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         session,
       ),
     );
+    widget.database.setCheckoutSyncEnabled(
+      await joinedService.checkoutSyncEnabled(session),
+    );
     _save(joined);
     if (mounted) setState(() => isWorkspaceOwner = false);
     if (widget.onCloudChanges != null) {
@@ -659,6 +676,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                 refreshed.requireManualDryingTimes) {
           _save(roleConfig);
         }
+        widget.database.setCheckoutSyncEnabled(
+          await service.checkoutSyncEnabled(session),
+        );
         config = roleConfig;
         return (
           SupabaseSyncService(roleConfig, client: widget.httpClient),
@@ -1371,6 +1391,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         session,
       ),
     );
+    widget.database.setCheckoutSyncEnabled(
+      await service.checkoutSyncEnabled(session),
+    );
     remotePurgeAfterDays = purgeDays;
     service = SupabaseSyncService(restored);
     await service.registerDevice(session, _deviceName);
@@ -1849,6 +1872,19 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                         ? (value) => unawaited(
                             _run(() => _saveManualDryingTimes(value)),
                           )
+                        : null,
+                  ),
+                  SwitchListTile.adaptive(
+                    key: const Key('sync-checkouts'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Sync checkouts'),
+                    subtitle: const Text(
+                      'Off: checkouts stay on the device that made them. On: everyone sees who has what. Only the Owner or an Admin can change this.',
+                    ),
+                    value: widget.database.checkoutSyncEnabled,
+                    onChanged: canManageRemotePurge && !busy
+                        ? (value) =>
+                              unawaited(_run(() => _saveCheckoutSync(value)))
                         : null,
                   ),
                   ListTile(

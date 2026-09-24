@@ -24,7 +24,7 @@ Details: [import review and undo](import-review-and-undo.md). Shared undo requir
 - [ ] **Note privacy:** explore locked shared notes and sharing to selected devices; inter-device messaging is an alternative, not a settled design.
 - [ ] **Custom interface:** reorder controls and add custom buttons for workflow and accessibility needs.
 - [ ] **Notifications:** push notifications and/or ntfy integration.
-- [ ] **Machine timers:** set timers and completion notifications for dryers, printers, and other machines.
+- [ ] **Machine timers:** add a clear status gizmo to printers and other timed machines so active/finished timers are visible directly on their cards.
 - [ ] **Status indicator experiment:** try a larger, more animated indicator that makes status easier to notice.
 - [ ] **3D timer carousel:** showcase drying timers and life-remaining timers in a 3D carousel at the top of the interface.
 - [ ] **New-item carousel:** a separate carousel showcasing newly added items.

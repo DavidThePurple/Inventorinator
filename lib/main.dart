@@ -8178,8 +8178,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _recordProfileScrollTimings(List<FrameTiming> timings) {
-    if (_profileScrollProbeCapturing)
+    if (_profileScrollProbeCapturing) {
       _profileScrollFrameTimings.addAll(timings);
+    }
   }
 
   Future<void> _runProfileScrollProbe() async {
@@ -22880,8 +22881,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             Builder(
               builder: (context) {
                 final lock = AppLockScope.maybeOf(context);
-                if (lock == null || !lock.hasPin)
+                if (lock == null || !lock.hasPin) {
                   return const SizedBox.shrink();
+                }
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

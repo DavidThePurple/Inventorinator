@@ -481,12 +481,14 @@ class _EdgeLightPainter extends CustomPainter {
     required this.accent,
     required this.light,
     required this.focused,
+    required this.hasText,
   });
 
   final double progress;
   final Color accent;
   final bool light;
   final bool focused;
+  final bool hasText;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -503,9 +505,9 @@ class _EdgeLightPainter extends CustomPainter {
         ..strokeWidth = 1
         ..color = accent.withValues(alpha: quietAlpha),
     );
-    // The moving light is an idle affordance. Keep the focused field calm so
-    // the user's typing state is visually stable.
-    if (focused) return;
+    // The moving light is an idle affordance. Keep the typing state stable;
+    // the ordinary field rim above remains visible in every state.
+    if (focused || hasText) return;
 
     final cyan = Color.lerp(accent, const Color(0xff52d8ff), .62)!;
     final pink = Color.lerp(accent, const Color(0xffff73c9), .64)!;
@@ -637,7 +639,76 @@ class _EdgeLightPainter extends CustomPainter {
       progress != oldDelegate.progress ||
       accent != oldDelegate.accent ||
       light != oldDelegate.light ||
-      focused != oldDelegate.focused;
+      focused != oldDelegate.focused ||
+      hasText != oldDelegate.hasText;
+}
+
+class _ClearSearchGlowPainter extends CustomPainter {
+  const _ClearSearchGlowPainter({
+    required this.progress,
+    required this.accent,
+    required this.active,
+  });
+
+  final double progress;
+  final Color accent;
+  final bool active;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!active || size.isEmpty) return;
+    final cyan = Color.lerp(accent, const Color(0xff52d8ff), .62)!;
+    final pink = Color.lerp(accent, const Color(0xffff73c9), .64)!;
+    final green = Color.lerp(accent, const Color(0xff75e58d), .58)!;
+    final amber = Color.lerp(accent, const Color(0xffffc46b), .55)!;
+    final time = progress * math.pi * 2;
+    final center = Offset(size.width / 2, size.height / 2);
+
+    // Like the search-field rim, these are independent soft pools rather than
+    // one rotating band. Their opposing sine motion makes them pass by and
+    // recede, while all timing still comes from the shared 11-second clock.
+    void blob(Color color, Offset offset, double strength) {
+      final blobCenter = center + offset;
+      final radius = 20.0 + 5.0 * strength;
+      final paint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            color.withValues(alpha: .54 * strength),
+            color.withValues(alpha: .18 * strength),
+            Colors.transparent,
+          ],
+          stops: const [0, .42, 1],
+        ).createShader(Rect.fromCircle(center: blobCenter, radius: radius));
+      canvas.drawCircle(blobCenter, radius, paint);
+    }
+
+    blob(
+      cyan,
+      Offset(math.sin(time) * 13, -8 + math.sin(time * 2.0) * 4),
+      .7 + .3 * ((math.sin(time) + 1) / 2),
+    );
+    blob(
+      pink,
+      Offset(-math.sin(time + .9) * 13, 8 + math.sin(time * 1.7 + 1) * 4),
+      .7 + .3 * ((math.sin(time + .9) + 1) / 2),
+    );
+    blob(
+      green,
+      Offset(-9 + math.sin(time * 1.35 + 2) * 5, -math.sin(time + 2) * 12),
+      .7 + .3 * ((math.sin(time + 2) + 1) / 2),
+    );
+    blob(
+      amber,
+      Offset(9 + math.sin(time * 1.6 + 3) * 5, math.sin(time + 3) * 12),
+      .7 + .3 * ((math.sin(time + 3) + 1) / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ClearSearchGlowPainter oldDelegate) =>
+      progress != oldDelegate.progress ||
+      accent != oldDelegate.accent ||
+      active != oldDelegate.active;
 }
 
 class _FilamentColorsLogo extends StatelessWidget {
@@ -690,6 +761,7 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   void initState() {
     super.initState();
     widget.focusNode.addListener(_handleFocusChanged);
+    widget.controller.addListener(_handleTextChanged);
     _handleFocusChanged();
   }
 
@@ -703,11 +775,16 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
     _handleFocusChanged();
   }
 
+  void _handleTextChanged() {
+    _handleFocusChanged();
+    if (mounted) setState(() {});
+  }
+
   void _handleFocusChanged() {
     // Infinite idle animation is intentionally disabled under widget tests so
     // pumpAndSettle can still settle the rest of the application.
     if (!widget.enabled ||
-        widget.focusNode.hasFocus ||
+        (widget.focusNode.hasFocus && widget.controller.text.isEmpty) ||
         Platform.environment.containsKey('FLUTTER_TEST')) {
       _edgeTimer?.cancel();
       _edgeTimer = null;
@@ -729,6 +806,7 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   @override
   void dispose() {
     widget.focusNode.removeListener(_handleFocusChanged);
+    widget.controller.removeListener(_handleTextChanged);
     _edgeTimer?.cancel();
     _edgeProgress.dispose();
     super.dispose();
@@ -749,6 +827,43 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
       onChanged: widget.onChanged,
       decoration: InputDecoration(
         prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: widget.controller.text.isEmpty
+            ? null
+            : Tooltip(
+                message: 'Clear search',
+                child: AnimatedBuilder(
+                  animation: _edgeProgress,
+                  child: Semantics(
+                    button: true,
+                    label: 'Clear search',
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          widget.controller.clear();
+                          widget.onChanged('');
+                          widget.focusNode.requestFocus();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.backspace_outlined),
+                        ),
+                      ),
+                    ),
+                  ),
+                  builder: (context, child) {
+                    return CustomPaint(
+                      painter: _ClearSearchGlowPainter(
+                        progress: _edgeProgress.value,
+                        accent: accent,
+                        active: widget.controller.text.isNotEmpty,
+                      ),
+                      child: child,
+                    );
+                  },
+                ),
+              ),
         hintText: widget.hintText,
         isDense: widget.compact,
         contentPadding: widget.compact
@@ -787,6 +902,7 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
                   accent: accent,
                   light: light,
                   focused: widget.focusNode.hasFocus,
+                  hasText: widget.controller.text.isNotEmpty,
                 )
               : null,
           child: child,
@@ -2488,8 +2604,7 @@ class MachineRecord {
             : timerEndsAt!.difference(now)
       : Duration.zero;
 
-  bool timerFinished(DateTime now) =>
-      hasTimer && !now.isBefore(timerEndsAt!);
+  bool timerFinished(DateTime now) => hasTimer && !now.isBefore(timerEndsAt!);
 
   /// This machine with a timer running from [startedAt] for [duration].
   MachineRecord withTimer({
@@ -2637,9 +2752,7 @@ class _MachineTimerPanelState extends State<_MachineTimerPanel> {
           ),
           const SizedBox(height: 6),
           LinearProgressIndicator(
-            value: finished || total == 0
-                ? 1
-                : 1 - remaining.inSeconds / total,
+            value: finished || total == 0 ? 1 : 1 - remaining.inSeconds / total,
           ),
           const SizedBox(height: 8),
           Align(
@@ -5563,9 +5676,7 @@ String encodeWorkshopState({
           'kind': entry.kind.name,
           'checkedOutAt': entry.checkedOutAt.toUtc().toIso8601String(),
           // Always written, null when unset, so clearing a date syncs.
-          'expectedReturnAt': entry.expectedReturnAt
-              ?.toUtc()
-              .toIso8601String(),
+          'expectedReturnAt': entry.expectedReturnAt?.toUtc().toIso8601String(),
           'returnedQuantity': entry.returnedQuantity,
           'lastReturnedAt': entry.lastReturnedAt?.toUtc().toIso8601String(),
           'note': entry.note,
@@ -6657,7 +6768,8 @@ class DesktopTouchKeyboardBridge extends StatefulWidget {
       _DesktopTouchKeyboardBridgeState();
 }
 
-class _DesktopTouchKeyboardBridgeState extends State<DesktopTouchKeyboardBridge> {
+class _DesktopTouchKeyboardBridgeState
+    extends State<DesktopTouchKeyboardBridge> {
   bool get _usesDesktopTextInput =>
       !kIsWeb && (Platform.isLinux || Platform.isWindows);
 
@@ -7245,11 +7357,7 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
     if (previous == null || delta == 0) return;
     final elapsed = (now - previous) / 1e6;
     final instantaneous = -delta / (elapsed > 0 ? elapsed : 1 / 60);
-    _lastDragVelocity = ui.lerpDouble(
-      _lastDragVelocity,
-      instantaneous,
-      .5,
-    )!;
+    _lastDragVelocity = ui.lerpDouble(_lastDragVelocity, instantaneous, .5)!;
   }
 
   @override
@@ -7260,7 +7368,8 @@ class _SmoothWheelScrollPosition extends ScrollPositionWithSingleContext {
         _lastDragOffsetMicros != null &&
         velocity.abs() < 60 &&
         _lastDragVelocity.abs() >= 60) {
-      velocity = _lastDragVelocity.sign * _lastDragVelocity.abs().clamp(260, 2400);
+      velocity =
+          _lastDragVelocity.sign * _lastDragVelocity.abs().clamp(260, 2400);
     }
     _lastDragOffsetMicros = null;
     _lastDragVelocity = 0;
@@ -7455,6 +7564,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   Offset? _layoutDrawCurrent;
   String? _layoutDrawParentId;
   late final List<ShoppingListEntry> shoppingList;
+  InventoryItem? _draggedInventoryItem;
+  final Set<String> _pinnedKitIds = {};
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
   late final List<SpoolUsageRecord> spoolUsage;
@@ -7738,6 +7849,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     locations = restored?.locations ?? [];
     layoutCanvasSizes = restored?.layoutCanvasSizes ?? {};
     shoppingList = restored?.shoppingList ?? [];
+    _pinnedKitIds.addAll(_loadPinnedDragKits());
     final initializedLocations = _initializeLegacyLocations();
     auditLog = restored?.auditLog ?? [];
     additionHistory =
@@ -8066,7 +8178,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _recordProfileScrollTimings(List<FrameTiming> timings) {
-    if (_profileScrollProbeCapturing) _profileScrollFrameTimings.addAll(timings);
+    if (_profileScrollProbeCapturing)
+      _profileScrollFrameTimings.addAll(timings);
   }
 
   Future<void> _runProfileScrollProbe() async {
@@ -8089,14 +8202,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     _profileScrollProbeCapturing = false;
     if (_profileScrollFrameTimings.isEmpty) return;
     final frames = _profileScrollFrameTimings;
-    final buildMicros = frames
-        .map((timing) => timing.buildDuration.inMicroseconds)
-        .toList()
-      ..sort();
-    final rasterMicros = frames
-        .map((timing) => timing.rasterDuration.inMicroseconds)
-        .toList()
-      ..sort();
+    final buildMicros =
+        frames.map((timing) => timing.buildDuration.inMicroseconds).toList()
+          ..sort();
+    final rasterMicros =
+        frames.map((timing) => timing.rasterDuration.inMicroseconds).toList()
+          ..sort();
     int percentile(List<int> values, double amount) =>
         values[(values.length - 1) * amount ~/ 1];
     debugPrint(
@@ -8494,7 +8605,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     _inventoryOverlayRestore?.cancel();
     _profileScrollProbeTimer?.cancel();
     if (kProfileMode && _profileScrollProbe) {
-      WidgetsBinding.instance.removeTimingsCallback(_recordProfileScrollTimings);
+      WidgetsBinding.instance.removeTimingsCallback(
+        _recordProfileScrollTimings,
+      );
     }
     _inventoryIsScrolling.removeListener(_syncCountdownClockPause);
     countdownClock.paused = false;
@@ -10108,36 +10221,30 @@ class _InventoryHomeState extends State<InventoryHome> {
                                       : gridView
                                       ? ValueListenableBuilder<double>(
                                           valueListenable: _cardSizeSliderValue,
-                                          builder:
-                                              (
-                                                context,
-                                                liveCardSizePercent,
-                                                _,
-                                              ) =>
-                                                  // No SliverLayoutBuilder here:
-                                                  // sliver constraints change on
-                                                  // every scroll pixel, which
-                                                  // rebuilt every visible card
-                                                  // each frame.
-                                                  SliverGrid.builder(
-                                                    itemCount: records.length,
-                                                    addAutomaticKeepAlives:
-                                                        false,
-                                                    addRepaintBoundaries: true,
-                                                    addSemanticIndexes: false,
-                                                    gridDelegate:
-                                                        _CenteredSquareGridDelegate(
-                                                          cardExtent:
-                                                              274.0 *
-                                                              (liveCardSizePercent /
-                                                                  100),
-                                                          spacing: 14,
-                                                        ),
-                                                    itemBuilder: (_, index) =>
-                                                        _recordWidget(
-                                                          records[index],
-                                                        ),
-                                                  ),
+                                          builder: (context, liveCardSizePercent, _) =>
+                                              // No SliverLayoutBuilder here:
+                                              // sliver constraints change on
+                                              // every scroll pixel, which
+                                              // rebuilt every visible card
+                                              // each frame.
+                                              SliverGrid.builder(
+                                                itemCount: records.length,
+                                                addAutomaticKeepAlives: false,
+                                                addRepaintBoundaries: true,
+                                                addSemanticIndexes: false,
+                                                gridDelegate:
+                                                    _CenteredSquareGridDelegate(
+                                                      cardExtent:
+                                                          274.0 *
+                                                          (liveCardSizePercent /
+                                                              100),
+                                                      spacing: 14,
+                                                    ),
+                                                itemBuilder: (_, index) =>
+                                                    _recordWidget(
+                                                      records[index],
+                                                    ),
+                                              ),
                                         )
                                       : SliverList.separated(
                                           itemCount: records.length,
@@ -10178,6 +10285,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ),
               ),
+              if (_draggedInventoryItem != null) _inventoryDragRail(),
               if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
                 Positioned(
                   key: const Key('bottom-action-overlay'),
@@ -10350,11 +10458,23 @@ class _InventoryHomeState extends State<InventoryHome> {
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
       );
     }
-    if (!newItemGlowEnabled || _newItemGlowItemId != record.id) return card;
-    return _NewItemLaserGlow(
-      enabled: true,
-      trigger: _newItemGlowVersion,
-      child: card,
+    final glowingCard = !newItemGlowEnabled || _newItemGlowItemId != record.id
+        ? card
+        : _NewItemLaserGlow(
+            enabled: true,
+            trigger: _newItemGlowVersion,
+            child: card,
+          );
+    return Draggable<InventoryItem>(
+      data: record,
+      onDragStarted: () => setState(() => _draggedInventoryItem = record),
+      onDragEnd: (_) =>
+          mounted ? setState(() => _draggedInventoryItem = null) : null,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      feedbackOffset: const Offset(12, 12),
+      feedback: _inventoryDragPreview(record),
+      childWhenDragging: Opacity(opacity: .35, child: glowingCard),
+      child: glowingCard,
     );
   }
 
@@ -11297,7 +11417,10 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   List<InventoryItem> _allInventoryItems() => _diskInventory == null
       ? List.of(inventory)
-      : [for (var index = 0; index < inventory.length; index++) inventory[index]];
+      : [
+          for (var index = 0; index < inventory.length; index++)
+            inventory[index],
+        ];
 
   List<InventoryItem> _currentViewInventoryItems() {
     if (_diskInventory == null) return List.of(visibleItems);
@@ -12894,6 +13017,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       typeDepletionSettings: typeDepletionSettings,
       typeStatusSettings: typeStatusSettings,
       deletedTypeKeys: deletedTypeKeys,
+      builtInTypeOrder: _readCatalogTypeOrder(),
+      onBuiltInTypesReordered: (order) {
+        widget.database?.saveStringPreference(
+          'catalog_type_order',
+          jsonEncode(order),
+        );
+      },
       customTypeUsageCounts: {
         for (final customType in customItemTypes)
           customType.id: inventory
@@ -13121,6 +13251,282 @@ class _InventoryHomeState extends State<InventoryHome> {
       },
     ),
   );
+
+  List<String> _readCatalogTypeOrder() {
+    final source = widget.database?.loadStringPreference(
+      'catalog_type_order',
+      fallback: '',
+    );
+    if (source == null || source.isEmpty) return const [];
+    try {
+      return (jsonDecode(source) as List).whereType<String>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  void _addDraggedItemToShoppingList(InventoryItem item) {
+    final productId = item.catalogProductId?.isNotEmpty == true
+        ? item.catalogProductId!
+        : item.id;
+    final index = shoppingList.indexWhere(
+      (entry) => entry.productId == productId && entry.kitId == null,
+    );
+    setState(() {
+      if (index >= 0) {
+        shoppingList[index] = shoppingList[index].copyWith(
+          quantityNeeded: shoppingList[index].quantityNeeded + 1,
+        );
+      } else {
+        shoppingList.add(
+          ShoppingListEntry(
+            id: 'SHOP-${DateTime.now().microsecondsSinceEpoch}',
+            name: item.name,
+            productId: productId,
+            quantityNeeded: 1,
+            sourceUrl: item.productUrl,
+          ),
+        );
+      }
+      _recordAudit('add', 'shopping', item.id, {'item': item.name});
+    });
+    _persist();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${item.name} added to the shopping list.')),
+    );
+  }
+
+  Set<String> _loadPinnedDragKits() {
+    final stored =
+        widget.database?.loadStringPreference(
+          'pinned_drag_target',
+          fallback: '',
+        ) ??
+        '';
+    try {
+      return (jsonDecode(stored) as List).whereType<String>().toSet();
+    } catch (_) {
+      return stored.startsWith('kit:') ? {stored.substring(4)} : {};
+    }
+  }
+
+  void _togglePinnedDragKit(String kitId) {
+    setState(() {
+      if (!_pinnedKitIds.add(kitId)) _pinnedKitIds.remove(kitId);
+    });
+    widget.database?.saveStringPreference(
+      'pinned_drag_target',
+      jsonEncode(_pinnedKitIds.toList()),
+    );
+  }
+
+  void _addDraggedItemToKit(InventoryItem item, KitRecord kit) {
+    final productId = item.catalogProductId?.isNotEmpty == true
+        ? item.catalogProductId!
+        : item.id;
+    final lineIndex = kit.bom.indexWhere((line) => line.productId == productId);
+    final nextBom = [...kit.bom];
+    if (lineIndex >= 0) {
+      final line = nextBom[lineIndex];
+      nextBom[lineIndex] = KitBomEntry(
+        id: line.id,
+        productId: line.productId,
+        quantity: line.quantity + 1,
+        name: line.name,
+        section: line.section,
+      );
+    } else {
+      nextBom.add(
+        KitBomEntry(
+          id: 'BOM-${DateTime.now().microsecondsSinceEpoch}',
+          productId: productId,
+          quantity: 1,
+          name: item.name,
+          section: kit.sections.firstOrNull ?? 'Main component',
+        ),
+      );
+    }
+    final updated = KitRecord(
+      id: kit.id,
+      name: kit.name,
+      bom: List.unmodifiable(nextBom),
+      sections: kit.sections,
+      sourceUrls: kit.sourceUrls,
+      imageBytes: kit.imageBytes,
+      added: kit.added,
+    );
+    setState(
+      () => kits[kits.indexWhere((candidate) => candidate.id == kit.id)] =
+          updated,
+    );
+    _persist();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${item.name} added to ${kit.name}.')),
+    );
+  }
+
+  Widget _inventoryDragPreview(InventoryItem item) => Material(
+    color: Colors.transparent,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 250),
+      child: Card(
+        elevation: 18,
+        shadowColor: Colors.black87,
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ItemVisual(
+                item: item,
+                size: 52,
+                typeIcon: _itemTypeIcon(item),
+                typeIconImageBytes: _iconImageBytesFromKey(
+                  _itemTypeIconKey(item),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${_itemTypeDisplayLabel(item)} · ${_formatBomQuantity(item.quantity)} owned',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _inventoryDragRail() {
+    final item = _draggedInventoryItem;
+    if (item == null) return const SizedBox.shrink();
+    Widget destination({
+      required IconData icon,
+      required String label,
+      required ValueChanged<InventoryItem> onAccept,
+    }) => DragTarget<InventoryItem>(
+      onAcceptWithDetails: (details) => onAccept(details.data),
+      builder: (context, candidates, _) => AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: 116,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: .52),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: candidates.isEmpty
+                ? Theme.of(context).colorScheme.outlineVariant
+                : Theme.of(context).colorScheme.primary,
+            width: candidates.isEmpty ? 1 : 2,
+          ),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 14)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: candidates.isEmpty
+                  ? null
+                  : Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 5),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+    return Positioned(
+      key: const Key('inventory-drag-rail'),
+      left: 0,
+      top: 0,
+      bottom: 0,
+      child: SizedBox(
+        width: 136,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          builder: (context, value, child) => Opacity(
+            opacity: value,
+            child: Transform.translate(
+              offset: Offset(-18 * (1 - value), 0),
+              child: child,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.zero,
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                constraints: const BoxConstraints.expand(),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface
+                      .withValues(alpha: .62),
+                  borderRadius: BorderRadius.zero,
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant
+                        .withValues(alpha: .72),
+                  ),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black38, blurRadius: 20),
+                  ],
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    destination(
+                      icon: Icons.shopping_cart_outlined,
+                      label: 'Shopping list',
+                      onAccept: _addDraggedItemToShoppingList,
+                    ),
+                    for (final kit in kits.where(
+                      (kit) => _pinnedKitIds.contains(kit.id),
+                    )) ...[
+                      const SizedBox(height: 10),
+                      destination(
+                        icon: Icons.inventory_2_outlined,
+                        label: kit.name,
+                        onAccept: (value) => _addDraggedItemToKit(value, kit),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<bool> _importKitPackage() async {
     if (!(Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
@@ -14557,7 +14963,8 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   List<CheckoutRecord> get _unreadOverdueCheckouts => _overdueCheckouts
       .where(
-        (entry) => !_readInventoryAlertKeys.contains(_overdueCheckoutKey(entry)),
+        (entry) =>
+            !_readInventoryAlertKeys.contains(_overdueCheckoutKey(entry)),
       )
       .toList();
 
@@ -14578,7 +14985,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       _showPermissionDenied('Your role cannot record checkouts.');
       return;
     }
-    final available = math.max(0.0, item.quantity - _checkedOutQuantity(item.id));
+    final available = math.max(
+      0.0,
+      item.quantity - _checkedOutQuantity(item.id),
+    );
     final record = await showDialog<CheckoutRecord>(
       context: context,
       builder: (_) => _CheckoutDialog(
@@ -14612,7 +15022,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     final index = checkouts.indexWhere((entry) => entry.id == checkout.id);
     if (index < 0) return;
     setState(() {
-      checkouts[index] = checkouts[index].returned(amount, DateTime.now().toUtc());
+      checkouts[index] = checkouts[index].returned(
+        amount,
+        DateTime.now().toUtc(),
+      );
       _recordAudit('return', 'inventory', checkout.itemId, {
         'name': checkout.itemName,
         'from': checkout.borrower,
@@ -17985,7 +18398,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                 constraints: BoxConstraints(
                   maxWidth: math.max(
                     0,
-                    constraints.maxWidth - 2 * horizontalPadding - 2 * indicatorSpace,
+                    constraints.maxWidth -
+                        2 * horizontalPadding -
+                        2 * indicatorSpace,
                   ),
                 ),
                 child: FittedBox(
@@ -18031,33 +18446,33 @@ class _InventoryHomeState extends State<InventoryHome> {
         borderRadius: BorderRadius.circular(18),
         child: _ScrollAwareBackdropFilter(
           filterKey: const Key('floating-header-blur'),
-        scrolling: _inventoryIsScrolling,
-        sigmaX: 8,
-        sigmaY: 8,
-        child: AnimatedContainer(
-          key: const Key('floating-header-actions'),
-          duration: Duration.zero,
-          decoration: _floatingActionBarDecoration(reduceEffects: false),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 920;
-              return Padding(
-                padding: _floatingHeaderContentPadding(constraints.maxWidth),
-                child: compact
-                    ? _compactHeaderActionStrip(
-                        showOverflowHint: constraints.maxWidth < 600,
-                      )
-                    : Row(
-                        children: [
-                          ..._centerHeaderActions(),
-                          const Spacer(),
-                          ..._databaseHeaderActions(),
-                        ],
-                      ),
-              );
-            },
+          scrolling: _inventoryIsScrolling,
+          sigmaX: 8,
+          sigmaY: 8,
+          child: AnimatedContainer(
+            key: const Key('floating-header-actions'),
+            duration: Duration.zero,
+            decoration: _floatingActionBarDecoration(reduceEffects: false),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 920;
+                return Padding(
+                  padding: _floatingHeaderContentPadding(constraints.maxWidth),
+                  child: compact
+                      ? _compactHeaderActionStrip(
+                          showOverflowHint: constraints.maxWidth < 600,
+                        )
+                      : Row(
+                          children: [
+                            ..._centerHeaderActions(),
+                            const Spacer(),
+                            ..._databaseHeaderActions(),
+                          ],
+                        ),
+                );
+              },
+            ),
           ),
-        ),
         ),
       ),
     ),
@@ -18074,25 +18489,25 @@ class _InventoryHomeState extends State<InventoryHome> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(18),
                   child: _ScrollAwareBackdropFilter(
-                  filterKey: const Key('floating-header-compact-blur'),
-                  scrolling: _inventoryIsScrolling,
-                  sigmaX: 8,
-                  sigmaY: 8,
-                  child: AnimatedContainer(
-                    key: const Key('floating-header-compact-search'),
-                    duration: Duration.zero,
-                    decoration: _floatingActionBarDecoration(
-                      reduceEffects: false,
-                    ),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) => Padding(
-                        padding: _floatingHeaderContentPadding(
-                          constraints.maxWidth,
+                    filterKey: const Key('floating-header-compact-blur'),
+                    scrolling: _inventoryIsScrolling,
+                    sigmaX: 8,
+                    sigmaY: 8,
+                    child: AnimatedContainer(
+                      key: const Key('floating-header-compact-search'),
+                      duration: Duration.zero,
+                      decoration: _floatingActionBarDecoration(
+                        reduceEffects: false,
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => Padding(
+                          padding: _floatingHeaderContentPadding(
+                            constraints.maxWidth,
+                          ),
+                          child: _scrollingHeaderContent(),
                         ),
-                        child: _scrollingHeaderContent(),
                       ),
                     ),
-                  ),
                   ),
                 ),
               )
@@ -18265,7 +18680,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
           BoxShadow(
             color: Colors.black.withValues(
-              alpha: Theme.of(context).brightness == Brightness.light ? .12 : .38,
+              alpha: Theme.of(context).brightness == Brightness.light
+                  ? .12
+                  : .38,
             ),
             blurRadius: 7,
             offset: const Offset(0, 2),
@@ -21729,7 +22146,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         client: widget.supabaseHttpClient,
       );
       if (config.workspaceId != expectedWorkspace) {
-        throw const SupabaseSyncException('Workspace changed. Reopen Scratch Pad.');
+        throw const SupabaseSyncException(
+          'Workspace changed. Reopen Scratch Pad.',
+        );
       }
       await service.manageScratchPadNote(session, note, replacement);
       final remaining = await service.listOwnerScratchPadNotes(session);
@@ -21870,7 +22289,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         sharedNotes: sharedNotes,
         reviewNotes: reviewNotes,
         onRestoreNote: _restoreScratchPadNote,
-        onManageNote: canManageNotes ? (note, replacement) => _manageScratchPadNote(note, replacement, notesWorkspace) : null,
+        onManageNote: canManageNotes
+            ? (note, replacement) =>
+                  _manageScratchPadNote(note, replacement, notesWorkspace)
+            : null,
         reloadManagedNotes: canManageNotes
             ? () =>
                   decodeScratchPadNotes(
@@ -22039,209 +22461,214 @@ class _InventoryHomeState extends State<InventoryHome> {
           borderRadius: BorderRadius.circular(18),
           child: _ScrollAwareBackdropFilter(
             filterKey: const Key('bottom-action-blur'),
-          scrolling: _inventoryIsScrolling,
-          sigmaX: 8,
-          sigmaY: 8,
-          child: AnimatedContainer(
-            key: const Key('bottom-action-surface'),
-            duration: Duration.zero,
-            decoration: _floatingActionBarDecoration(reduceEffects: false),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _androidBottomSearchDock(),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    // Collapse before the longest labels can crowd or clip. The
-                    // compact rail is intentionally used through medium desktop
-                    // widths, not only at phone sizes.
-                    final tightDesktop = Platform.isLinux || Platform.isWindows;
-                    final bottomActionsEnabled = currentRole.canCreateInventory;
-                    final disabledActionMessage = bottomActionsEnabled
-                        ? null
-                        : 'Your role ($_workspaceRoleLabel) cannot add inventory items.';
-                    final iconOnly = constraints.maxWidth < 1180;
-                    final taper = ((constraints.maxWidth - 760) / (1180 - 760))
-                        .clamp(0.0, 1.0);
-                    final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
-                    final addItem = _glassQuickAction(
-                      key: const Key('add-item'),
-                      onPressed: bottomActionsEnabled ? _addItem : null,
-                      icon: Icons.add_rounded,
-                      label: 'Add item',
-                      iconOnly: iconOnly,
-                      iconOnlyWidth: iconOnlyWidth,
-                      tight: tightDesktop,
-                      disabledMessage: disabledActionMessage,
-                    );
-                    final rightActions = <Widget>[
-                      _scanButton(
-                        iconOnly: iconOnly,
-                        iconOnlyWidth: iconOnlyWidth,
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
-                      addItem,
-                      const SizedBox(width: 12),
-                      _filamentColorsButton(
-                        iconOnly: iconOnly,
-                        iconOnlyWidth: iconOnlyWidth,
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
-                      _inventoryJsonButton(
-                        iconOnly: iconOnly,
-                        iconOnlyWidth: iconOnlyWidth,
-                        tight: tightDesktop,
-                        enabled: bottomActionsEnabled,
-                        disabledMessage: disabledActionMessage,
-                      ),
-                      const SizedBox(width: 12),
-                      _exportInventoryButton(
-                        iconOnly: iconOnly,
-                        iconOnlyWidth: iconOnlyWidth,
-                        tight: tightDesktop,
-                      ),
-                    ];
-                    if (iconOnly) {
-                      // The compact rail needs all eight actions on one line.
-                      // Outlined button edges keep the targets visually distinct,
-                      // so narrow layouts trade the inter-button gaps for touch
-                      // target width instead of overflowing.
-                      const compactGap = 0.0;
-                      final fittedIconWidth = math.min(
-                        iconOnlyWidth,
-                        // Reserve the 28 px outer inset used by the expanded bar.
-                        math.max(
-                          constraints.maxWidth >= 350 ? 40.0 : 32.0,
-                          (constraints.maxWidth - 28) / 8,
-                        ),
-                      );
-                      final compactAddItem = _glassQuickAction(
+            scrolling: _inventoryIsScrolling,
+            sigmaX: 8,
+            sigmaY: 8,
+            child: AnimatedContainer(
+              key: const Key('bottom-action-surface'),
+              duration: Duration.zero,
+              decoration: _floatingActionBarDecoration(reduceEffects: false),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _androidBottomSearchDock(),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Collapse before the longest labels can crowd or clip. The
+                      // compact rail is intentionally used through medium desktop
+                      // widths, not only at phone sizes.
+                      final tightDesktop =
+                          Platform.isLinux || Platform.isWindows;
+                      final bottomActionsEnabled =
+                          currentRole.canCreateInventory;
+                      final disabledActionMessage = bottomActionsEnabled
+                          ? null
+                          : 'Your role ($_workspaceRoleLabel) cannot add inventory items.';
+                      final iconOnly = constraints.maxWidth < 1180;
+                      final taper =
+                          ((constraints.maxWidth - 760) / (1180 - 760)).clamp(
+                            0.0,
+                            1.0,
+                          );
+                      final iconOnlyWidth = ui.lerpDouble(48, 88, taper)!;
+                      final addItem = _glassQuickAction(
                         key: const Key('add-item'),
                         onPressed: bottomActionsEnabled ? _addItem : null,
                         icon: Icons.add_rounded,
                         label: 'Add item',
-                        iconOnly: true,
-                        iconOnlyWidth: fittedIconWidth,
+                        iconOnly: iconOnly,
+                        iconOnlyWidth: iconOnlyWidth,
+                        tight: tightDesktop,
                         disabledMessage: disabledActionMessage,
                       );
+                      final rightActions = <Widget>[
+                        _scanButton(
+                          iconOnly: iconOnly,
+                          iconOnlyWidth: iconOnlyWidth,
+                          tight: tightDesktop,
+                          enabled: bottomActionsEnabled,
+                          disabledMessage: disabledActionMessage,
+                        ),
+                        const SizedBox(width: 12),
+                        addItem,
+                        const SizedBox(width: 12),
+                        _filamentColorsButton(
+                          iconOnly: iconOnly,
+                          iconOnlyWidth: iconOnlyWidth,
+                          tight: tightDesktop,
+                          enabled: bottomActionsEnabled,
+                          disabledMessage: disabledActionMessage,
+                        ),
+                        const SizedBox(width: 12),
+                        _inventoryJsonButton(
+                          iconOnly: iconOnly,
+                          iconOnlyWidth: iconOnlyWidth,
+                          tight: tightDesktop,
+                          enabled: bottomActionsEnabled,
+                          disabledMessage: disabledActionMessage,
+                        ),
+                        const SizedBox(width: 12),
+                        _exportInventoryButton(
+                          iconOnly: iconOnly,
+                          iconOnlyWidth: iconOnlyWidth,
+                          tight: tightDesktop,
+                        ),
+                      ];
+                      if (iconOnly) {
+                        // The compact rail needs all eight actions on one line.
+                        // Outlined button edges keep the targets visually distinct,
+                        // so narrow layouts trade the inter-button gaps for touch
+                        // target width instead of overflowing.
+                        const compactGap = 0.0;
+                        final fittedIconWidth = math.min(
+                          iconOnlyWidth,
+                          // Reserve the 28 px outer inset used by the expanded bar.
+                          math.max(
+                            constraints.maxWidth >= 350 ? 40.0 : 32.0,
+                            (constraints.maxWidth - 28) / 8,
+                          ),
+                        );
+                        final compactAddItem = _glassQuickAction(
+                          key: const Key('add-item'),
+                          onPressed: bottomActionsEnabled ? _addItem : null,
+                          icon: Icons.add_rounded,
+                          label: 'Add item',
+                          iconOnly: true,
+                          iconOnlyWidth: fittedIconWidth,
+                          disabledMessage: disabledActionMessage,
+                        );
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 7,
+                          ),
+                          child: SizedBox(
+                            height: 44,
+                            child: Row(
+                              key: const Key('compact-bottom-action-group'),
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _catalogButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                      enabled: bottomActionsEnabled,
+                                      disabledMessage: disabledActionMessage,
+                                    ),
+                                    const SizedBox(width: compactGap),
+                                    _stockroomButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                      enabled: bottomActionsEnabled,
+                                      disabledMessage: disabledActionMessage,
+                                    ),
+                                    const SizedBox(width: compactGap),
+                                    _scratchPadButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                    ),
+                                  ],
+                                ),
+                                const Spacer(),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _scanButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                      enabled: bottomActionsEnabled,
+                                      disabledMessage: disabledActionMessage,
+                                    ),
+                                    const SizedBox(width: compactGap),
+                                    compactAddItem,
+                                    const SizedBox(width: compactGap),
+                                    _filamentColorsButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                      enabled: bottomActionsEnabled,
+                                      disabledMessage: disabledActionMessage,
+                                    ),
+                                    const SizedBox(width: compactGap),
+                                    _inventoryJsonButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                      enabled: bottomActionsEnabled,
+                                      disabledMessage: disabledActionMessage,
+                                    ),
+                                    const SizedBox(width: compactGap),
+                                    _exportInventoryButton(
+                                      iconOnly: true,
+                                      iconOnlyWidth: fittedIconWidth,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
                       return Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 14,
-                          vertical: 7,
+                          vertical: 8,
                         ),
-                        child: SizedBox(
-                          height: 44,
-                          child: Row(
-                            key: const Key('compact-bottom-action-group'),
-                            children: [
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _catalogButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
+                        child: Row(
+                          children: [
+                            _catalogButton(
+                              tight: tightDesktop,
+                              enabled: bottomActionsEnabled,
+                              disabledMessage: disabledActionMessage,
+                            ),
+                            const SizedBox(width: 12),
+                            _stockroomButton(
+                              tight: tightDesktop,
+                              enabled: bottomActionsEnabled,
+                              disabledMessage: disabledActionMessage,
+                            ),
+                            const SizedBox(width: 12),
+                            _scratchPadButton(tight: tightDesktop),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  reverse: false,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: rightActions,
                                   ),
-                                  const SizedBox(width: compactGap),
-                                  _stockroomButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
-                                  ),
-                                  const SizedBox(width: compactGap),
-                                  _scratchPadButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                  ),
-                                ],
-                              ),
-                              const Spacer(),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _scanButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
-                                  ),
-                                  const SizedBox(width: compactGap),
-                                  compactAddItem,
-                                  const SizedBox(width: compactGap),
-                                  _filamentColorsButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
-                                  ),
-                                  const SizedBox(width: compactGap),
-                                  _inventoryJsonButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                    enabled: bottomActionsEnabled,
-                                    disabledMessage: disabledActionMessage,
-                                  ),
-                                  const SizedBox(width: compactGap),
-                                  _exportInventoryButton(
-                                    iconOnly: true,
-                                    iconOnlyWidth: fittedIconWidth,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        children: [
-                          _catalogButton(
-                            tight: tightDesktop,
-                            enabled: bottomActionsEnabled,
-                            disabledMessage: disabledActionMessage,
-                          ),
-                          const SizedBox(width: 12),
-                          _stockroomButton(
-                            tight: tightDesktop,
-                            enabled: bottomActionsEnabled,
-                            disabledMessage: disabledActionMessage,
-                          ),
-                          const SizedBox(width: 12),
-                          _scratchPadButton(tight: tightDesktop),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                reverse: false,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: rightActions,
                                 ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -22453,7 +22880,8 @@ class _InventoryHomeState extends State<InventoryHome> {
             Builder(
               builder: (context) {
                 final lock = AppLockScope.maybeOf(context);
-                if (lock == null || !lock.hasPin) return const SizedBox.shrink();
+                if (lock == null || !lock.hasPin)
+                  return const SizedBox.shrink();
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -24277,12 +24705,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     final content = !list && recordImage != null
         ? _PhotoCatalogCardContent(
-            key: Key('photo-catalog-card-${switch (record) {
-              KitRecord value => value.id,
-              BuildRecord value => value.id,
-              MachineRecord value => value.id,
-              _ => record.hashCode,
-            }}'),
+            key: Key(
+              'photo-catalog-card-${switch (record) {
+                KitRecord value => value.id,
+                BuildRecord value => value.id,
+                MachineRecord value => value.id,
+                _ => record.hashCode,
+              }}',
+            ),
             bytes: recordImage,
             category: category,
             title: title,
@@ -24383,15 +24813,37 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       ),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _handleCatalogRecordTap(record),
-        onSecondaryTapDown: record is KitRecord
-            ? (details) => _showKitContextMenu(record, details.globalPosition)
-            : record is BuildRecord
-            ? (_) => _openBuildQueue(record, _kitForBuild(record))
-            : null,
-        onLongPress: () => _selectCatalogRecord(record),
-        child: content,
+      child: Stack(
+        children: [
+          InkWell(
+            onTap: () => _handleCatalogRecordTap(record),
+            onSecondaryTapDown: record is KitRecord
+                ? (details) =>
+                      _showKitContextMenu(record, details.globalPosition)
+                : record is BuildRecord
+                ? (_) => _openBuildQueue(record, _kitForBuild(record))
+                : null,
+            onLongPress: () => _selectCatalogRecord(record),
+            child: content,
+          ),
+          if (record case final KitRecord kit)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton.filledTonal(
+                key: Key('pin-kit-drop-target-${kit.id}'),
+                tooltip: _pinnedKitIds.contains(kit.id)
+                    ? 'Pinned for dragging'
+                    : 'Pin as drag destination',
+                onPressed: () => _togglePinnedDragKit(kit.id),
+                icon: Icon(
+                  _pinnedKitIds.contains(kit.id)
+                      ? Icons.push_pin
+                      : Icons.push_pin_outlined,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -25808,6 +26260,8 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.typeDepletionSettings,
     required this.typeStatusSettings,
     required this.deletedTypeKeys,
+    required this.builtInTypeOrder,
+    required this.onBuiltInTypesReordered,
     required this.customTypeUsageCounts,
     required this.products,
     required this.inventoryItems,
@@ -25852,6 +26306,8 @@ class CatalogManagerDialog extends StatefulWidget {
   final Map<String, bool> typeDepletionSettings;
   final Map<String, bool> typeStatusSettings;
   final Set<String> deletedTypeKeys;
+  final List<String> builtInTypeOrder;
+  final ValueChanged<List<String>> onBuiltInTypesReordered;
   final Map<String, int> customTypeUsageCounts;
   final List<CatalogProduct> products;
   final List<InventoryItem> inventoryItems;
@@ -25930,6 +26386,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     ...widget.typeStatusSettings,
   };
   late final Set<String> deletedTypeKeys = {...widget.deletedTypeKeys};
+  late final List<String> builtInTypeOrder = [...widget.builtInTypeOrder];
   late final List<CatalogProduct> products = [...widget.products];
   late final List<MachineTypeRecord> machineTypes = [...widget.machineTypes];
   late final List<MachineRecord> machines = [...widget.machines];
@@ -25988,9 +26445,19 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   ];
 
   List<({String key, String defaultLabel, IconData icon})>
-  get _builtInCatalogTypes => _allBuiltInCatalogTypes
-      .where((type) => !deletedTypeKeys.contains(type.key))
-      .toList();
+  get _builtInCatalogTypes {
+    final types = _allBuiltInCatalogTypes
+        .where((type) => !deletedTypeKeys.contains(type.key))
+        .toList();
+    types.sort((a, b) {
+      final aIndex = builtInTypeOrder.indexOf(a.key);
+      final bIndex = builtInTypeOrder.indexOf(b.key);
+      final aRank = aIndex < 0 ? types.length : aIndex;
+      final bRank = bIndex < 0 ? types.length : bIndex;
+      return aRank == bRank ? 0 : aRank.compareTo(bRank);
+    });
+    return types;
+  }
 
   List<({String key, String defaultLabel, IconData icon})>
   get _deletedCatalogTypes => _allBuiltInCatalogTypes
@@ -26949,7 +27416,11 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                                   ),
                                   title: Text(machine.name),
                                   subtitle: Text(
-                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}${machine.hasTimer ? machine.timerFinished(DateTime.now()) ? ' · Timer finished' : ' · Timer running' : ''}',
+                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}${machine.hasTimer
+                                        ? machine.timerFinished(DateTime.now())
+                                              ? ' · Timer finished'
+                                              : ' · Timer running'
+                                        : ''}',
                                   ),
                                   trailing: IconButton(
                                     key: Key('edit-machine-${machine.id}'),
@@ -27223,48 +27694,71 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     children: [
       _newCustomTypeForm(),
       const Divider(height: 28),
-      for (final type in _builtInCatalogTypes)
-        ListTile(
-          key: Key('built-in-type-row-${type.key}'),
-          contentPadding: EdgeInsets.zero,
-          leading: _typeIconVisual(
-            _builtInTypeIconKey(type),
-            type.icon,
-            size: 24,
-          ),
-          title: Text(_builtInTypeLabel(type)),
-          subtitle: Text(
-            [
-              'Item type',
-              if (_typeShowsStatus(type.key, typeStatusSettings))
-                'Shows status',
-              if (type.key.startsWith('item:') &&
-                  _typeCanMarkDepleted(type.key, typeDepletionSettings))
-                'Can be marked depleted',
-            ].join(' · '),
-          ),
-          trailing: Wrap(
-            spacing: 2,
-            children: [
-              IconButton(
-                key: Key('edit-built-in-type-${type.key}'),
-                tooltip: 'Rename ${_builtInTypeLabel(type)}',
-                onPressed: () => _editBuiltInType(type),
-                icon: const Icon(Icons.edit_outlined),
+      SizedBox(
+        height: _builtInCatalogTypes.length * 72.0,
+        child: ReorderableListView(
+          key: const Key('reorder-built-in-types'),
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          onReorderItem: (oldIndex, newIndex) {
+            final ordered = _builtInCatalogTypes
+                .map((type) => type.key)
+                .toList();
+            final moved = ordered.removeAt(oldIndex);
+            ordered.insert(newIndex, moved);
+            setState(() {
+              builtInTypeOrder
+                ..clear()
+                ..addAll(ordered);
+            });
+            widget.onBuiltInTypesReordered(List.unmodifiable(ordered));
+          },
+          children: [
+            for (final type in _builtInCatalogTypes)
+              ListTile(
+                key: ValueKey('built-in-type-row-${type.key}'),
+                contentPadding: EdgeInsets.zero,
+                leading: _typeIconVisual(
+                  _builtInTypeIconKey(type),
+                  type.icon,
+                  size: 24,
+                ),
+                title: Text(_builtInTypeLabel(type)),
+                subtitle: Text(
+                  [
+                    'Item type',
+                    if (_typeShowsStatus(type.key, typeStatusSettings))
+                      'Shows status',
+                    if (type.key.startsWith('item:') &&
+                        _typeCanMarkDepleted(type.key, typeDepletionSettings))
+                      'Can be marked depleted',
+                  ].join(' · '),
+                ),
+                trailing: Wrap(
+                  spacing: 2,
+                  children: [
+                    IconButton(
+                      key: Key('edit-built-in-type-${type.key}'),
+                      tooltip: 'Rename ${_builtInTypeLabel(type)}',
+                      onPressed: () => _editBuiltInType(type),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    IconButton(
+                      key: Key('delete-built-in-type-${type.key}'),
+                      tooltip: widget.canDeleteCustomItemTypes
+                          ? 'Delete ${_builtInTypeLabel(type)}'
+                          : 'Only the database owner can delete types',
+                      onPressed: widget.canDeleteCustomItemTypes
+                          ? () => _deleteBuiltInType(type)
+                          : null,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
+                ),
               ),
-              IconButton(
-                key: Key('delete-built-in-type-${type.key}'),
-                tooltip: widget.canDeleteCustomItemTypes
-                    ? 'Delete ${_builtInTypeLabel(type)}'
-                    : 'Only the database owner can delete types',
-                onPressed: widget.canDeleteCustomItemTypes
-                    ? () => _deleteBuiltInType(type)
-                    : null,
-                icon: const Icon(Icons.delete_outline_rounded),
-              ),
-            ],
-          ),
+          ],
         ),
+      ),
       for (final type in customItemTypes)
         ListTile(
           key: Key('custom-type-row-${type.id}'),
@@ -35040,7 +35534,9 @@ final inventoryExportFields = [
 ];
 
 Object _exportNumber(double value) =>
-    value == value.roundToDouble() && value.abs() < 1e15 ? value.toInt() : value;
+    value == value.roundToDouble() && value.abs() < 1e15
+    ? value.toInt()
+    : value;
 
 Object? _inventoryExportValue(
   InventoryItem item,
@@ -35270,7 +35766,9 @@ InventoryJsonParseResult parseInventoryJson(String source) {
     }
     items.add(
       InventoryJsonDraft(
-        id: _jsonText(_jsonRowValue(row, const ['id', 'itemid', 'inventoryid'])),
+        id: _jsonText(
+          _jsonRowValue(row, const ['id', 'itemid', 'inventoryid']),
+        ),
         rowNumber: rowNumber,
         name: name,
         typeName: _jsonText(
@@ -35338,7 +35836,9 @@ InventoryJsonParseResult parseInventoryJson(String source) {
             'ams',
           ]),
         ),
-        archived: _jsonBool(_jsonRowValue(row, const ['archived', 'isarchived'])),
+        archived: _jsonBool(
+          _jsonRowValue(row, const ['archived', 'isarchived']),
+        ),
       ),
     );
   }
@@ -39917,45 +40417,44 @@ class _CardPhotoBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget image(FilterQuality filterQuality) => LayoutBuilder(
       builder: (context, constraints) {
-      final logicalWidth = constraints.maxWidth.isFinite
-          ? constraints.maxWidth
-          : 400.0;
-      final requestedWidth =
-          (logicalWidth * MediaQuery.devicePixelRatioOf(context)).round();
-      // Keep the image-provider key stable while a desktop window is being
-      // resized. A per-pixel cacheWidth forces a fresh decode on every frame.
-      final cacheWidth = requestedWidth <= 320
-          ? 320
-          : requestedWidth <= 480
-          ? 480
-          : requestedWidth <= 720
-          ? 720
-          : requestedWidth <= 960
-          ? 960
-          : 1200;
-      // Paint the photo onto the Card's Material ink layer. InkWell hover,
-      // focus, highlight, and splash features are then composited above the
-      // photo instead of being hidden underneath an opaque Image widget.
-      return Ink(
-        key: imageKey,
-        decoration: BoxDecoration(
-          image: DecorationImage(
-            image: ResizeImage(MemoryImage(bytes), width: cacheWidth),
-            fit: BoxFit.cover,
-            filterQuality: filterQuality,
-            onError: (_, _) {},
+        final logicalWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 400.0;
+        final requestedWidth =
+            (logicalWidth * MediaQuery.devicePixelRatioOf(context)).round();
+        // Keep the image-provider key stable while a desktop window is being
+        // resized. A per-pixel cacheWidth forces a fresh decode on every frame.
+        final cacheWidth = requestedWidth <= 320
+            ? 320
+            : requestedWidth <= 480
+            ? 480
+            : requestedWidth <= 720
+            ? 720
+            : requestedWidth <= 960
+            ? 960
+            : 1200;
+        // Paint the photo onto the Card's Material ink layer. InkWell hover,
+        // focus, highlight, and splash features are then composited above the
+        // photo instead of being hidden underneath an opaque Image widget.
+        return Ink(
+          key: imageKey,
+          decoration: BoxDecoration(
+            image: DecorationImage(
+              image: ResizeImage(MemoryImage(bytes), width: cacheWidth),
+              fit: BoxFit.cover,
+              filterQuality: filterQuality,
+              onError: (_, _) {},
+            ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
     final notifier = scrolling;
     if (notifier == null) return image(FilterQuality.medium);
     return ValueListenableBuilder<bool>(
       valueListenable: notifier,
-      builder: (context, isScrolling, _) => image(
-        isScrolling ? FilterQuality.low : FilterQuality.medium,
-      ),
+      builder: (context, isScrolling, _) =>
+          image(isScrolling ? FilterQuality.low : FilterQuality.medium),
     );
   }
 }
@@ -40087,7 +40586,11 @@ class _ScrollingInventoryCard extends StatelessWidget {
   final ValueListenable<bool>? scrolling;
   final Widget child;
 
-  Widget _buildCard(BuildContext context, Clip clipBehavior, Widget child) => Card(
+  Widget _buildCard(
+    BuildContext context,
+    Clip clipBehavior,
+    Widget child,
+  ) => Card(
     key: Key('inventory-card-$itemId'),
     color: selected
         ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
@@ -41047,7 +41550,13 @@ class _StatusRingPainter extends CustomPainter {
       ..shader = SweepGradient(
         startAngle: -math.pi / 2,
         endAngle: math.pi * 1.5,
-        colors: [statusColor, highlightColor, statusColor, baseColor, statusColor],
+        colors: [
+          statusColor,
+          highlightColor,
+          statusColor,
+          baseColor,
+          statusColor,
+        ],
         stops: const [0, .24, .5, .76, 1],
       ).createShader(bounds)
       ..style = PaintingStyle.stroke

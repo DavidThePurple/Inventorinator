@@ -7564,7 +7564,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   Offset? _layoutDrawCurrent;
   String? _layoutDrawParentId;
   late final List<ShoppingListEntry> shoppingList;
-  InventoryItem? _draggedInventoryItem;
+  final ValueNotifier<InventoryItem?> _draggedInventoryItem = ValueNotifier(
+    null,
+  );
   final Set<String> _pinnedKitIds = {};
   late final List<AuditEntry> auditLog;
   late final List<AdditionHistoryEntry> additionHistory;
@@ -8625,6 +8627,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     inventorySearchController.dispose();
     inventorySearchFocusNode.dispose();
+    _draggedInventoryItem.dispose();
     inventoryScrollController.dispose();
     super.dispose();
   }
@@ -10286,7 +10289,14 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ),
               ),
-              if (_draggedInventoryItem != null) _inventoryDragRail(),
+              Positioned.fill(
+                child: ValueListenableBuilder<InventoryItem?>(
+                  valueListenable: _draggedInventoryItem,
+                  builder: (context, item, _) => item == null
+                      ? const SizedBox.shrink()
+                      : _inventoryDragRail(item),
+                ),
+              ),
               if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
                 Positioned(
                   key: const Key('bottom-action-overlay'),
@@ -10468,9 +10478,10 @@ class _InventoryHomeState extends State<InventoryHome> {
           );
     return Draggable<InventoryItem>(
       data: record,
-      onDragStarted: () => setState(() => _draggedInventoryItem = record),
-      onDragEnd: (_) =>
-          mounted ? setState(() => _draggedInventoryItem = null) : null,
+      onDragStarted: () => _draggedInventoryItem.value = record,
+      onDragEnd: (_) {
+        if (mounted) _draggedInventoryItem.value = null;
+      },
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedbackOffset: const Offset(12, 12),
       feedback: _inventoryDragPreview(record),
@@ -13420,9 +13431,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _inventoryDragRail() {
-    final item = _draggedInventoryItem;
-    if (item == null) return const SizedBox.shrink();
+  Widget _inventoryDragRail(InventoryItem item) {
     Widget destination({
       required IconData icon,
       required String label,

@@ -23,12 +23,21 @@ MachineRecord _machine({
         );
 }
 
-String _state(List<MachineRecord> machines) => encodeWorkshopState(
+String _state(
+  List<MachineRecord> machines, {
+  MachineTimerDisplay? timerDisplay,
+}) => encodeWorkshopState(
   inventory: const [],
   vendors: const [],
   brands: const [],
   products: const [],
-  machineTypes: const [MachineTypeRecord(id: 'TYPE-DRYER', name: 'Dryer')],
+  machineTypes: [
+    MachineTypeRecord(
+      id: 'TYPE-DRYER',
+      name: 'Dryer',
+      timerDisplay: timerDisplay,
+    ),
+  ],
   machines: machines,
 );
 
@@ -97,18 +106,46 @@ void main() {
       final idle = decodeWorkshopState(_state([_machine()]))!.machines.single;
       expect(idle.hasTimer, isFalse);
     });
+
+    test('keeps a machine type timer display override', () {
+      final restored = decodeWorkshopState(
+        encodeWorkshopState(
+          inventory: const [],
+          vendors: const [],
+          brands: const [],
+          products: const [],
+          machineTypes: const [
+            MachineTypeRecord(
+              id: 'TYPE-DRYER',
+              name: 'Dryer',
+              timerDisplay: MachineTimerDisplay.pill,
+            ),
+          ],
+        ),
+      )!;
+
+      expect(
+        restored.machineTypes.single.timerDisplay,
+        MachineTimerDisplay.pill,
+      );
+    });
   });
 
   group('machine timer in the app', () {
     Future<void> pumpHome(
       WidgetTester tester,
-      List<MachineRecord> machines,
-    ) async {
+      List<MachineRecord> machines, {
+      MachineTimerDisplay? timerDisplay,
+    }) async {
       tester.view.physicalSize = const Size(1400, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
-        MaterialApp(home: InventoryHome(persistedState: _state(machines))),
+        MaterialApp(
+          home: InventoryHome(
+            persistedState: _state(machines, timerDisplay: timerDisplay),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
     }
@@ -144,7 +181,7 @@ void main() {
         find.byKey(const Key('machine-details-MCH-DRYER')),
         findsOneWidget,
       );
-      expect(find.text('Finished'), findsOneWidget);
+      expect(find.byKey(const Key('machine-timer-status')), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('machine-timer-clear')));
       await tester.pumpAndSettle();
@@ -184,6 +221,56 @@ void main() {
       await tester.tap(find.byKey(const Key('machine-timer-clear')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('machine-timer-start')), findsOneWidget);
+    });
+
+    testWidgets(
+      'running printer timers stay visible on a narrow Android card',
+      (tester) async {
+        tester.view.physicalSize = const Size(412, 850);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: InventoryHome(
+              persistedState: _state([
+                _machine(
+                  timerLabel: 'Benchy',
+                  started: DateTime.now().toUtc(),
+                  span: const Duration(hours: 2),
+                ),
+              ]),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('catalog-machine-timer-MCH-DRYER')),
+          findsOneWidget,
+        );
+        expect(
+          tester.getSize(
+            find.byKey(const Key('catalog-machine-timer-MCH-DRYER')),
+          ),
+          const Size(58, 58),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('a machine type can override the default circle with a pill', (
+      tester,
+    ) async {
+      await pumpHome(tester, [
+        _machine(
+          timerLabel: 'Benchy',
+          started: DateTime.now().toUtc(),
+          span: const Duration(hours: 2),
+        ),
+      ], timerDisplay: MachineTimerDisplay.pill);
+
+      final timer = find.byKey(const Key('catalog-machine-timer-MCH-DRYER'));
+      expect(tester.getSize(timer).height, lessThan(40));
     });
   });
 }

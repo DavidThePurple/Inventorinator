@@ -1,6 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
+# Release builds must begin disconnected. A deployer can enter a public
+# Supabase address after installing, but a personal server or publishable key
+# must never be baked into a distributable through dart defines or CI env.
+if [ -n "${SUPABASE_URL:-}" ] || [ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ]; then
+  echo 'Refusing release validation: Supabase connection defaults are set.' >&2
+  exit 1
+fi
+case "${DART_DEFINES:-}" in
+  *SUPABASE_URL*|*SUPABASE_PUBLISHABLE_KEY*)
+    echo 'Refusing release validation: Supabase connection defaults are set.' >&2
+    exit 1
+    ;;
+esac
+
 app_version=$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)
 installer_tag=$(sed -n 's/^release_tag=.*:-\(v[^}]*\)}$/\1/p' supabase/install-or-update.sh)
 installer_schema=$(sed -n 's/^required_version=\([0-9][0-9]*\)$/\1/p' supabase/install-or-update.sh)

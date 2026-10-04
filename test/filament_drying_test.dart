@@ -113,6 +113,9 @@ void main() {
       if (manual) {
         expect(result, isNull);
         expect(find.textContaining('Owner requires'), findsOneWidget);
+        // The desktop alert intentionally remains visible for four seconds.
+        // Advance the fake clock so its dismissal timer is not left pending.
+        await tester.pump(const Duration(seconds: 4));
       } else {
         expect(result?.filamentStatus, FilamentStatus.drying);
         expect(result?.dryingRemaining, 360);

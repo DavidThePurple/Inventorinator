@@ -133,6 +133,8 @@ void main() {
     expect((home.inventory as List<InventoryItem>), isEmpty);
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
+    // Let the confirmation alert dismiss before this test disposes its tree.
+    await tester.pump(const Duration(seconds: 5));
 
     await tester.pumpWidget(const SizedBox());
 

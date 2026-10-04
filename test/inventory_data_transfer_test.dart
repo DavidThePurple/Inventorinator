@@ -238,13 +238,11 @@ void main() {
     expect(await result, isFalse);
   });
 
-  testWidgets('Bulk Import flyout offers import and Rapidizer', (
-    tester,
-  ) async {
+  testWidgets('Bulk Import flyout offers import and Rapidizer', (tester) async {
     await pumpHome(tester);
     final button = find.byKey(const Key('open-inventory-json-import'));
     expect(
-      find.descendant(of: button, matching: find.text('Bulk Import')),
+      find.descendant(of: button, matching: find.text('Bulk Add')),
       findsOneWidget,
     );
     await tester.ensureVisible(button);

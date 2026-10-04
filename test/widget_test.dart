@@ -116,18 +116,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('getting-started-dialog')), findsOneWidget);
-    expect(find.text('Local inventory first'), findsOneWidget);
-    tester.view.physicalSize = const Size(390, 844);
-    await tester.pumpAndSettle();
+    expect(find.text('Search across your inventory'), findsOneWidget);
     await tester.tap(find.byKey(const Key('getting-started-next')));
     await tester.pumpAndSettle();
-    expect(find.text('Add and find items'), findsOneWidget);
+    expect(find.text('Filter by type'), findsOneWidget);
     await tester.tap(find.byKey(const Key('getting-started-next')));
     await tester.pumpAndSettle();
-    expect(find.text('Organize the Stockroom'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('getting-started-next')));
-    await tester.pumpAndSettle();
-    expect(find.text('Protect your inventory'), findsOneWidget);
+    expect(find.text('Add one item—or many'), findsOneWidget);
+    for (var index = 0; index < 2; index++) {
+      await tester.tap(find.byKey(const Key('getting-started-next')));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Tune this device'), findsOneWidget);
     expect(find.text('Done'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -740,9 +740,9 @@ void main() {
     await tester.pumpWidget(
       InventorinatorApp(database: database, persistedState: state),
     );
-    tester.widget<IconButton>(
-      find.byKey(const Key('personalization-settings')),
-    ).onPressed!();
+    tester
+        .widget<IconButton>(find.byKey(const Key('personalization-settings')))
+        .onPressed!();
     await tester.pumpAndSettle();
     final toggle = find.byKey(const Key('low-stock-alerts-personalization'));
     await tester.ensureVisible(toggle);
@@ -3013,6 +3013,31 @@ Bed Temperature: 80°C
     expect(descending.map((item) => item.id), ['B', 'C', 'A']);
   });
 
+  test('Type sort follows the configured Catalog base-type order', () {
+    final filament = sampleInventory.first.copyWith(
+      id: 'FILAMENT',
+      name: 'Filament item',
+      type: InventoryType.filament,
+    );
+    final fastener = sampleInventory.first.copyWith(
+      id: 'FASTENER',
+      name: 'Fastener item',
+      type: InventoryType.fastener,
+    );
+    final ordered = [filament, fastener]
+      ..sort(
+        (left, right) => compareInventoryItems(
+          left,
+          right,
+          sort: InventorySort.type,
+          ascending: true,
+          typeOrder: const ['item:fastener', 'item:filament'],
+        ),
+      );
+
+    expect(ordered.map((item) => item.id), ['FASTENER', 'FILAMENT']);
+  });
+
   testWidgets('remote quantity changes fire a southeast card animation', (
     tester,
   ) async {
@@ -3146,9 +3171,9 @@ Bed Temperature: 80°C
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
 
-    tester.widget<IconButton>(
-      find.byKey(const Key('personalization-settings')),
-    ).onPressed!();
+    tester
+        .widget<IconButton>(find.byKey(const Key('personalization-settings')))
+        .onPressed!();
     await tester.pumpAndSettle();
     expect(find.text('Personalization settings'), findsOneWidget);
     expect(find.text('Appearance'), findsOneWidget);
@@ -3248,9 +3273,9 @@ Bed Temperature: 80°C
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'scrolled header layout');
-    tester.widget<IconButton>(
-      find.byKey(const Key('personalization-settings')),
-    ).onPressed!();
+    tester
+        .widget<IconButton>(find.byKey(const Key('personalization-settings')))
+        .onPressed!();
     await tester.pumpAndSettle();
 
     expect(find.text('Personalization settings'), findsOneWidget);
@@ -4531,10 +4556,7 @@ Bed Temperature: 80°C
       const Offset(0, -40),
     );
     await tester.pump();
-    expect(
-      identical(tester.widget<InventoryCard>(firstCard), before),
-      isTrue,
-    );
+    expect(identical(tester.widget<InventoryCard>(firstCard), before), isTrue);
   });
 
   testWidgets('builds and machines with photos use photo cards', (
@@ -5484,7 +5506,6 @@ Bed Temperature: 80°C
       'open-scratch-pad',
       'open-scanner',
       'add-item',
-      'open-filament-colors',
       'open-inventory-json-import',
       'open-inventory-export',
     ];
@@ -5691,7 +5712,6 @@ Bed Temperature: 80°C
       'open-stockroom',
       'open-scanner',
       'add-item',
-      'open-filament-colors',
       'open-inventory-json-import',
       'open-inventory-export',
     ]) {
@@ -5702,7 +5722,7 @@ Bed Temperature: 80°C
     }
     expect(
       find.descendant(of: actions, matching: find.byType(OutlinedButton)),
-      findsNWidgets(8),
+      findsNWidgets(7),
     );
     final stockroomButton = find.byKey(const Key('open-stockroom'));
     final stockroomIcon = find.descendant(
@@ -5730,14 +5750,6 @@ Bed Temperature: 80°C
     expect(
       tester.getTopLeft(find.byKey(const Key('open-scanner'))).dx,
       lessThan(tester.getTopLeft(find.byKey(const Key('add-item'))).dx),
-    );
-    expect(
-      tester.getTopLeft(find.byKey(const Key('open-filament-colors'))).dx,
-      lessThan(
-        tester
-            .getTopLeft(find.byKey(const Key('open-inventory-json-import')))
-            .dx,
-      ),
     );
     expect(
       tester.getTopLeft(find.byKey(const Key('moisture-alerts'))).dx,
@@ -5777,10 +5789,7 @@ Bed Temperature: 80°C
       tester.getRect(find.byKey(const Key('open-inventory-export'))).right,
       closeTo(surfaceRect.right - 14, 1.1),
     );
-    for (final key in const [
-      'open-filament-colors',
-      'open-inventory-json-import',
-    ]) {
+    for (final key in const ['open-inventory-json-import']) {
       final actionRect = tester.getRect(find.byKey(Key(key)));
       expect(actionRect.width, greaterThan(48));
       expect(actionRect.width, lessThan(88));
@@ -5834,7 +5843,7 @@ Bed Temperature: 80°C
       expect(find.byKey(const Key('workspace-role-bubble')), findsNothing);
       expect(
         find.byTooltip('Your role (Builder) cannot add inventory items.'),
-        findsNWidgets(6),
+        findsNWidgets(5),
       );
       await tester.tap(find.byKey(const Key('cloud-sync')));
       await tester.pumpAndSettle();
@@ -5845,7 +5854,6 @@ Bed Temperature: 80°C
         'open-stockroom',
         'open-scanner',
         'add-item',
-        'open-filament-colors',
         'open-inventory-json-import',
       ]) {
         final button = tester.widget<OutlinedButton>(find.byKey(Key(key)));
@@ -6386,7 +6394,9 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump();
-    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
+    await tester.ensureVisible(
+      find.byKey(const Key('inventory-card-INV-NOZ-0001')),
+    );
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
 
@@ -6455,7 +6465,9 @@ Bed Temperature: 80°C
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
+    await tester.ensureVisible(
+      find.byKey(const Key('inventory-card-INV-NOZ-0001')),
+    );
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('bulk-archive')));
@@ -6475,7 +6487,9 @@ Bed Temperature: 80°C
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const Key('inventory-card-INV-FIL-0001')));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-    await tester.ensureVisible(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
+    await tester.ensureVisible(
+      find.byKey(const Key('inventory-card-INV-NOZ-0001')),
+    );
     await tester.tap(find.byKey(const Key('inventory-card-INV-NOZ-0001')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('bulk-delete')));
@@ -6706,7 +6720,9 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(bulkImport);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('context-action-inventory-rapidizer')));
+    await tester.tap(
+      find.byKey(const Key('context-action-inventory-rapidizer')),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('rapidizer-input')), findsOneWidget);
@@ -6978,6 +6994,72 @@ Bed Temperature: 80°C
       isTrue,
     );
     await toggleSection(const Key('catalog-materials-section'));
+  });
+
+  testWidgets('catalog base-type grips reorder types', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.tap(find.byKey(const Key('open-catalog')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('catalog-item-types-section')));
+    await tester.pumpAndSettle();
+
+    final kitsRow = find.byKey(const Key('built-in-type-row-catalog:kits'));
+    final buildsRow = find.byKey(const Key('built-in-type-row-catalog:builds'));
+    final kitsGrip = find.byKey(const Key('drag-built-in-type-catalog:kits'));
+    await tester.ensureVisible(kitsGrip);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(kitsRow).dy,
+      lessThan(tester.getTopLeft(buildsRow).dy),
+    );
+
+    final gesture = await tester.startGesture(tester.getCenter(kitsGrip));
+    await tester.pump(const Duration(milliseconds: 80));
+    await gesture.moveBy(const Offset(0, 132));
+    await tester.pump(const Duration(milliseconds: 180));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(kitsRow).dy,
+      greaterThan(tester.getTopLeft(buildsRow).dy),
+    );
+  });
+
+  testWidgets('catalog section grips reorder the top-level list', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.tap(find.byKey(const Key('open-catalog')));
+    await tester.pumpAndSettle();
+
+    final typesSection = find.byKey(const Key('catalog-reorder-section-types'));
+    final materialsSection = find.byKey(
+      const Key('catalog-reorder-section-materials'),
+    );
+    final typesGrip = find.byKey(const Key('drag-catalog-section-types'));
+    expect(
+      tester.getTopLeft(typesSection).dy,
+      lessThan(tester.getTopLeft(materialsSection).dy),
+    );
+
+    final gesture = await tester.startGesture(tester.getCenter(typesGrip));
+    await tester.pump(const Duration(milliseconds: 80));
+    await gesture.moveBy(const Offset(0, 132));
+    await tester.pump(const Duration(milliseconds: 180));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(typesSection).dy,
+      greaterThan(tester.getTopLeft(materialsSection).dy),
+    );
   });
 
   testWidgets('catalog adds a custom spool size', (tester) async {
@@ -7558,7 +7640,10 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('delete-kit')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('You have 1 build in progress.'), findsOneWidget);
+    expect(
+      find.textContaining('You have 1 build in progress.'),
+      findsOneWidget,
+    );
     expect(find.text('Delete Kit (permanent)'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
@@ -7980,7 +8065,10 @@ Bed Temperature: 80°C
       ),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('inventory-card-timer-INV-FIL-0001')), findsOneWidget);
+    expect(
+      find.byKey(const Key('inventory-card-timer-INV-FIL-0001')),
+      findsOneWidget,
+    );
     expect(find.text('82m'), findsOneWidget);
   });
   testWidgets('status ring does not replay when remounted by scrolling', (
@@ -8045,9 +8133,7 @@ Bed Temperature: 80°C
     );
   });
 
-  testWidgets('the countdown ring arc follows drying progress', (
-    tester,
-  ) async {
+  testWidgets('the countdown ring arc follows drying progress', (tester) async {
     final started = DateTime(2026, 8, 25, 12);
     addTearDown(() => countdownClock.debugNow = null);
     final item = sampleInventory.first.copyWith(
@@ -8094,7 +8180,9 @@ Bed Temperature: 80°C
       final y = (center.dy + radius).round();
       final offset = (y * bytes.$2 + x) * 4;
       final rgb = [for (var i = 0; i < 3; i++) bytes.$1.getUint8(offset + i)];
-      return (rgb[0] - 0xff).abs() + (rgb[1] - 0xa5).abs() + (rgb[2] - 0x52).abs();
+      return (rgb[0] - 0xff).abs() +
+          (rgb[1] - 0xa5).abs() +
+          (rgb[2] - 0x52).abs();
     }
 
     final early = await halfwayDistance(const Duration(minutes: 30));
@@ -8370,7 +8458,9 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('split-one-item')));
     await tester.pumpAndSettle();
 
-    final split = tester.widget<ItemDetailsPanel>(find.byType(ItemDetailsPanel)).item;
+    final split = tester
+        .widget<ItemDetailsPanel>(find.byType(ItemDetailsPanel))
+        .item;
     expect(split.added.isBefore(splitStarted), isFalse);
     expect(split.added.isAfter(DateTime.now()), isFalse);
     expect(split.id, isNot(stack.id));
@@ -8392,7 +8482,10 @@ Bed Temperature: 80°C
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(find.text('Ten spool stack'), findsNWidgets(2));
-    final original = tester.widgetList<InventoryCard>(find.byType(InventoryCard)).map((card) => card.item).singleWhere((item) => item.id == stack.id);
+    final original = tester
+        .widgetList<InventoryCard>(find.byType(InventoryCard))
+        .map((card) => card.item)
+        .singleWhere((item) => item.id == stack.id);
     expect(original.added, stack.added);
     expect(find.text('×9'), findsOneWidget);
     expect(find.text('×1'), findsOneWidget);
@@ -9829,7 +9922,11 @@ Bed Temperature: 80°C
       ),
     );
 
-    await tester.ensureVisible(find.byKey(const Key('open-filament-colors')));
+    await tester.ensureVisible(find.byKey(const Key('add-item')));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.byKey(const Key('add-item'))));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('open-filament-colors')));
     await tester.pumpAndSettle();
     expect(
@@ -9864,6 +9961,47 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('save-item')));
     await tester.pumpAndSettle();
     expect(find.text('Polymaker PolyLite PLA Galaxy Black'), findsOneWidget);
+  });
+
+  testWidgets('Add Item remains clickable while its hover flyout is open', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const InventorinatorApp());
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(find.byKey(const Key('add-item'))));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('open-filament-colors')), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Image &&
+            widget.image is AssetImage &&
+            (widget.image as AssetImage).assetName ==
+                'assets/images/filamentcolors-logo.png',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('open-filament-colors'))),
+      const Size(280, 52),
+    );
+    expect(
+      tester.getSize(
+        find.ancestor(
+          of: find.byKey(const Key('open-filament-colors')),
+          matching: find.byType(Material),
+        ),
+      ),
+      const Size(280, 68),
+    );
+
+    await tester.tap(find.byKey(const Key('add-item')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('search-product-web')), findsOneWidget);
   });
 
   testWidgets('catalog custom types become inventory filters', (tester) async {

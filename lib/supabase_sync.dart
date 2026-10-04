@@ -148,6 +148,17 @@ class SupabaseConfig {
 
   bool get hasSession => userId != null && refreshToken != null;
 
+  /// Drops a shared-workspace identity after its downloaded data is purged,
+  /// while retaining the public server details for a later, deliberate setup.
+  /// The resulting configuration is an ordinary local inventory, never a
+  /// half-connected workspace that can block local use.
+  SupabaseConfig asLocalInventory() => SupabaseConfig(
+    url: url,
+    publishableKey: publishableKey,
+    syncMode: 'local',
+    autoSyncEnabled: false,
+  );
+
   SupabaseSession? get cachedSession {
     final access = accessToken;
     final refresh = refreshToken;

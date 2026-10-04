@@ -92,7 +92,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   String get roleLabel {
     if (isWorkspaceOwner) return 'Owner';
     final role = normalizeWorkspaceRole(config.workspaceRole) ?? '';
-    if (config.workspaceRole?.startsWith('custom:') == true) return WorkspaceRole.fromServer(config.workspaceRole).name;
+    if (config.workspaceRole?.startsWith('custom:') == true) {
+      return WorkspaceRole.fromServer(config.workspaceRole).name;
+    }
     if (role.isEmpty) return 'Unknown';
     return '${role[0].toUpperCase()}${role.substring(1)}';
   }
@@ -283,23 +285,20 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       await widget.database.deleteAndRecreate();
     }
     // Remove the revoked session from known-workspace shortcuts. Keep only
-    // non-secret connection metadata so the user can pair this device again.
+    // public connection metadata so the user can choose a new connection later.
     _clearKnownWorkspace(previous);
-    _save(
-      SupabaseConfig(
-        url: previous.url,
-        publishableKey: previous.publishableKey,
-        syncMode: 'local',
-        workspaceId: previous.workspaceId,
-      ),
-    );
+    _save(previous.asLocalInventory());
     if (!mounted) return;
     setState(() {
-      joining = true;
+      joining = false;
       isWorkspaceOwner = false;
-      sessionNeedsReconnect = true;
-      message = 'This device no longer has access to that shared inventory.';
+      sessionNeedsReconnect = false;
+      message = 'Remote inventory was erased. This device is ready for local use or a new Remote connection.';
     });
+    // In the app this callback has already reset the inventory and shown the
+    // durable top-level notice. Close the stale remote-settings dialog so the
+    // user returns directly to their usable local inventory.
+    if (widget.onRemoteAccessRevoked != null) Navigator.of(context).pop();
   }
 
   Future<String> _saveManualDryingTimes(bool required) async {

@@ -18470,6 +18470,17 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _purgeLocalDataAfterRevocation(LocalDatabase database) async {
+    final connectionSource = database.loadSyncConfig();
+    SupabaseConfig? connection;
+    if (connectionSource != null) {
+      try {
+        connection = SupabaseConfig.fromJson(
+          jsonDecode(connectionSource) as Map<String, dynamic>,
+        );
+      } catch (_) {
+        // A malformed saved connection must never prevent recovery to local use.
+      }
+    }
     final deviceId = database.loadStringPreference('device_id', fallback: '');
     final deviceName = database.loadStringPreference(
       'device_name',
@@ -18484,6 +18495,14 @@ class _InventoryHomeState extends State<InventoryHome> {
       'local_purge_after_days',
       localPurgeAfterDays.toString(),
     );
+    if (connection != null) {
+      database.saveSyncConfig(
+        jsonEncode(connection.asLocalInventory().toJson()),
+      );
+    }
+    _syncDebounce?.cancel();
+    _syncPoll?.cancel();
+    _autoSyncPausedForAuthentication = false;
     if (!mounted) return;
     _clearInMemoryInventory();
     _persist();
@@ -18491,7 +18510,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       context,
       const SnackBar(
         content: Text(
-          'Remote access was revoked. This device’s local inventory was erased.',
+          'Remote inventory was erased. This device is ready for a new local inventory or a new Remote connection.',
         ),
       ),
     );
@@ -18517,17 +18536,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       'local_purge_after_days',
       localPurgeAfterDays.toString(),
     );
-    database.saveSyncConfig(
-      jsonEncode(
-        SupabaseConfig(
-          url: connection.url,
-          publishableKey: connection.publishableKey,
-          syncMode: 'supabase',
-          workspaceId: connection.workspaceId,
-          remotePurgeAfterDays: connection.remotePurgeAfterDays,
-        ).toJson(),
-      ),
-    );
+    // The shared download is gone. Do not retain a shell of the old workspace:
+    // that would leave this device in a reconnect-only state with no usable
+    // local inventory. Keep only public server details for a later choice.
+    database.saveSyncConfig(jsonEncode(connection.asLocalInventory().toJson()));
+    _syncDebounce?.cancel();
+    _syncPoll?.cancel();
+    _autoSyncPausedForAuthentication = false;
     if (!mounted) return;
     _clearInMemoryInventory();
     _persist();
@@ -18535,7 +18550,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       context,
       SnackBar(
         content: Text(
-          'This device was offline for $retentionDays days. Local inventory was erased; reconnect to download it again.',
+          'This device was offline for $retentionDays days, so its Remote inventory was erased. You can now use a new local inventory or connect Remote again.',
         ),
       ),
     );

@@ -109,6 +109,32 @@ void main() {
     expect(restored.syncIntervalSeconds, 300);
   });
 
+  test('purged remote inventory becomes a usable local configuration', () {
+    final remote = config.copyWith(
+      syncMode: 'supabase',
+      userId: 'user-id',
+      workspaceId: 'workspace-id',
+      workspaceRole: 'builder',
+      accessToken: 'access-token',
+      accessTokenExpiresAt: DateTime.now().toUtc().add(
+        const Duration(hours: 2),
+      ),
+      refreshToken: 'refresh-token',
+      lastSyncedAt: DateTime.now().toUtc(),
+      remotePurgeAfterDays: 3,
+    );
+
+    final local = remote.asLocalInventory();
+
+    expect(local.syncMode, 'local');
+    expect(local.hasSession, isFalse);
+    expect(local.workspaceId, isNull);
+    expect(local.workspaceRole, isNull);
+    expect(local.lastSyncedAt, isNull);
+    expect(local.isConfigured, isTrue);
+    expect(local.autoSyncEnabled, isFalse);
+  });
+
   test('device management hierarchy and session errors are role-aware', () {
     expect(canManageWorkspaceDevices('owner'), isTrue);
     expect(canManageWorkspaceDevices('admin'), isTrue);

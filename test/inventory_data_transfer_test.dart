@@ -277,6 +277,9 @@ void main() {
     await tester.tap(find.byKey(const Key('confirm-inventory-export')));
     await tester.pumpAndSettle();
     await done;
+    // Desktop confirmations are transient overlay alerts. Advance the fake
+    // clock so their dismissal timer cannot outlive this widget test.
+    await tester.pump(const Duration(seconds: 4));
 
     expect(savedName, endsWith('.csv'));
     final rows = decodeCsv(utf8.decode(savedBytes!));

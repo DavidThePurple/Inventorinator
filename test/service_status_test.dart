@@ -259,14 +259,20 @@ void main() {
       final title = tester.getRect(find.byKey(const Key('app-title-block')));
       // The logo and title stay centred on the page.
       expect(title.center.dx, moreOrLessEquals(width / 2, epsilon: 1));
-      // The light floats halfway between the title and the right limit,
-      // which stays clear of the default 16 px desktop scrollbar by 8 px.
-      expect(led.left, greaterThan(title.right));
-      expect(led.right, lessThanOrEqualTo(width - 24));
-      expect(
-        led.center.dx,
-        moreOrLessEquals((title.right + 8 + width - 24) / 2, epsilon: 1),
-      );
+      if (width < 600) {
+        // On phones the brand gets its own centred row; the status row below
+        // it still terminates at the right edge.
+        expect(led.right, moreOrLessEquals(width - 12, epsilon: 1));
+      } else {
+        // Desktop keeps the light midway between the title and the right
+        // limit, clear of the default scrollbar.
+        expect(led.left, greaterThan(title.right));
+        expect(led.right, lessThanOrEqualTo(width - 24));
+        expect(
+          led.center.dx,
+          moreOrLessEquals((title.right + 8 + width - 24) / 2, epsilon: 1),
+        );
+      }
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       db.close();

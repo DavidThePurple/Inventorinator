@@ -3111,6 +3111,7 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('debug-panel')));
     await tester.pumpAndSettle();
@@ -3250,6 +3251,7 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('personalization-settings')));
     await tester.pumpAndSettle();
     final widthSlider = find.byKey(const Key('main-scrollbar-width'));
+    await tester.ensureVisible(widthSlider);
     await tester.drag(widthSlider, const Offset(1000, 0));
     await tester.pumpAndSettle();
     expect(find.text('Main view scrollbar · 32 px'), findsOneWidget);
@@ -3465,7 +3467,9 @@ Bed Temperature: 80°C
       AppColorTheme.darkRed.name,
     );
 
-    await tester.tap(find.byKey(const Key('color-theme-custom')));
+    final customTheme = find.byKey(const Key('color-theme-custom'));
+    await tester.ensureVisible(customTheme);
+    await tester.tap(customTheme);
     await tester.pumpAndSettle();
     expect(find.text('Choose theme color'), findsOneWidget);
     expect(find.byKey(const Key('clear-item-color')), findsNothing);
@@ -6435,10 +6439,16 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
 
-    await tester.longPress(
-      find.byKey(const Key('inventory-card-INV-FIL-0001')),
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
     );
+    await tester.pumpAndSettle();
+    final firstCard = find.byKey(const Key('inventory-card-INV-FIL-0001'));
+    expect(firstCard, findsOneWidget);
+    await tester.longPress(firstCard);
     await tester.pump();
 
     expect(find.byKey(const Key('bulk-edit-toolbar')), findsOneWidget);
@@ -6746,6 +6756,8 @@ Bed Temperature: 80°C
     expect(bluePlaCard.item.quantity, 1);
     expect(bluePlaCard.item.materialName, 'PLA');
     expect(bluePlaCard.item.itemColorLabel, 'Blue');
+    // Rapidizer confirms completion with the desktop alert overlay.
+    await tester.pump(const Duration(seconds: 4));
   });
   testWidgets('catalog selection fills and creates an inventory item', (
     tester,
@@ -7207,8 +7219,6 @@ Bed Temperature: 80°C
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
     await tester.tap(find.byKey(const Key('open-catalog')));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView).last, const Offset(0, -1400));
-    await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('catalog-kits-section')));
     await tester.tap(find.byKey(const Key('catalog-kits-section')));
     await tester.pumpAndSettle();
@@ -7262,14 +7272,12 @@ Bed Temperature: 80°C
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
     await tester.tap(find.byKey(const Key('open-catalog')));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView).last, const Offset(0, -1400));
-    await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('catalog-kits-section')));
     await tester.tap(find.byKey(const Key('catalog-kits-section')));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView).last, const Offset(0, -700));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('add-kit-section')));
+    final addKitSection = find.byKey(const Key('add-kit-section'));
+    await tester.ensureVisible(addKitSection);
+    await tester.tap(addKitSection);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('kit-section-name')),
@@ -9458,7 +9466,14 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('context-action-sort-addedDate')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('catalog-record-KIT-MATCH-MISSING')));
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -260),
+    );
+    await tester.pumpAndSettle();
+    final kitCard = find.byKey(const Key('catalog-record-KIT-MATCH-MISSING'));
+    await tester.ensureVisible(kitCard);
+    await tester.tap(kitCard);
     await tester.pumpAndSettle();
     expect(find.textContaining('Missing 3'), findsOneWidget);
 

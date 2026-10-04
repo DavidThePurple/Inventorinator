@@ -19381,38 +19381,45 @@ class _InventoryHomeState extends State<InventoryHome> {
         final headerContent = narrow
             ? Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: _headerIdentity(compactLogo: false),
                   ),
                   const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: BuildCommitLabel(),
-                        ),
-                      ),
-                      if (indicators.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 12),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              for (final indicator in indicators)
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 2,
-                                  ),
-                                  child: indicator,
-                                ),
-                            ],
+                  SizedBox(
+                    width: math.max(
+                      0.0,
+                      constraints.maxWidth - 2 * horizontalPadding,
+                    ),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: BuildCommitLabel(),
                           ),
                         ),
-                    ],
+                        if (indicators.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 12),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                for (final indicator in indicators)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 2,
+                                    ),
+                                    child: indicator,
+                                  ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ],
               )
@@ -19473,7 +19480,13 @@ class _InventoryHomeState extends State<InventoryHome> {
             narrow ? 12 : 20,
             4,
           ),
-          child: headerContent,
+          // SliverToBoxAdapter gives its child a loose cross-axis constraint.
+          // Keep the stacked phone header full width so the status light can
+          // remain against the right edge rather than following the logo width.
+          child: SizedBox(
+            width: math.max(0.0, constraints.maxWidth - 2 * horizontalPadding),
+            child: headerContent,
+          ),
         );
       },
     ),
@@ -19588,6 +19601,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 720;
       if (compact) {
+        final veryNarrow = constraints.maxWidth < 480;
         return SizedBox(
           height: 48,
           child: Row(
@@ -19628,10 +19642,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                   hintText: 'Search…',
                 ),
               ),
-              const SizedBox(width: 8),
-              _jumpToTopButton(),
-              const SizedBox(width: 8),
-              _databaseHeaderActions().single,
+              if (!veryNarrow) ...[
+                const SizedBox(width: 8),
+                _jumpToTopButton(),
+                const SizedBox(width: 8),
+                _databaseHeaderActions().single,
+              ],
             ],
           ),
         );
@@ -34735,12 +34751,24 @@ class _AddItemDialogState extends State<AddItemDialog>
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
     final viewport = MediaQuery.sizeOf(context);
+    final dialogMaxWidth = math.max(
+      0.0,
+      viewport.width - (compact ? 16.0 : 40.0),
+    );
+    final dialogMaxHeight = math.max(
+      0.0,
+      viewport.height - (compact ? 16.0 : 40.0),
+    );
     final dialogWidth = fullscreen
         ? viewport.width
-        : _dialogSize.width.clamp(400.0, viewport.width - 40).toDouble();
+        : _dialogSize.width
+              .clamp(math.min(400.0, dialogMaxWidth), dialogMaxWidth)
+              .toDouble();
     final dialogHeight = fullscreen
         ? viewport.height
-        : _dialogSize.height.clamp(460.0, viewport.height - 40).toDouble();
+        : _dialogSize.height
+              .clamp(math.min(460.0, dialogMaxHeight), dialogMaxHeight)
+              .toDouble();
     final selectedItemColor = _itemColorSwatch(itemColorController.text);
     final headerActionStyle = OutlinedButton.styleFrom(
       minimumSize: const Size(48, 48),

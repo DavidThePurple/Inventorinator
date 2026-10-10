@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="app_canvas">#120D1C</color>
-    <color name="launcher_background">#171B26</color>
+    <!-- The adaptive-icon foreground is already the complete raygun cutout.
+         Leave its backing transparent so launchers show just the gun. -->
+    <color name="launcher_background">#00000000</color>
 </resources>

@@ -7871,6 +7871,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   late bool photoCardsEnabled;
   late CustomIconAnimationMode customIconAnimationMode;
   late double mainScrollbarWidth;
+  late double inventoryDragGripSize;
+  bool _debugShowInventoryDragGripArea = false;
   late final Set<String> _moistureAlertChimedCycles;
   final Map<String, DateTime> _lastMoistureAlertChimeAt = {};
   late final Set<String> _readInventoryAlertKeys;
@@ -7918,6 +7920,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _maximumMainScrollbarWidth = 32.0;
   static const _defaultDesktopScrollbarWidth = 16.0;
   static const _defaultMobileScrollbarWidth = 8.0;
+  static const _defaultInventoryDragGripSize = 56.0;
+  static const _minimumInventoryDragGripSize = 24.0;
+  static const _maximumInventoryDragGripSize = 120.0;
   static const _inventoryActionBarFadeOutDuration = Duration(milliseconds: 120);
   static const _inventoryActionBarFadeInDuration = Duration(milliseconds: 360);
   static const _inventoryActionBarRestoreDelay = Duration(milliseconds: 650);
@@ -8304,6 +8309,17 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ) ??
                 defaultScrollbarWidth)
             .clamp(_minimumMainScrollbarWidth, _maximumMainScrollbarWidth)
+            .toDouble();
+    inventoryDragGripSize =
+        (double.tryParse(
+                  widget.database?.loadStringPreference(
+                        'inventory_drag_grip_size',
+                        fallback: _defaultInventoryDragGripSize.toString(),
+                      ) ??
+                      _defaultInventoryDragGripSize.toString(),
+                ) ??
+                _defaultInventoryDragGripSize)
+            .clamp(_minimumInventoryDragGripSize, _maximumInventoryDragGripSize)
             .toDouble();
     if (kProfileMode && _profileScrollProbe) {
       pageSizeIndex = _pageSizes.length - 1;
@@ -10503,8 +10519,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                             controller: inventoryScrollController,
                             thickness: mainScrollbarWidth,
                             radius: Radius.circular(mainScrollbarWidth / 2),
-                            thumbVisibility: true,
-                            trackVisibility: true,
+                            // Keep the normal clean, transient scrollbar
+                            // treatment. The side rails are inset below, so a
+                            // revealed thumb remains draggable without a
+                            // permanent track changing the page visuals.
                             interactive: true,
                             child: MediaQuery(
                               data: MediaQuery.of(context).copyWith(
@@ -10840,17 +10858,70 @@ class _InventoryHomeState extends State<InventoryHome> {
             trigger: _newItemGlowVersion,
             child: card,
           );
+    // Keep the card body free for normal taps and finger scrolling. Dragging
+    // inventory is deliberately initiated from the small grip at its top.
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        glowingCard,
+        Positioned.fill(child: Center(child: _inventoryDragGrip(record))),
+      ],
+    );
+  }
+
+  Widget _inventoryDragGrip(InventoryItem item) {
+    final grip = MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      child: Tooltip(
+        message: 'Drag ${item.name}',
+        child: Semantics(
+          label: 'Drag ${item.name}',
+          button: true,
+          child: SizedBox.square(
+            key: Key('inventory-drag-grip-${item.id}'),
+            dimension: inventoryDragGripSize,
+            child: _debugShowInventoryDragGripArea
+                ? DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context).colorScheme.primary
+                              .withValues(alpha: .72),
+                          blurRadius: 18,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                  )
+                : null,
+          ),
+        ),
+      ),
+    );
+    void dragStarted() => _draggedInventoryItem.value = item;
+    void dragEnded(DraggableDetails _) {
+      if (mounted) _draggedInventoryItem.value = null;
+    }
+
+    // The grip itself is the deliberate drag affordance, so it should respond
+    // directly on touch as well as desktop. The rest of the card remains free
+    // for ordinary scrolling and taps.
     return Draggable<InventoryItem>(
-      data: record,
-      onDragStarted: () => _draggedInventoryItem.value = record,
-      onDragEnd: (_) {
-        if (mounted) _draggedInventoryItem.value = null;
-      },
+      data: item,
+      onDragStarted: dragStarted,
+      onDragEnd: dragEnded,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedbackOffset: const Offset(12, 12),
-      feedback: _inventoryDragPreview(record),
-      childWhenDragging: Opacity(opacity: .35, child: glowingCard),
-      child: glowingCard,
+      feedback: _inventoryDragPreview(item),
+      childWhenDragging: Opacity(opacity: .35, child: grip),
+      child: grip,
     );
   }
 
@@ -16202,7 +16273,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openDebugPanel() async {
     final result = await showDialog<({String itemId, DebugCardEffect effect})>(
       context: context,
-      builder: (_) => DebugPanelDialog(items: visibleItems),
+      builder: (_) => DebugPanelDialog(
+        items: visibleItems,
+        highlightDragGripArea: _debugShowInventoryDragGripArea,
+        onHighlightDragGripAreaChanged: (value) =>
+            setState(() => _debugShowInventoryDragGripArea = value),
+      ),
     );
     if (result == null || !mounted) return;
     setState(() {
@@ -16229,6 +16305,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       animationRecurrenceSeconds: animationRecurrenceSeconds,
       photoCardsEnabled: photoCardsEnabled,
       mainScrollbarWidth: mainScrollbarWidth,
+      inventoryDragGripSize: inventoryDragGripSize,
       customIconAnimationMode: customIconAnimationMode,
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
@@ -16360,6 +16437,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         setState(() => mainScrollbarWidth = value);
         widget.database?.saveStringPreference(
           'main_scrollbar_width',
+          value.toStringAsFixed(1),
+        );
+      },
+      onInventoryDragGripSizeChanged: (value) {
+        setState(() => inventoryDragGripSize = value);
+        widget.database?.saveStringPreference(
+          'inventory_drag_grip_size',
           value.toStringAsFixed(1),
         );
       },
@@ -31629,6 +31713,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.animationRecurrenceSeconds,
     required this.photoCardsEnabled,
     required this.mainScrollbarWidth,
+    required this.inventoryDragGripSize,
     required this.customIconAnimationMode,
     required this.colorTheme,
     required this.brightnessMode,
@@ -31674,12 +31759,14 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onMachineTypeTimerDisplayChanged,
     required this.onPhotoCardsChanged,
     required this.onMainScrollbarWidthChanged,
+    required this.onInventoryDragGripSizeChanged,
     required this.onCustomIconAnimationModeChanged,
   });
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final bool photoCardsEnabled;
   final double mainScrollbarWidth;
+  final double inventoryDragGripSize;
   final CustomIconAnimationMode customIconAnimationMode;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
@@ -31726,6 +31813,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<MachineTypeRecord> onMachineTypeTimerDisplayChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
   final ValueChanged<double> onMainScrollbarWidthChanged;
+  final ValueChanged<double> onInventoryDragGripSizeChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
   final LocalDatabase? database;
@@ -31740,6 +31828,7 @@ class _PersonalizationSettingsDialogState
   late int recurrenceSeconds = widget.animationRecurrenceSeconds;
   late bool photoCardsEnabled = widget.photoCardsEnabled;
   late double mainScrollbarWidth = widget.mainScrollbarWidth;
+  late double inventoryDragGripSize = widget.inventoryDragGripSize;
   late CustomIconAnimationMode customIconAnimationMode =
       widget.customIconAnimationMode;
   late AppColorTheme colorTheme = widget.colorTheme;
@@ -32107,6 +32196,27 @@ class _PersonalizationSettingsDialogState
               onChanged: (value) {
                 setState(() => mainScrollbarWidth = value);
                 widget.onMainScrollbarWidthChanged(value);
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Item drag area · ${inventoryDragGripSize.round()} px',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const Text(
+              'Centered on each item card; quantity controls stay outside it.',
+              style: TextStyle(color: Color(0xff929aac)),
+            ),
+            Slider(
+              key: const Key('inventory-drag-grip-size'),
+              value: inventoryDragGripSize,
+              min: 24,
+              max: 120,
+              divisions: 12,
+              label: '${inventoryDragGripSize.round()} px',
+              onChanged: (value) {
+                setState(() => inventoryDragGripSize = value);
+                widget.onInventoryDragGripSizeChanged(value);
               },
             ),
             const Divider(height: 28),
@@ -32492,8 +32602,15 @@ class _PersonalizationSettingsDialogState
 }
 
 class DebugPanelDialog extends StatefulWidget {
-  const DebugPanelDialog({super.key, required this.items});
+  const DebugPanelDialog({
+    super.key,
+    required this.items,
+    required this.highlightDragGripArea,
+    required this.onHighlightDragGripAreaChanged,
+  });
   final List<InventoryItem> items;
+  final bool highlightDragGripArea;
+  final ValueChanged<bool> onHighlightDragGripAreaChanged;
 
   @override
   State<DebugPanelDialog> createState() => _DebugPanelDialogState();
@@ -32501,6 +32618,7 @@ class DebugPanelDialog extends StatefulWidget {
 
 class _DebugPanelDialogState extends State<DebugPanelDialog> {
   String? selectedItemId;
+  late bool highlightDragGripArea = widget.highlightDragGripArea;
 
   @override
   void initState() {
@@ -32528,6 +32646,20 @@ class _DebugPanelDialogState extends State<DebugPanelDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                SwitchListTile(
+                  key: const Key('debug-highlight-drag-grip'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Highlight item drag areas'),
+                  subtitle: const Text(
+                    'Show the centered grip zone while tuning its size.',
+                  ),
+                  value: highlightDragGripArea,
+                  onChanged: (value) {
+                    setState(() => highlightDragGripArea = value);
+                    widget.onHighlightDragGripAreaChanged(value);
+                  },
+                ),
+                const Divider(height: 24),
                 DropdownButtonFormField<String>(
                   key: const Key('debug-item'),
                   initialValue: selectedItemId,

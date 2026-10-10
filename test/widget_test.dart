@@ -170,7 +170,7 @@ void main() {
       publishableKey: 'publishable-key',
       userId: '20000000-0000-0000-0000-000000000001',
       workspaceId: workspaceId,
-      workspaceRole: 'owner',
+      workspaceRole: 'admin',
       refreshToken: 'refresh-token',
     );
     database.saveSyncConfig(jsonEncode(active.toJson()));
@@ -251,6 +251,100 @@ void main() {
     expect(find.byKey(const Key('new-role-template')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
+    database.close();
+    directory.deleteSync(recursive: true);
+  });
+
+  testWidgets('roles and devices opens without re-registering the device', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync(
+      'inventorinator-manage-devices-',
+    );
+    final database = (await tester.runAsync(
+      () => LocalDatabase.open(
+        overridePath: '${directory.path}/inventory.sqlite3',
+      ),
+    ))!;
+    final config = SupabaseConfig(
+      syncMode: 'supabase',
+      url: 'https://inventory.example',
+      publishableKey: 'publishable-key',
+      userId: '20000000-0000-0000-0000-000000000001',
+      workspaceId: '10000000-0000-0000-0000-000000000001',
+      workspaceRole: 'admin',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      accessTokenExpiresAt: DateTime.now().add(const Duration(hours: 1)),
+    );
+    database.saveSyncConfig(jsonEncode(config.toJson()));
+    final requestedPaths = <String>[];
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      requestedPaths.add(path);
+      if (path.endsWith('inventorinator_schema')) {
+        return http.Response('[{"version":35}]', 200);
+      }
+      if (path.endsWith('get_inventorinator_role')) {
+        return http.Response('"admin"', 200);
+      }
+      if (path.endsWith('get_inventorinator_remote_purge_days')) {
+        return http.Response('3', 200);
+      }
+      if (path.endsWith('get_inventorinator_manual_drying') ||
+          path.endsWith('get_inventorinator_checkout_sync')) {
+        return http.Response('false', 200);
+      }
+      if (path.endsWith('list_inventorinator_role_templates')) {
+        return http.Response('[]', 200);
+      }
+      if (path.endsWith('list_inventorinator_devices')) {
+        return http.Response(
+          '[{"user_id":"20000000-0000-0000-0000-000000000001",'
+          '"device_name":"Admin device","role":"admin",'
+          '"joined_at":"2026-10-10T00:00:00Z",'
+          '"last_seen_at":"2026-10-10T00:00:00Z"}]',
+          200,
+        );
+      }
+      throw StateError('Unexpected request: $path');
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CloudSyncDialog(
+          database: database,
+          httpClient: client,
+          localStateJson: '{}',
+          onCloudState: (_) {},
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 1)),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('manage-devices')));
+    await tester.pumpAndSettle();
+    final manageDevices = tester.widget<OutlinedButton>(
+      find.byKey(const Key('manage-devices')),
+    );
+    expect(manageDevices.onPressed, isNotNull);
+    manageDevices.onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNWidgets(2));
+    expect(
+      requestedPaths.any((path) => path.endsWith('register_inventorinator_device')),
+      isFalse,
+    );
+    expect(
+      find.text('Roles & device access', skipOffstage: false),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    client.close();
     database.close();
     directory.deleteSync(recursive: true);
   });
@@ -3204,6 +3298,8 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('hide-zero-personalization')), findsOneWidget);
     expect(find.byKey(const Key('main-scrollbar-width')), findsOneWidget);
     expect(find.text('Main view scrollbar · 16 px'), findsOneWidget);
+    expect(find.byKey(const Key('inventory-drag-grip-size')), findsOneWidget);
+    expect(find.text('Item drag area · 56 px'), findsOneWidget);
     expect(find.byKey(const Key('sync-chime-personalization')), findsOneWidget);
     expect(
       find.byKey(const Key('drying-chime-personalization')),
@@ -3249,8 +3345,8 @@ Bed Temperature: 80°C
     final scrollbar = find.byKey(const Key('main-inventory-scrollbar'));
     final initialScrollbar = tester.widget<Scrollbar>(scrollbar);
     expect(initialScrollbar.thickness, 16);
-    expect(initialScrollbar.thumbVisibility, isTrue);
-    expect(initialScrollbar.trackVisibility, isTrue);
+    expect(initialScrollbar.thumbVisibility, isNull);
+    expect(initialScrollbar.trackVisibility, isNull);
     expect(initialScrollbar.interactive, isTrue);
     expect(
       tester

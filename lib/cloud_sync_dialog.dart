@@ -923,11 +923,6 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
 
   Future<void> _manageDevices() async {
     final (service, session) = await _session();
-    await service.registerDevice(
-      session,
-      _deviceName,
-      deviceId: _stableDeviceId,
-    );
     final callerRole = await service.currentRole(session);
     if (!canManageWorkspaceDevices(callerRole)) {
       throw const SupabaseSyncException('Your role cannot manage devices.');

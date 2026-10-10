@@ -3247,7 +3247,28 @@ Bed Temperature: 80°C
     await tester.pumpWidget(const InventorinatorApp());
 
     final scrollbar = find.byKey(const Key('main-inventory-scrollbar'));
-    expect(tester.widget<Scrollbar>(scrollbar).thickness, 16);
+    final initialScrollbar = tester.widget<Scrollbar>(scrollbar);
+    expect(initialScrollbar.thickness, 16);
+    expect(initialScrollbar.thumbVisibility, isTrue);
+    expect(initialScrollbar.trackVisibility, isTrue);
+    expect(initialScrollbar.interactive, isTrue);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('inventory-search')))
+          .focusNode!
+          .skipTraversal,
+      isTrue,
+      reason: 'D-pad navigation must not focus search and summon the OSK.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('inventory-search')))
+          .focusNode!
+          .hasFocus,
+      isFalse,
+      reason: 'D-pad navigation must leave the Android on-screen keyboard off.',
+    );
     await tester.tap(find.byKey(const Key('personalization-settings')));
     await tester.pumpAndSettle();
     final widthSlider = find.byKey(const Key('main-scrollbar-width'));

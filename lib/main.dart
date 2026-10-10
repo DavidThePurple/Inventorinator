@@ -7892,12 +7892,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       TextEditingController();
   final FocusNode inventorySearchFocusNode = FocusNode(
     debugLabel: 'Inventory search',
+    skipTraversal: true,
   );
   final FocusNode floatingSearchFocusNode = FocusNode(
     debugLabel: 'Floating inventory search',
+    skipTraversal: true,
   );
   final FocusNode bottomSearchFocusNode = FocusNode(
     debugLabel: 'Bottom inventory search',
+    skipTraversal: true,
   );
   final Set<String> selectedInventoryIds = {};
   final Set<String> selectedBuildIds = {};
@@ -8890,18 +8893,77 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   bool _handleInventoryShortcut(KeyEvent event) {
     if (event is! KeyDownEvent ||
-        event.logicalKey != LogicalKeyboardKey.keyF ||
-        !HardwareKeyboard.instance.isControlPressed ||
         !(ModalRoute.of(context)?.isCurrent ?? false) ||
         AppLockScope.maybeOf(context, listen: false)?.locked == true) {
       return false;
     }
-    inventorySearchFocusNode.requestFocus();
-    inventorySearchController.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: inventorySearchController.text.length,
+    if (event.logicalKey == LogicalKeyboardKey.keyF &&
+        HardwareKeyboard.instance.isControlPressed) {
+      inventorySearchFocusNode.requestFocus();
+      inventorySearchController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: inventorySearchController.text.length,
+      );
+      return true;
+    }
+    if (inventorySearchFocusNode.hasFocus ||
+        floatingSearchFocusNode.hasFocus ||
+        bottomSearchFocusNode.hasFocus) {
+      return false;
+    }
+    final key = event.logicalKey;
+    final direction = switch (key) {
+      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
+      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
+      LogicalKeyboardKey.arrowLeft => TraversalDirection.left,
+      LogicalKeyboardKey.arrowRight => TraversalDirection.right,
+      _ => null,
+    };
+    if (direction != null) {
+      // Android controllers expose their D-pad as arrows. Search fields are
+      // deliberately skipped by traversal, so navigation cannot summon the
+      // on-screen keyboard while browsing cards and actions.
+      FocusScope.of(context).focusInDirection(direction);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonA ||
+        key == LogicalKeyboardKey.gameButton1 ||
+        key == LogicalKeyboardKey.gameButtonSelect) {
+      Actions.maybeInvoke(context, const ActivateIntent());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonB ||
+        key == LogicalKeyboardKey.gameButton2) {
+      Navigator.of(context).maybePop();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonLeft1 ||
+        key == LogicalKeyboardKey.gameButtonLeft2) {
+      _scrollInventoryBy(-MediaQuery.sizeOf(context).height * .8);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonRight1 ||
+        key == LogicalKeyboardKey.gameButtonRight2) {
+      _scrollInventoryBy(MediaQuery.sizeOf(context).height * .8);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonStart) {
+      FocusScope.of(context).focusInDirection(TraversalDirection.down);
+      return true;
+    }
+    return false;
+  }
+
+  void _scrollInventoryBy(double delta) {
+    if (!inventoryScrollController.hasClients) return;
+    final position = inventoryScrollController.position;
+    inventoryScrollController.animateTo(
+      (position.pixels + delta)
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble(),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
     );
-    return true;
   }
 
   bool _initializeDryingTimers() {
@@ -10441,6 +10503,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                             controller: inventoryScrollController,
                             thickness: mainScrollbarWidth,
                             radius: Radius.circular(mainScrollbarWidth / 2),
+                            thumbVisibility: true,
+                            trackVisibility: true,
+                            interactive: true,
                             child: MediaQuery(
                               data: MediaQuery.of(context).copyWith(
                                 // Desktop mouse drags should start as soon as
@@ -13907,12 +13972,18 @@ class _InventoryHomeState extends State<InventoryHome> {
         : pinnedKits.toList();
     return Align(
       alignment: machinesSide ? Alignment.centerRight : Alignment.centerLeft,
-      child: MouseRegion(
-        onEnter: (_) =>
-            _setPinnedSidebarHover(machinesSide: machinesSide, hover: true),
-        onExit: (_) =>
-            _setPinnedSidebarHover(machinesSide: machinesSide, hover: false),
-        child: AnimatedContainer(
+      child: Padding(
+        // This overlay is above the Scrollbar in the page stack. Leave a
+        // permanent lane for the thumb so the reveal can never eat its drag.
+        padding: EdgeInsets.only(
+          right: machinesSide ? mainScrollbarWidth + 8 : 0,
+        ),
+        child: MouseRegion(
+          onEnter: (_) =>
+              _setPinnedSidebarHover(machinesSide: machinesSide, hover: true),
+          onExit: (_) =>
+              _setPinnedSidebarHover(machinesSide: machinesSide, hover: false),
+          child: AnimatedContainer(
           duration: Duration(milliseconds: open ? 180 : (hovered ? 620 : 180)),
           curve: open
               ? Curves.easeOutCubic
@@ -14042,6 +14113,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 )
               : const SizedBox.shrink(),
+          ),
         ),
       ),
     );
@@ -14270,10 +14342,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     return Align(
       key: const Key('machine-drag-rail'),
       alignment: Alignment.centerRight,
-      child: SizedBox(
-        width: 136,
-        height: double.infinity,
-        child: TweenAnimationBuilder<double>(
+      child: Padding(
+        padding: EdgeInsets.only(right: mainScrollbarWidth + 8),
+        child: SizedBox(
+          width: 136,
+          height: double.infinity,
+          child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
@@ -14323,6 +14397,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
               ),
             ),
+          ),
           ),
         ),
       ),

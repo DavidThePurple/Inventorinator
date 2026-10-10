@@ -8527,10 +8527,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     final database = widget.database;
     final source = database?.loadSyncConfig();
     if (database == null || source == null) return;
+    SupabaseConfig? savedConfig;
     try {
       final config = SupabaseConfig.fromJson(
         jsonDecode(source) as Map<String, dynamic>,
       );
+      savedConfig = config;
       final hasOwnerRecovery =
           config.workspaceId != null &&
           database.loadWorkspaceRecoveryKey(config.workspaceId!) != null;
@@ -8592,6 +8594,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       });
     } catch (error) {
       if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+        if (savedConfig != null &&
+            _shouldPreserveLocalOwnerInventory(database, savedConfig)) {
+          debugPrint(
+            'Owner Remote access could not be confirmed at startup; keeping local inventory and recovery data.',
+          );
+          return;
+        }
         await _purgeLocalDataAfterRevocation(database);
         return;
       }
@@ -8620,6 +8629,19 @@ class _InventoryHomeState extends State<InventoryHome> {
       }
       debugPrint('Could not refresh workspace role at startup: $error');
     }
+  }
+
+  bool _shouldPreserveLocalOwnerInventory(
+    LocalDatabase database,
+    SupabaseConfig config,
+  ) {
+    final hasOwnerRecovery =
+        config.workspaceId != null &&
+        database.loadWorkspaceRecoveryKey(config.workspaceId!) != null;
+    return shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+      config,
+      hasOwnerRecovery: hasOwnerRecovery,
+    );
   }
 
   Future<void> _checkOfflinePurgePolicy() async {
@@ -18166,6 +18188,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
       } catch (error) {
         if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
+          if (_shouldPreserveLocalOwnerInventory(database, config)) {
+            debugPrint(
+              'Owner Remote access could not be confirmed during sync; keeping local inventory and recovery data.',
+            );
+            return;
+          }
           await _purgeLocalDataAfterRevocation(database);
           return;
         }

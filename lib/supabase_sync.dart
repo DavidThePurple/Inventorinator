@@ -40,6 +40,16 @@ String visibleSyncErrorForRole(Object error, String? role) {
   return error.toString();
 }
 
+/// A server-side access check is not proof that an Owner's local cache is
+/// disposable. Owners recover access with a separate recovery key, so retain
+/// their inventory and that key until they explicitly disconnect or recover.
+bool shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+  SupabaseConfig config, {
+  required bool hasOwnerRecovery,
+}) =>
+    normalizeWorkspaceRole(config.workspaceRole) == 'owner' ||
+    hasOwnerRecovery;
+
 class WorkspaceRole {
   const WorkspaceRole._(this.name, [this.permissions]);
   static const admin = WorkspaceRole._('admin');

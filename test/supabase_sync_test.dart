@@ -135,6 +135,39 @@ void main() {
     expect(local.autoSyncEnabled, isFalse);
   });
 
+  test('owner access failures preserve local recovery material', () {
+    final owner = config.copyWith(
+      syncMode: 'supabase',
+      workspaceRole: 'owner',
+    );
+    final member = config.copyWith(
+      syncMode: 'supabase',
+      workspaceRole: 'builder',
+    );
+
+    expect(
+      shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+        owner,
+        hasOwnerRecovery: false,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+        member,
+        hasOwnerRecovery: true,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+        member,
+        hasOwnerRecovery: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('device management hierarchy and session errors are role-aware', () {
     expect(canManageWorkspaceDevices('owner'), isTrue);
     expect(canManageWorkspaceDevices('admin'), isTrue);

@@ -89,6 +89,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         'owner' || 'admin' => true,
         _ => false,
       };
+  bool get _hasOwnerRecovery =>
+      config.workspaceId != null &&
+      widget.database.loadWorkspaceRecoveryKey(config.workspaceId!) != null;
+  bool get _mustPreserveLocalOwnerInventory =>
+      shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
+        config,
+        hasOwnerRecovery: _hasOwnerRecovery,
+      );
   String get roleLabel {
     if (isWorkspaceOwner) return 'Owner';
     final role = normalizeWorkspaceRole(config.workspaceRole) ?? '';
@@ -266,10 +274,15 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           message = _visibleSyncError(error);
           if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
             sessionNeedsReconnect = true;
+            if (_mustPreserveLocalOwnerInventory) {
+              message = 'Remote access could not be confirmed. Your local Owner inventory and recovery data were kept.';
+            }
           }
         });
         if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
-          unawaited(_markWorkspaceAccessRevoked());
+          if (!_mustPreserveLocalOwnerInventory) {
+            unawaited(_markWorkspaceAccessRevoked());
+          }
         }
       }
     } finally {
@@ -828,9 +841,16 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
             sessionNeedsReconnect = true;
           }
           message = _visibleSyncError(error);
+          if (error is SupabaseSyncException &&
+              error.isWorkspaceAccessDenied &&
+              _mustPreserveLocalOwnerInventory) {
+            message = 'Remote access could not be confirmed. Your local Owner inventory and recovery data were kept.';
+          }
         });
         if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
-          unawaited(_markWorkspaceAccessRevoked());
+          if (!_mustPreserveLocalOwnerInventory) {
+            unawaited(_markWorkspaceAccessRevoked());
+          }
         }
       }
     }

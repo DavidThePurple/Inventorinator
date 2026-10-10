@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 34;
+const latestInventorinatorSchemaVersion = 35;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -770,10 +770,15 @@ class SupabaseSyncService {
     return result as String;
   }
 
-  Future<void> registerDevice(SupabaseSession session, String name) async {
+  Future<void> registerDevice(
+    SupabaseSession session,
+    String name, {
+    String? deviceId,
+  }) async {
     await _rpc(session, 'register_inventorinator_device', {
       'target_workspace': config.workspaceId,
       'target_name': name,
+      'device_identifier': deviceId,
     });
   }
 

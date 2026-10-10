@@ -66,6 +66,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/device_scratchpad_notes.sql
       - name: Verify owner recovery
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_recovery.sql
+      - name: Verify owner recovery resilience
+        run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/owner_resilience.sql
       - name: Verify incremental record sync
         run: psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f supabase/tests/incremental_entity_sync.sql
       - name: Verify modified-time sync ordering

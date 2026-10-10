@@ -18204,7 +18204,15 @@ class _InventoryHomeState extends State<InventoryHome> {
       // an older server is missing the device-roles RPC or PostgREST has a
       // temporarily stale schema cache.
       try {
-        await service.registerDevice(session, deviceName);
+        final stableDeviceId = database.loadStringPreference(
+          'device_id',
+          fallback: '',
+        );
+        await service.registerDevice(
+          session,
+          deviceName,
+          deviceId: stableDeviceId.isEmpty ? null : stableDeviceId,
+        );
       } catch (error) {
         debugPrint('Device registration failed; continuing sync: $error');
       }

@@ -5,18 +5,19 @@ insert into auth.users(id) values
   ('00000000-0000-0000-0000-000000000042'),
   ('00000000-0000-0000-0000-000000000043'),
   ('00000000-0000-0000-0000-000000000044'),
-  ('00000000-0000-0000-0000-000000000045');
+  ('00000000-0000-0000-0000-000000000045'),
+  ('00000000-0000-0000-0000-000000000046');
 
 insert into public.inventorinator_workspaces(id, created_by) values (
   '30000000-0000-0000-0000-000000000021',
   '00000000-0000-0000-0000-000000000041'
 );
 insert into public.inventorinator_workspace_members(
-  workspace_id, user_id, role, device_name
+  workspace_id, user_id, role, device_name, device_id
 ) values
-  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000041', 'owner', 'Stolen owner phone'),
-  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000043', 'manager', 'Workshop manager'),
-  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000045', 'editor', 'Audit actor');
+  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000041', 'owner', 'Stolen owner phone', 'stolen-owner-phone'),
+  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000043', 'manager', 'Workshop manager', null),
+  ('30000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000045', 'editor', 'Audit actor', null);
 insert into public.inventorinator_workspace_recovery(workspace_id, recovery_hash)
 values (
   '30000000-0000-0000-0000-000000000021',
@@ -68,7 +69,7 @@ $$;
 -- Recover from a stolen but still-valid owner identity.
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000042', false);
 do $$
-declare replacement jsonb; next_key text;
+declare replacement jsonb; next_key text; replacement_pairing_code text;
 begin
   replacement := public.recover_inventorinator_workspace(
     '30000000-0000-0000-0000-000000000021',
@@ -89,6 +90,12 @@ begin
     where workspace_id = '30000000-0000-0000-0000-000000000021'
       and user_id = '00000000-0000-0000-0000-000000000041'
   ) then raise exception 'stolen owner was not blocked'; end if;
+  if not exists (
+    select 1 from public.inventorinator_device_history
+    where workspace_id = '30000000-0000-0000-0000-000000000021'
+      and device_id = 'stolen-owner-phone'
+      and last_role = 'owner' and blocked
+  ) then raise exception 'stolen owner device identity was not blocked'; end if;
   if exists (
     select 1 from public.inventorinator_pairing_codes
     where workspace_id = '30000000-0000-0000-0000-000000000021'
@@ -105,6 +112,23 @@ begin
       and state_json->'inventory'->0->>'id' = 'INV-PRESERVED'
       and state_json->'builds'->0->>'id' = 'BUILD-PRESERVED'
   ) then raise exception 'recovery changed inventory or builds'; end if;
+
+  -- A wiped stolen Owner device gets a new anonymous auth ID. It must still
+  -- be denied if it presents its prior stable device identity and obtains a
+  -- later pairing code.
+  replacement_pairing_code := public.create_inventorinator_pairing_code(
+    '30000000-0000-0000-0000-000000000021'
+  );
+  perform set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000046', false);
+  begin
+    perform public.redeem_inventorinator_pairing_code(
+      replacement_pairing_code, 'stolen-owner-phone'
+    );
+    raise exception 'wiped stolen owner device rejoined';
+  exception when others then
+    if sqlerrm = 'wiped stolen owner device rejoined' then raise; end if;
+  end;
+  perform set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000042', false);
 
   -- A rotated key is single-use. The previous key cannot take ownership back.
   begin

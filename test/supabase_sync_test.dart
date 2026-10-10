@@ -638,6 +638,13 @@ void main() {
       config.copyWith(workspaceId: 'workspace-id'),
       client: MockClient((request) async {
         expect(request.headers['authorization'], 'Bearer access');
+        if (request.url.path.endsWith('/register_inventorinator_device')) {
+          expect(jsonDecode(request.body), {
+            'target_workspace': 'workspace-id',
+            'target_name': 'Linux desktop',
+            'device_identifier': 'stable-linux-device',
+          });
+        }
         if (request.url.path.endsWith('/get_inventorinator_role')) {
           return http.Response(jsonEncode('owner'), 200);
         }
@@ -670,7 +677,11 @@ void main() {
       refreshToken: 'refresh',
       userId: 'owner-id',
     );
-    await service.registerDevice(session, 'Linux desktop');
+    await service.registerDevice(
+      session,
+      'Linux desktop',
+      deviceId: 'stable-linux-device',
+    );
     expect(await service.currentRole(session), 'owner');
     final devices = await service.listDevices(session);
     expect(devices.single.name, 'Workshop tablet');

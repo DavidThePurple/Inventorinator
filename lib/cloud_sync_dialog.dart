@@ -268,10 +268,13 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     } catch (error) {
       if (mounted) {
         setState(() {
+          message = _visibleSyncError(error);
           if (error is SupabaseSyncException && error.isInvalidRefreshToken) {
             sessionNeedsReconnect = true;
+            if (_mustPreserveLocalOwnerInventory) {
+              message = 'Your Owner session expired. Local inventory and recovery data were kept. Use Recover ownership with your recovery package to reconnect.';
+            }
           }
-          message = _visibleSyncError(error);
           if (error is SupabaseSyncException && error.isWorkspaceAccessDenied) {
             sessionNeedsReconnect = true;
             if (_mustPreserveLocalOwnerInventory) {
@@ -385,7 +388,8 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         refreshToken: session.refreshToken,
       ),
     );
-    await SupabaseSyncService(config).registerDevice(session, registrationName);
+    await SupabaseSyncService(config)
+        .registerDevice(session, registrationName, deviceId: _stableDeviceId);
     if (widget.onCloudChanges != null) {
       widget.database.queueAllEntitiesForSync();
     }
@@ -439,6 +443,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     keyController.text = package['key'] as String? ?? keyController.text;
     final workspaceId = package['workspace_id'] as String? ?? '';
     final recoveryKey = package['recovery_key'] as String? ?? '';
+    if (workspaceId.isEmpty || recoveryKey.isEmpty) {
+      throw const SupabaseSyncException('That recovery package is invalid.');
+    }
+    if (!await _confirmOwnershipRecovery()) return '';
     final next = _formConfig();
     _requireServer(next);
     final service = SupabaseSyncService(next);
@@ -466,6 +474,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     );
     _save(recovered);
     final recoveredService = SupabaseSyncService(recovered);
+    await recoveredService.registerDevice(
+      session,
+      registrationName,
+      deviceId: _stableDeviceId,
+    );
     if (widget.onCloudChanges != null) {
       await _syncEntities(recoveredService, session);
     } else {
@@ -488,7 +501,33 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       });
       await _showRecoveryKey(replacement);
     }
-    return 'Ownership recovered. Previous owner devices were locked out.';
+    return 'Ownership recovered. The previous Owner session and device were locked out.';
+  }
+
+  Future<bool> _confirmOwnershipRecovery() async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Transfer ownership?'),
+            content: const Text(
+              'This makes this device the Owner. It rotates the recovery key, '
+              'invalidates unused pairing codes, and locks the previous Owner '
+              'session and device out. Shared inventory data is kept.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Transfer ownership'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _replaceRecoveryKey() async {
@@ -559,7 +598,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     );
     _save(joined);
     final joinedService = SupabaseSyncService(joined);
-    await joinedService.registerDevice(session, registrationName);
+    await joinedService.registerDevice(
+      session,
+      registrationName,
+      deviceId: _stableDeviceId,
+    );
     final purgeDays = await joinedService.remotePurgeAfterDays(session);
     joined = joined.copyWith(
       remotePurgeAfterDays: purgeDays,
@@ -655,7 +698,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
             'Connect this device before syncing.',
           );
         }
-        final (refreshed, session) = await _refreshOrRecoverOwner(next);
+        final (refreshed, session) = await _refreshSession(next);
         if (identical(refreshed, next)) {
           config = refreshed;
         } else {
@@ -707,7 +750,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     }
   }
 
-  Future<(SupabaseConfig, SupabaseSession)> _refreshOrRecoverOwner(
+  Future<(SupabaseConfig, SupabaseSession)> _refreshSession(
     SupabaseConfig source,
   ) async {
     final cached = source.cachedSession;
@@ -726,47 +769,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         ),
         session,
       );
-    } on SupabaseSyncException catch (error) {
-      final workspaceId = source.workspaceId;
-      final recoveryKey = workspaceId == null
-          ? null
-          : widget.database.loadWorkspaceRecoveryKey(workspaceId);
-      if (!error.isInvalidRefreshToken ||
-          workspaceId == null ||
-          recoveryKey == null) {
-        rethrow;
-      }
-      final service = SupabaseSyncService(source);
-      final replacementSession = await service.signInAnonymously();
-      await service.requireInventorySchema(replacementSession);
-      final replacement = await service.recoverWorkspace(
-        replacementSession,
-        workspaceId: workspaceId,
-        recoveryKey: recoveryKey,
-        deviceName: _deviceName,
-      );
-      widget.database.saveWorkspaceRecoveryKey(
-        replacement.workspaceId,
-        replacement.key,
-      );
-      if (mounted) {
-        setState(() {
-          isWorkspaceOwner = true;
-          sessionNeedsReconnect = false;
-        });
-      }
-      return (
-        source.copyWith(
-          syncMode: 'supabase',
-          userId: replacementSession.userId,
-          workspaceId: replacement.workspaceId,
-          workspaceRole: 'owner',
-          accessToken: replacementSession.accessToken,
-          accessTokenExpiresAt: replacementSession.expiresAt,
-          refreshToken: replacementSession.refreshToken,
-        ),
-        replacementSession,
-      );
+    } on SupabaseSyncException {
+      // Recovery transfers ownership and changes credentials for every device.
+      // An expired refresh token must lead to an explicit, confirmed recovery,
+      // never a hidden recovery during a normal sync or reconnect.
+      rethrow;
     }
   }
 
@@ -774,6 +781,13 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     'device_name',
     fallback: 'Unnamed device',
   );
+
+  String? get _stableDeviceId {
+    final value =
+        widget.deviceId ??
+        widget.database.loadStringPreference('device_id', fallback: '');
+    return value.trim().isEmpty ? null : value;
+  }
 
   bool get _deviceNameConfirmed => widget.database.loadBoolPreference(
     'device_name_confirmed',
@@ -807,7 +821,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     if (chosen == null) return '';
     if (connected) {
       final (service, session) = await _session();
-      await service.registerDevice(session, chosen);
+      await service.registerDevice(session, chosen, deviceId: _stableDeviceId);
     }
     return 'Device renamed to $chosen.';
   }
@@ -837,10 +851,13 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     } catch (error) {
       if (mounted) {
         setState(() {
+          message = _visibleSyncError(error);
           if (error is SupabaseSyncException && error.isInvalidRefreshToken) {
             sessionNeedsReconnect = true;
+            if (_mustPreserveLocalOwnerInventory) {
+              message = 'Your Owner session expired. Local inventory and recovery data were kept. Use Recover ownership with your recovery package to reconnect.';
+            }
           }
-          message = _visibleSyncError(error);
           if (error is SupabaseSyncException &&
               error.isWorkspaceAccessDenied &&
               _mustPreserveLocalOwnerInventory) {
@@ -906,7 +923,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
 
   Future<void> _manageDevices() async {
     final (service, session) = await _session();
-    await service.registerDevice(session, _deviceName);
+    await service.registerDevice(
+      session,
+      _deviceName,
+      deviceId: _stableDeviceId,
+    );
     final callerRole = await service.currentRole(session);
     if (!canManageWorkspaceDevices(callerRole)) {
       throw const SupabaseSyncException('Your role cannot manage devices.');
@@ -1393,7 +1414,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
 
   Future<String> _reconnectWorkspace(SupabaseConfig remembered) async {
     final (initial, session) = await widget.database.withSyncSessionLock(
-      () => _refreshOrRecoverOwner(remembered),
+      () => _refreshSession(remembered),
     );
     var restored = initial.copyWith(syncMode: 'supabase');
     // Refresh tokens rotate. Preserve the replacement before any later request
@@ -1415,7 +1436,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     );
     remotePurgeAfterDays = purgeDays;
     service = SupabaseSyncService(restored);
-    await service.registerDevice(session, _deviceName);
+    await service.registerDevice(
+      session,
+      _deviceName,
+      deviceId: _stableDeviceId,
+    );
     CloudWorkshopState? cloud;
     if (widget.onCloudChanges != null) {
       _save(restored);

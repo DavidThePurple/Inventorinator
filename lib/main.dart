@@ -11033,6 +11033,20 @@ class _InventoryHomeState extends State<InventoryHome> {
       if (mounted) _draggedInventoryItem.value = null;
     }
 
+    final interactiveGrip = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // The middle zone is deliberately where a drag begins, but a stationary
+      // click still needs to behave exactly like clicking the card itself.
+      onTap: () => _handleInventoryTap(item),
+      onLongPress: () {
+        final touchPlatform =
+            defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS;
+        if (touchPlatform) _selectInventoryItem(item);
+      },
+      child: grip,
+    );
+
     // The grip itself is the deliberate drag affordance, so it should respond
     // directly on touch as well as desktop. The rest of the card remains free
     // for ordinary scrolling and taps.
@@ -11043,8 +11057,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedbackOffset: const Offset(12, 12),
       feedback: _inventoryDragPreview(item),
-      childWhenDragging: Opacity(opacity: .35, child: grip),
-      child: grip,
+      childWhenDragging: Opacity(opacity: .35, child: interactiveGrip),
+      child: interactiveGrip,
     );
   }
 

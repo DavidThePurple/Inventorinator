@@ -20,10 +20,7 @@ begin
 
   updated := replace(
     definition,
-    $needle$if jsonb_typeof(change->'baseFields') = 'object' then
-$needle$ || repeat(' ', 6) || $needle$
-if exists(select 1 from jsonb_each(change->'baseFields') base where base.key <> '(deleted)' and change_fields ? base.key and coalesce(previous_payload->base.key,'null'::jsonb) is distinct from base.value and coalesce(previous_payload->base.key,'null'::jsonb) is distinct from change_fields->base.key) then raise exception 'Sync conflict: remote field changed'; end if;
-    end if;$needle$,
+    $needle$    if jsonb_typeof(change->'baseFields') = 'object' then$needle$,
     $replacement$-- Import undo has its own reference-aware protection. Every ordinary
     -- inventory delete must originate in the explicit UI delete flow and still
     -- match the Remote payload it was based on.  Keep this outside the
@@ -38,9 +35,7 @@ if exists(select 1 from jsonb_each(change->'baseFields') base where base.key <> 
         raise exception 'Sync conflict: remote record changed before delete';
       end if;
     end if;
-    if jsonb_typeof(change->'baseFields') = 'object' then
-      if exists(select 1 from jsonb_each(change->'baseFields') base where base.key <> '(deleted)' and change_fields ? base.key and coalesce(previous_payload->base.key,'null'::jsonb) is distinct from base.value and coalesce(previous_payload->base.key,'null'::jsonb) is distinct from change_fields->base.key) then raise exception 'Sync conflict: remote field changed'; end if;
-    end if;$replacement$
+    if jsonb_typeof(change->'baseFields') = 'object' then$replacement$
   );
   if updated = definition then
     raise exception 'Could not install stale-delete protection';

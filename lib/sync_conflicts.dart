@@ -43,27 +43,9 @@ class SyncConflictStore {
     int serverSchema = 30,
   }) {
     final rows = load();
-    // v29 gives queued tombstones precedence. Clear any legacy false conflict
-    // row so a delete that was previously stranded can leave the outbox.
-    final deletedKeys = pending
-        .where(
-          (entry) =>
-              entry.change.deleted &&
-              entry.change.baseFields?['(importUndo)'] != true,
-        )
-        .map(
-          (entry) => '${entry.change.entityType}\u0000${entry.change.entityId}',
-        )
-        .toSet();
-    if (deletedKeys.isNotEmpty) {
-      final count = rows.length;
-      rows.removeWhere(
-        (row) => deletedKeys.contains(
-          '${row['entityType']}\u0000${row['entityId']}',
-        ),
-      );
-      if (rows.length != count) save(rows);
-    }
+    // Tombstones are held when the server reports that their remote baseline
+    // changed. This prevents a stale device from repeatedly retrying a delete
+    // over newer shared data.
     final blocked = rows
         .map((r) => '${r['entityType']}\u0000${r['entityId']}')
         .toSet();

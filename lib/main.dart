@@ -8014,6 +8014,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Map<String, (InventoryItem, String)> _inventorySearchTextCache = {};
   final Map<String, ValueNotifier<InventoryItem>> _inventoryItemNotifiers = {};
   final Map<String, Map<String, Object>> _persistedEntityReferences = {};
+  final Set<String> _confirmedInventoryDeletes = {};
   Map<String, dynamic> _persistedMetadata = const {};
   bool _incrementalPersistenceReady = false;
   final Map<Object, String> _catalogSearchTextCache = Map.identity();
@@ -9844,6 +9845,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           entityId: id,
           fields: const {},
           deleted: true,
+          baseFields: _confirmedInventoryDeletes.contains(id)
+              ? const {'(confirmedDelete)': true}
+              : null,
         ),
       );
     }
@@ -9866,6 +9870,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       }
     }
     if (changes.isNotEmpty) database.applyAndQueueWorkshopChanges(changes);
+    _confirmedInventoryDeletes.removeAll(disk.removed);
     disk.pending.clear();
     disk.removed.clear();
     return changes.isNotEmpty;
@@ -11091,6 +11096,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _removeInventoryItem(String itemId) {
+    _confirmedInventoryDeletes.add(itemId);
     inventory.removeWhere((item) => item.id == itemId);
     _inventoryItemNotifiers.remove(itemId)?.dispose();
   }
@@ -17761,9 +17767,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         entityType: local.entityType,
         entityId: local.entityId,
       );
-      if (local.deleted &&
-          local.baseFields?['(importUndo)'] == true &&
-          remote?.deleted != true) {
+      if (local.deleted && remote?.deleted != true) {
         conflicts.add(
           WorkshopFieldConflict(
             entityType: local.entityType,
@@ -17773,11 +17777,6 @@ class _InventoryHomeState extends State<InventoryHome> {
             remoteValue: remote?.fields ?? local.baseFields?['(deleted)'],
           ),
         );
-        continue;
-      }
-      if (local.deleted) {
-        // Deletes intentionally apply after the remote record.  They replace
-        // any queued local edit and never need manual conflict resolution.
         continue;
       }
       if (remote?.deleted == true) {

@@ -1225,9 +1225,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           );
         } on SupabaseSyncException catch (error) {
           if (!error.toString().contains('Sync conflict')) rethrow;
-          final guarded = batch.where(
-            (entry) => entry.change.baseFields?['(importUndo)'] == true,
-          );
+          final guarded = batch.where((entry) => entry.change.deleted);
           var held = false;
           for (final entry in guarded) {
             final remote = await service.loadEntity(

@@ -1241,6 +1241,10 @@ class LocalDatabase {
         : Map<String, dynamic>.from(
             jsonDecode(rows.first['base_json'] as String) as Map,
           );
+    for (final entry
+        in change.baseFields?.entries ?? const <MapEntry<String, dynamic>>[]) {
+      if (entry.key.startsWith('(')) base[entry.key] = entry.value;
+    }
     if (!change.deleted && base['(importUndo)'] == true) base.clear();
     final previous =
         readEntityPayload(change.entityType, change.entityId) ?? {};

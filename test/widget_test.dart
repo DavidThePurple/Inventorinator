@@ -8196,6 +8196,28 @@ Bed Temperature: 80°C
     );
     expect(find.text('82m'), findsOneWidget);
   });
+  testWidgets('card status widget opens its status picker', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+
+    final status = find.byKey(
+      const Key('inventory-card-timer-INV-FIL-0001'),
+    );
+    await tester.ensureVisible(status);
+    final statusButton = find.byKey(
+      const Key('inventory-card-status-target-INV-FIL-0001'),
+    );
+    await tester.tap(statusButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set status · Galaxy Black PETG'), findsOneWidget);
+    expect(find.byKey(const Key('card-status-ready')), findsOneWidget);
+    expect(find.byKey(const Key('card-status-deployed')), findsOneWidget);
+    expect(find.byKey(const Key('card-status-drying')), findsOneWidget);
+    expect(find.byKey(const Key('card-status-queuedForDrying')), findsOneWidget);
+  });
   testWidgets('status ring does not replay when remounted by scrolling', (
     tester,
   ) async {

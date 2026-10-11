@@ -7922,7 +7922,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _defaultMobileScrollbarWidth = 8.0;
   static const _defaultInventoryDragGripSize = 56.0;
   static const _minimumInventoryDragGripSize = 24.0;
-  static const _maximumInventoryDragGripSize = 120.0;
+  // 420 px covers the largest supported grid card (274 px at 150%). Smaller
+  // cards naturally cap the grip at their own bounds.
+  static const _maximumInventoryDragGripSize = 420.0;
   static const _inventoryActionBarFadeOutDuration = Duration(milliseconds: 120);
   static const _inventoryActionBarFadeInDuration = Duration(milliseconds: 360);
   static const _inventoryActionBarRestoreDelay = Duration(milliseconds: 650);
@@ -10820,6 +10822,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+        onStatusPressed: _itemShowsStatus(record) && currentRole.canEditInventory
+            ? () => _chooseCardStatus(record)
+            : null,
       );
     } else {
       card = InventoryCard(
@@ -10849,6 +10854,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+        onStatusPressed: _itemShowsStatus(record) && currentRole.canEditInventory
+            ? () => _chooseCardStatus(record)
+            : null,
       );
     }
     final glowingCard = !newItemGlowEnabled || _newItemGlowItemId != record.id
@@ -10858,52 +10866,166 @@ class _InventoryHomeState extends State<InventoryHome> {
             trigger: _newItemGlowVersion,
             child: card,
           );
-    // Keep the card body free for normal taps and finger scrolling. Dragging
-    // inventory is deliberately initiated from the small grip at its top.
+    // Keep card controls free for normal taps and finger scrolling. Dragging
+    // inventory is deliberately initiated from its configurable center area.
     return Stack(
       clipBehavior: Clip.none,
       children: [
         glowingCard,
-        Positioned.fill(child: Center(child: _inventoryDragGrip(record))),
+        Positioned.fill(child: _inventoryDragGrip(record, list: list)),
+        // This sits above the drag affordance as a separate, direct action.
+        // The status indicator must never be treated as a decorative part of
+        // the card or as a drag handle.
+        if (!list &&
+            common.showStatus &&
+            !record.archived &&
+            record.quantity > 0)
+          Positioned(
+            top: 12,
+            right: 12,
+            child: _CardStatusButton(
+              item: record,
+              onPressed: currentRole.canEditInventory
+                  ? () => _chooseCardStatus(record)
+                  : null,
+              child: CountdownRing(
+                key: Key('inventory-card-timer-${record.id}'),
+                item: record,
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _inventoryDragGrip(InventoryItem item) {
+  Widget _inventoryDragGrip(InventoryItem item, {required bool list}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final gripWidth = math.min(
+            inventoryDragGripSize,
+            constraints.maxWidth,
+          );
+          final gripHeight = math.min(
+            inventoryDragGripSize,
+            constraints.maxHeight,
+          );
+          final gripRect = Rect.fromLTWH(
+            (constraints.maxWidth - gripWidth) / 2,
+            (constraints.maxHeight - gripHeight) / 2,
+            gripWidth,
+            gripHeight,
+          );
+          final quantityControls = list
+              ? constraints.maxWidth < 600
+                    ? Rect.fromLTWH(
+                        0,
+                        math.max(0, constraints.maxHeight - 76),
+                        math.min(180, constraints.maxWidth),
+                        math.min(76, constraints.maxHeight),
+                      )
+                    : Rect.fromLTWH(
+                        math.max(0, constraints.maxWidth - 190),
+                        0,
+                        math.min(190, constraints.maxWidth),
+                        constraints.maxHeight,
+                      )
+              : Rect.fromLTWH(
+                  0,
+                  0,
+                  math.min(176, constraints.maxWidth),
+                  math.min(80, constraints.maxHeight),
+                );
+          final statusControl = list
+              ? constraints.maxWidth < 600
+                    ? Rect.fromLTWH(
+                        math.max(0, constraints.maxWidth - 86),
+                        math.max(0, constraints.maxHeight - 76),
+                        math.min(86, constraints.maxWidth),
+                        math.min(76, constraints.maxHeight),
+                      )
+                    : Rect.fromLTWH(
+                        math.max(0, constraints.maxWidth - 94),
+                        0,
+                        math.min(94, constraints.maxWidth),
+                        constraints.maxHeight,
+                      )
+              : Rect.fromLTWH(
+                  math.max(0, constraints.maxWidth - 94),
+                  0,
+                  math.min(94, constraints.maxWidth),
+                  math.min(80, constraints.maxHeight),
+                );
+          var regions = [gripRect];
+          for (final control in [quantityControls, statusControl]) {
+            regions = [
+              for (final region in regions)
+                ..._subtractGripExclusion(region, region.intersect(control)),
+            ];
+          }
+          // A Tooltip around the whole layout stack is itself hit-testable,
+          // even in the intentionally empty control zones. Put it on each
+          // actual drag rectangle instead so the card controls receive taps.
+          return Stack(
+            children: [
+              for (var index = 0; index < regions.length; index++)
+                Positioned.fromRect(
+                  rect: regions[index],
+                  child: Tooltip(
+                    message: 'Drag ${item.name}',
+                    child: Semantics(
+                      key: index == 0
+                          ? Key('inventory-drag-grip-${item.id}')
+                          : null,
+                      label: 'Drag ${item.name}',
+                      child: _inventoryDragGripTarget(item),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      );
+
+  List<Rect> _subtractGripExclusion(Rect grip, Rect exclusion) {
+    if (exclusion.isEmpty) return [grip];
+    return [
+    if (exclusion.top > grip.top)
+      Rect.fromLTRB(grip.left, grip.top, grip.right, exclusion.top),
+    if (exclusion.bottom < grip.bottom)
+      Rect.fromLTRB(grip.left, exclusion.bottom, grip.right, grip.bottom),
+    if (exclusion.left > grip.left)
+      Rect.fromLTRB(grip.left, exclusion.top, exclusion.left, exclusion.bottom),
+    if (exclusion.right < grip.right)
+      Rect.fromLTRB(exclusion.right, exclusion.top, grip.right, exclusion.bottom),
+    ].where((region) => region.width > 0 && region.height > 0).toList();
+  }
+
+  Widget _inventoryDragGripTarget(InventoryItem item) {
     final grip = MouseRegion(
       cursor: SystemMouseCursors.grab,
-      child: Tooltip(
-        message: 'Drag ${item.name}',
-        child: Semantics(
-          label: 'Drag ${item.name}',
-          button: true,
-          child: SizedBox.square(
-            key: Key('inventory-drag-grip-${item.id}'),
-            dimension: inventoryDragGripSize,
-            child: _debugShowInventoryDragGripArea
-                ? DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 2,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Theme.of(context).colorScheme.primary
-                              .withValues(alpha: .72),
-                          blurRadius: 18,
-                          spreadRadius: 2,
-                        ),
-                      ],
+      child: _debugShowInventoryDragGripArea
+          ? DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withValues(
+                  alpha: .12,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).colorScheme.primary.withValues(
+                      alpha: .72,
                     ),
-                  )
-                : null,
-          ),
-        ),
-      ),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+            )
+          : const SizedBox.expand(),
     );
     void dragStarted() => _draggedInventoryItem.value = item;
     void dragEnded(DraggableDetails _) {
@@ -11630,6 +11752,96 @@ class _InventoryHomeState extends State<InventoryHome> {
       selectedInventoryIds.clear();
     });
     _persist();
+  }
+
+  Future<void> _chooseCardStatus(InventoryItem item) async {
+    if (!currentRole.canEditInventory || item.archived) return;
+    if (item.type != InventoryType.filament) {
+      final deployed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text('Set status · ${item.name}'),
+          children: [
+            SimpleDialogOption(
+              key: const Key('card-status-ready'),
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const ListTile(
+                leading: Icon(Icons.check_rounded),
+                title: Text('Ready'),
+              ),
+            ),
+            SimpleDialogOption(
+              key: const Key('card-status-deployed'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const ListTile(
+                leading: Icon(Icons.lock_outline_rounded),
+                title: Text('Deployed'),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (deployed == null || !mounted || deployed == item.deployed) return;
+      _replaceItem(item, item.copyWith(deployed: deployed));
+      _recordAudit('change status', 'inventory', item.id, {
+        'status': deployed ? 'deployed' : 'ready',
+      });
+      return;
+    }
+
+    final choice = await showDialog<FilamentStatus>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text('Set status · ${item.name}'),
+        children: [
+          for (final status in FilamentStatus.values)
+            SimpleDialogOption(
+              key: Key('card-status-${status.name}'),
+              onPressed: () => Navigator.pop(dialogContext, status),
+              child: ListTile(
+                leading: Icon(_filamentStatusIcon(status)),
+                title: Text(_filamentStatusLabel(status)),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted || choice == item.filamentStatus) return;
+    final duration = filamentDryingDuration(
+      item,
+      requireManual: manualDryingTimesRequired(widget.database),
+    );
+    if (choice == FilamentStatus.drying && duration == null) {
+      showInventorinatorAlert(
+        context,
+        const SnackBar(
+          content: Text(
+            'The workspace Owner requires a manual drying time. Set it in Edit.',
+          ),
+        ),
+      );
+      return;
+    }
+    final now = DateTime.now();
+    _replaceItem(
+      item,
+      item.copyWith(
+        filamentStatus: choice,
+        deployed: choice == FilamentStatus.deployed,
+        dryingRemaining: choice == FilamentStatus.drying ? duration : 0,
+        dryingStartedAt: choice == FilamentStatus.drying
+            ? now
+            : item.dryingStartedAt,
+        lastDriedAt:
+            choice == FilamentStatus.ready &&
+                item.filamentStatus == FilamentStatus.drying
+            ? now
+            : item.lastDriedAt,
+      ),
+    );
+    _recordAudit('change status', 'inventory', item.id, {
+      'status': choice.name,
+    });
   }
 
   Future<void> _bulkChangeStatus() async {
@@ -14339,15 +14551,25 @@ class _InventoryHomeState extends State<InventoryHome> {
         height: double.infinity,
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
-          duration: const Duration(milliseconds: 180),
+          // A touch drag has already travelled before its targets are shown.
+          // Give the rail a readable entrance rather than a one-frame flash,
+          // while keeping the effect to composited opacity/transform work.
+          duration: const Duration(milliseconds: 380),
           curve: Curves.easeOutCubic,
-          builder: (context, value, child) => Opacity(
-            opacity: value,
-            child: Transform.translate(
-              offset: Offset(-18 * (1 - value), 0),
-              child: child,
-            ),
-          ),
+          builder: (context, value, child) {
+            final opacity = Curves.easeOut.transform(value);
+            return Opacity(
+              opacity: opacity,
+              child: Transform.translate(
+                offset: Offset(-34 * (1 - value), 0),
+                child: Transform.scale(
+                  alignment: Alignment.centerLeft,
+                  scale: .94 + (.06 * value),
+                  child: child,
+                ),
+              ),
+            );
+          },
           child: ClipRRect(
             borderRadius: const BorderRadius.only(
               topRight: Radius.circular(22),
@@ -14420,15 +14642,22 @@ class _InventoryHomeState extends State<InventoryHome> {
           height: double.infinity,
           child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
-          duration: const Duration(milliseconds: 180),
+          duration: const Duration(milliseconds: 380),
           curve: Curves.easeOutCubic,
-          builder: (context, value, child) => Opacity(
-            opacity: value,
-            child: Transform.translate(
-              offset: Offset(18 * (1 - value), 0),
-              child: child,
-            ),
-          ),
+          builder: (context, value, child) {
+            final opacity = Curves.easeOut.transform(value);
+            return Opacity(
+              opacity: opacity,
+              child: Transform.translate(
+                offset: Offset(34 * (1 - value), 0),
+                child: Transform.scale(
+                  alignment: Alignment.centerRight,
+                  scale: .94 + (.06 * value),
+                  child: child,
+                ),
+              ),
+            );
+          },
           child: ClipRRect(
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(22),
@@ -32204,15 +32433,15 @@ class _PersonalizationSettingsDialogState
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             const Text(
-              'Centered on each item card; quantity controls stay outside it.',
+              'Centered on each item card; maximum fills the card while quantity controls stay available.',
               style: TextStyle(color: Color(0xff929aac)),
             ),
             Slider(
               key: const Key('inventory-drag-grip-size'),
               value: inventoryDragGripSize,
               min: 24,
-              max: 120,
-              divisions: 12,
+              max: 420,
+              divisions: 99,
               label: '${inventoryDragGripSize.round()} px',
               onChanged: (value) {
                 setState(() => inventoryDragGripSize = value);
@@ -42228,6 +42457,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
     required this.spoolSizeLabel,
     required this.showStatus,
     this.onQuantityChanged,
+    this.onStatusPressed,
     this.scrolling,
   });
 
@@ -42238,6 +42468,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
   final String spoolSizeLabel;
   final bool showStatus;
   final ValueChanged<double>? onQuantityChanged;
+  final VoidCallback? onStatusPressed;
   final ValueListenable<bool>? scrolling;
 
   @override
@@ -42305,10 +42536,14 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                             color: _themeCanvas(context).withValues(alpha: .82),
                             shape: BoxShape.circle,
                           ),
-                          child: CountdownRing(
-                            key: Key('inventory-card-timer-${item.id}'),
+                          child: _CardStatusButton(
                             item: item,
-                            compact: compact,
+                            onPressed: onStatusPressed,
+                            child: CountdownRing(
+                              key: Key('inventory-card-timer-${item.id}'),
+                              item: item,
+                              compact: compact,
+                            ),
                           ),
                         ),
                     ],
@@ -42662,6 +42897,7 @@ class InventoryCard extends StatelessWidget {
     required this.onOpen,
     required this.onAction,
     this.onQuantityChanged,
+    this.onStatusPressed,
     this.onSelect,
     this.selected = false,
     this.typeLabel,
@@ -42689,6 +42925,7 @@ class InventoryCard extends StatelessWidget {
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
   final ValueChanged<double>? onQuantityChanged;
+  final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
   final bool selected;
   final String? typeLabel;
@@ -42725,17 +42962,20 @@ class InventoryCard extends StatelessWidget {
       itemId: item.id,
       selected: selected,
       scrolling: scrollingListenable,
-      child: InkWell(
-        onTap: onOpen,
-        hoverColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .28),
-        focusColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .22),
-        highlightColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .3),
-        splashColor: Theme.of(context).colorScheme.primary
-            .withValues(alpha: .26),
-        child: ItemCardEffects(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InkWell(
+              onTap: onOpen,
+              hoverColor: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .28),
+              focusColor: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .22),
+              highlightColor: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .3),
+              splashColor: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .26),
+              child: ItemCardEffects(
           itemId: item.id,
           quantitySyncVersion: quantitySyncVersion,
           lowStockVersion: lowStockAnimationVersion,
@@ -42758,8 +42998,9 @@ class InventoryCard extends StatelessWidget {
                   typeIcon: typeIcon,
                   typeIconImageBytes: typeIconImageBytes,
                   spoolSizeLabel: spoolSizeLabel,
-                  showStatus: showStatus,
+                  showStatus: false,
                   onQuantityChanged: canEdit ? onQuantityChanged : null,
+                  onStatusPressed: canEdit ? onStatusPressed : null,
                   scrolling: scrollingListenable,
                 )
               : LayoutBuilder(
@@ -42788,15 +43029,8 @@ class InventoryCard extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 6),
                               if (item.archived)
                                 _ArchiveBadge(item: item)
-                              else if (showStatus && item.quantity > 0)
-                                CountdownRing(
-                                  key: Key('inventory-card-timer-${item.id}'),
-                                  item: item,
-                                  compact: compact,
-                                ),
                             ],
                           ),
                           const Spacer(),
@@ -42868,7 +43102,10 @@ class InventoryCard extends StatelessWidget {
                     );
                   },
                 ),
-        ),
+              ),
+            ),
+          ),
+        ],
       ),
     ),
   );
@@ -43013,6 +43250,7 @@ class InventoryRow extends StatelessWidget {
     required this.onOpen,
     required this.onAction,
     this.onQuantityChanged,
+    this.onStatusPressed,
     this.onSelect,
     this.selected = false,
     this.typeLabel,
@@ -43039,6 +43277,7 @@ class InventoryRow extends StatelessWidget {
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
   final ValueChanged<double>? onQuantityChanged;
+  final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
   final bool selected;
   final String? typeLabel;
@@ -43159,10 +43398,14 @@ class InventoryRow extends StatelessWidget {
               _price(),
               const SizedBox(width: 10),
               if (showStatus && item.quantity > 0)
-                CountdownRing(
-                  key: Key('inventory-row-timer-${item.id}'),
+                _CardStatusButton(
                   item: item,
-                  compact: true,
+                  onPressed: canEdit ? onStatusPressed : null,
+                  child: CountdownRing(
+                    key: Key('inventory-row-timer-${item.id}'),
+                    item: item,
+                    compact: true,
+                  ),
                 ),
             ],
           ),
@@ -43223,10 +43466,14 @@ class InventoryRow extends StatelessWidget {
               height: 62,
               child: Align(
                 alignment: Alignment.bottomCenter,
-                child: CountdownRing(
-                  key: Key('inventory-row-timer-${item.id}'),
+                child: _CardStatusButton(
                   item: item,
-                  compact: true,
+                  onPressed: canEdit ? onStatusPressed : null,
+                  child: CountdownRing(
+                    key: Key('inventory-row-timer-${item.id}'),
+                    item: item,
+                    compact: true,
+                  ),
                 ),
               ),
             ),
@@ -43559,6 +43806,38 @@ class _MachineTimerPill extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _CardStatusButton extends StatelessWidget {
+  const _CardStatusButton({
+    required this.item,
+    required this.child,
+    this.onPressed,
+  });
+
+  final InventoryItem item;
+  final Widget child;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final action = onPressed;
+    if (action == null) return child;
+    return Semantics(
+      key: Key('inventory-card-status-${item.id}'),
+      button: true,
+      label: 'Change status for ${item.name}',
+      onTap: action,
+      child: GestureDetector(
+        key: Key('inventory-card-status-target-${item.id}'),
+        behavior: HitTestBehavior.opaque,
+        // This control is deliberately outside the card InkWell, so changing
+        // status never opens the item detail view.
+        onTap: action,
+        child: child,
+      ),
+    );
+  }
 }
 
 class CountdownRing extends StatelessWidget {

@@ -10,6 +10,8 @@ plugins {
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties()
 val hasReleaseSigning = keystorePropertiesFile.exists()
+val localApplicationIdSuffix =
+    providers.gradleProperty("inventorinator.applicationIdSuffix").orNull.orEmpty()
 if (hasReleaseSigning) {
     FileInputStream(keystorePropertiesFile).use(keystoreProperties::load)
 }
@@ -25,7 +27,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "media.everlasting.inventorinator"
+        // A local debug build can be installed beside a signed or newer VM
+        // build without replacing its data. Release builds leave this empty.
+        applicationId = "media.everlasting.inventorinator$localApplicationIdSuffix"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

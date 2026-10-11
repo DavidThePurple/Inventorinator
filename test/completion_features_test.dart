@@ -173,7 +173,7 @@ void main() {
       dir.deleteSync(recursive: true);
     },
   );
-  test('a queued delete clears a legacy conflict hold', () async {
+  test('a queued delete retains a legacy conflict hold for review', () async {
     final dir = Directory.systemTemp.createTempSync('delete-conflict-hold-');
     final db = await LocalDatabase.open(overridePath: '${dir.path}/db');
     final store = SyncConflictStore(db, 'workspace');
@@ -198,8 +198,8 @@ void main() {
         ),
       ),
     ]);
-    expect(ready, hasLength(1));
-    expect(store.load(), isEmpty);
+    expect(ready, isEmpty);
+    expect(store.load(), hasLength(1));
     db.close();
     dir.deleteSync(recursive: true);
   });

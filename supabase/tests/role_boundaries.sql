@@ -91,7 +91,20 @@ begin
     perform public.apply_inventorinator_entity_changes(
       '20000000-0000-0000-0000-000000000001',
       'test-device',
-      '[{"entityType":"inventory","entityId":"INV-B","deleted":true}]'::jsonb
+      jsonb_build_array(jsonb_build_object(
+        'entityType', 'inventory',
+        'entityId', 'INV-B',
+        'deleted', true,
+        'baseFields', jsonb_build_object(
+          '(confirmedDelete)', true,
+          '(deleted)', (
+            select payload from public.inventorinator_entities
+            where workspace_id = '20000000-0000-0000-0000-000000000001'
+              and entity_type = 'inventory' and entity_id = 'INV-B'
+              and not deleted
+          )
+        )
+      ))
     );
     raise exception 'manager hard deletion was accepted';
   exception when others then

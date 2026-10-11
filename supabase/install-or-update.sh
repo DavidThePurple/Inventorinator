@@ -2,7 +2,7 @@
 set -eu
 
 release_tag=${INVENTORINATOR_RELEASE_TAG:-v0.1.1-alpha.2}
-required_version=35
+required_version=36
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 migrations_dir=$script_dir/migrations
 temporary_dir=

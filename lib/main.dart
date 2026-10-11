@@ -10843,6 +10843,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         moistureEffectsEnabled: common.moistureEffectsEnabled,
         remoteSyncEffectsEnabled: common.remoteSyncEffectsEnabled,
         showStatus: common.showStatus,
+        statusInOverlay: true,
         animationDurationPercent: animationDurationPercent,
         animationRecurrenceSeconds: animationRecurrenceSeconds,
         scrollingListenable: _inventoryIsScrolling,
@@ -42916,6 +42917,7 @@ class InventoryCard extends StatelessWidget {
     this.remoteSyncEffectsEnabled = true,
     this.photoCard = false,
     this.showStatus = true,
+    this.statusInOverlay = false,
     this.canEdit = true,
     this.canCreate = true,
     this.canArchive = true,
@@ -42944,6 +42946,7 @@ class InventoryCard extends StatelessWidget {
   final bool remoteSyncEffectsEnabled;
   final bool photoCard;
   final bool showStatus;
+  final bool statusInOverlay;
   final bool canEdit;
   final bool canCreate;
   final bool canArchive;
@@ -43105,6 +43108,22 @@ class InventoryCard extends StatelessWidget {
               ),
             ),
           ),
+          if (!statusInOverlay &&
+              showStatus &&
+              !item.archived &&
+              item.quantity > 0)
+            Positioned(
+              top: 12,
+              right: 12,
+              child: _CardStatusButton(
+                item: item,
+                onPressed: canEdit ? onStatusPressed : null,
+                child: CountdownRing(
+                  key: Key('inventory-card-timer-${item.id}'),
+                  item: item,
+                ),
+              ),
+            ),
         ],
       ),
     ),

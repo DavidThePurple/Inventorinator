@@ -7766,9 +7766,12 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('delete-kit')));
     await tester.pumpAndSettle();
     expect(
-      find.textContaining('You have 1 build in progress.'),
+      find.textContaining(
+        'You have 2 associated builds, including 1 in progress.',
+      ),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('delete-kit-replacement')), findsOneWidget);
     expect(find.text('Delete Kit (permanent)'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));

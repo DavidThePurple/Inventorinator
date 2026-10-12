@@ -112,7 +112,7 @@ void main() {
           fields: {...item('a'), 'quantity': 9},
         ),
       ], pending.map((p) => p.change));
-      expect(merge.conflicts.single.field, '(deleted)');
+      expect(merge.conflicts.single.field, '(stale delete)');
       final conflicts = SyncConflictStore(db, 'workspace')
         ..record(merge.conflicts);
       expect(conflicts.readyForUpload(pending), isEmpty);
@@ -146,7 +146,7 @@ void main() {
     },
   );
 
-  test('server echo without null fields does not conflict with undo', () {
+  test('server echo missing a null field holds a guarded undo safely', () {
     final store = ImportBatchStore(db, 'local');
     final id = store.commit('parts.csv', [item('a')]);
     store.undo(id);
@@ -158,6 +158,6 @@ void main() {
         fields: remote,
       ),
     ], db.loadPendingWorkshopChanges().map((p) => p.change));
-    expect(merged.conflicts, isEmpty);
+    expect(merged.conflicts.single.field, '(stale delete)');
   });
 }

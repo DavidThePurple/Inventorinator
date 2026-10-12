@@ -16249,45 +16249,124 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<bool> _confirmDeleteKit(KitRecord kit) async {
-    final unfinishedBuilds = builds
-        .where((build) => build.kitId == kit.id && build.completedAt == null)
+    final associatedBuilds = builds
+        .where((build) => build.kitId == kit.id)
+        .toList();
+    final unfinishedBuilds = associatedBuilds
+        .where((build) => build.completedAt == null)
         .length;
+    final replacementChoices = kits
+        .where((candidate) => candidate.id != kit.id)
+        .toList();
+    String? replacementKitId;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Delete ${kit.name}?'),
-        content: Text(
-          unfinishedBuilds > 0
-              ? 'You have $unfinishedBuilds ${unfinishedBuilds == 1 ? 'build' : 'builds'} in progress. '
-                    '${unfinishedBuilds == 1 ? 'It is' : 'They are'} kept with the parts already used; parts not yet used return to available stock.'
-              : 'This permanently deletes the kit and its BOM.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Delete ${kit.name}?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                associatedBuilds.isNotEmpty
+                    ? 'You have ${associatedBuilds.length} associated ${associatedBuilds.length == 1 ? 'build' : 'builds'}${unfinishedBuilds > 0 ? ', including $unfinishedBuilds in progress' : ''}. '
+                          'You can assign them to a replacement kit before deleting this one.'
+                          '${unfinishedBuilds > 0 ? ' Parts not yet used return to available stock.' : ''}'
+                    : 'This permanently deletes the kit and its BOM.',
+              ),
+              if (associatedBuilds.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String?>(
+                  key: const Key('delete-kit-replacement'),
+                  initialValue: replacementKitId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Replacement kit (optional)',
+                    helperText: 'Without one, builds retain their saved BOM as a detached snapshot.',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Keep build snapshots detached'),
+                    ),
+                    for (final candidate in replacementChoices)
+                      DropdownMenuItem<String?>(
+                        value: candidate.id,
+                        child: Text(candidate.name),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => replacementKitId = value),
+                ),
+              ],
+            ],
           ),
-          FilledButton(
-            key: const Key('confirm-delete-kit'),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-              foregroundColor: Theme.of(context).colorScheme.onError,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
             ),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Delete Kit (permanent)'),
-          ),
-        ],
+            FilledButton(
+              key: const Key('confirm-delete-kit'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Delete Kit (permanent)'),
+            ),
+          ],
+        ),
       ),
     );
     if (confirmed != true || !mounted) return false;
     setState(() {
+      if (replacementKitId != null) {
+        for (var index = 0; index < builds.length; index++) {
+          final build = builds[index];
+          if (build.kitId != kit.id) continue;
+          builds[index] = BuildRecord(
+            id: build.id,
+            kitId: replacementKitId!,
+            name: build.name,
+            createdAt: build.createdAt,
+            createdBy: build.createdBy,
+            lines: build.lines,
+            ownerDeviceId: build.ownerDeviceId,
+            ownerUserId: build.ownerUserId,
+            shared: build.shared,
+            completedAt: build.completedAt,
+            updatedAt: DateTime.now(),
+          );
+        }
+      }
       kits.removeWhere((candidate) => candidate.id == kit.id);
-      for (final machine in machines) {
-        machine.kitIds.remove(kit.id);
+      for (var index = 0; index < machines.length; index++) {
+        final machine = machines[index];
+        if (!machine.kitIds.contains(kit.id)) continue;
+        machines[index] = MachineRecord(
+          id: machine.id,
+          name: machine.name,
+          model: machine.model,
+          address: machine.address,
+          typeId: machine.typeId,
+          kitIds: {...machine.kitIds}..remove(kit.id),
+          sourceUrls: machine.sourceUrls,
+          imageBytes: machine.imageBytes,
+          added: machine.added,
+          timerLabel: machine.timerLabel,
+          timerStartedAt: machine.timerStartedAt,
+          timerDuration: machine.timerDuration,
+          storageLocationId: machine.storageLocationId,
+          loadedItemIds: machine.loadedItemIds,
+          filamentSlots: machine.filamentSlots,
+        );
       }
       _recordAudit('delete', 'kit', kit.id, {
         'name': kit.name,
-        'unfinishedBuilds': unfinishedBuilds.toString(),
+        'associatedBuilds': associatedBuilds.length.toString(),
+        if (replacementKitId != null) 'replacementKitId': replacementKitId!,
       });
     });
     _persist();
@@ -17505,6 +17584,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     'typeStatusSettings': typeStatusSettings,
     'deletedTypeKeys': deletedTypeKeys.toList(),
     'pinnedDragKitIds': _pinnedKitIds.toList(),
+    // Canvas bounds are shared workshop data. Without them another device can
+    // receive a location at a valid grid coordinate but clip it outside its
+    // default 60 x 40 drawing surface.
+    'layoutCanvasSizes': layoutCanvasSizes,
     'historyLimit': historyLimit,
   };
 
@@ -18321,6 +18404,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     for (final change in changes) {
       if (change.entityType == workshopMetadataEntityType) {
         final fields = change.fields;
+        if (fields['layoutCanvasSizes'] is Map) {
+          layoutCanvasSizes
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(fields['layoutCanvasSizes'] as Map)
+                  .map((key, value) {
+                    final values = value is List
+                        ? value
+                              .whereType<num>()
+                              .map((entry) => entry.toInt())
+                              .toList()
+                        : const <int>[];
+                    return MapEntry(
+                      key,
+                      values.length == 2 ? values : const [60, 40],
+                    );
+                  }),
+            );
+        }
         if (fields['historyLimit'] is num) {
           historyLimit = (fields['historyLimit'] as num).toInt();
         }

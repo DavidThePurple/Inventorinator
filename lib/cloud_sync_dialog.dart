@@ -1190,6 +1190,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         widget.database.loadPendingWorkshopChanges().map((e) => e.change),
       );
       conflicts.record(result.conflicts);
+      widget.database.discardRejectedDeleteTombstones(result.rejectedDeletes);
       final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);
       widget.onCloudChanges?.call(merged);
@@ -1204,6 +1205,13 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       atomicBuilds:
           effectiveRole.canOperateBuilds && !effectiveRole.canEditInventory,
     );
+    if (pending.any((entry) => entry.change.deleted) &&
+        serverSchema < latestInventorinatorSchemaVersion) {
+      throw SupabaseSyncException(
+        'Hard deletes are paused until this Remote is updated to schema '
+        'v$latestInventorinatorSchemaVersion. Other sync changes remain safe.',
+      );
+    }
     if (pending.isNotEmpty) {
       final deviceId = widget.database.loadStringPreference(
         'device_id',
@@ -1265,6 +1273,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         widget.database.loadPendingWorkshopChanges().map((e) => e.change),
       );
       conflicts.record(result.conflicts);
+      widget.database.discardRejectedDeleteTombstones(result.rejectedDeletes);
       final merged = result.changes;
       widget.database.applyRemoteWorkshopChanges(merged);
       widget.onCloudChanges?.call(merged);

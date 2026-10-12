@@ -188,6 +188,32 @@ void main() {
     database.close();
   });
 
+  test('deliberate deletes retain the last Remote revision', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inventorinator-delete-revision-db-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final database = await LocalDatabase.open(
+      overridePath: '${directory.path}/inventory.sqlite3',
+    );
+    database.applyRemoteWorkshopChanges([
+      const WorkshopEntityChange(
+        entityType: 'locations',
+        entityId: 'LOC-1',
+        fields: {'id': 'LOC-1', 'name': 'Rack'},
+        revision: 42,
+      ),
+    ]);
+
+    database.deleteEntityAndQueue('locations', 'LOC-1');
+
+    final pending = database.loadPendingWorkshopChanges().single.change;
+    expect(pending.deleted, isTrue);
+    expect(pending.baseFields?['(expectedRevision)'], 42);
+    expect(pending.baseFields?['(deleted)'], {'id': 'LOC-1', 'name': 'Rack'});
+    database.close();
+  });
+
   test(
     'full inventory images stay lazy while thumbnails load with cards',
     () async {

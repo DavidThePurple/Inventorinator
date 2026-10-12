@@ -65,24 +65,13 @@ begin
 end;
 $$;
 
-select public.apply_inventorinator_entity_changes(
+select public.delete_inventorinator_entity(
   '60000000-0000-0000-0000-000000000001',
   'test-device',
-  jsonb_build_array(jsonb_build_object(
-    'entityType', 'inventory',
-    'entityId', 'INV-A',
-    'fields', '{}'::jsonb,
-    'deleted', true,
-    'baseFields', jsonb_build_object(
-      '(confirmedDelete)', true,
-      '(explicitDelete)', true,
-      '(deleted)', (
-        select payload from public.inventorinator_entities
-        where workspace_id = '60000000-0000-0000-0000-000000000001'
-          and entity_type = 'inventory' and entity_id = 'INV-A' and not deleted
-      )
-    )
-  ))
+  'inventory', 'INV-A',
+  (select revision from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'inventory' and entity_id = 'INV-A' and not deleted)
 );
 
 do $$
@@ -174,29 +163,44 @@ begin
     );
     raise exception 'snapshot omission deleted an empty location entity';
   exception when others then
-    if sqlerrm not like 'Sync conflict: deletes must originate%' then
+    if sqlerrm not like 'Sync conflict: use the server-authoritative%' then
       raise;
     end if;
   end;
 end;
 $$;
 
-select public.apply_inventorinator_entity_changes(
+-- Even the dedicated deletion endpoint rejects a record that changed after
+-- the user saw it. The caller must pull the newer revision and decide again.
+do $$
+declare stale_revision bigint;
+begin
+  select revision into stale_revision from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'locations' and entity_id = 'LOC-EMPTY';
+  perform public.apply_inventorinator_entity_changes(
+    '60000000-0000-0000-0000-000000000001', 'other-device',
+    '[{"entityType":"locations","entityId":"LOC-EMPTY","fields":{"name":"Renamed shelf"}}]'::jsonb
+  );
+  begin
+    perform public.delete_inventorinator_entity(
+      '60000000-0000-0000-0000-000000000001', 'stale-device',
+      'locations', 'LOC-EMPTY', stale_revision
+    );
+    raise exception 'stale server delete was accepted';
+  exception when others then
+    if sqlerrm <> 'Sync conflict: remote record changed before delete' then raise; end if;
+  end;
+end;
+$$;
+
+select public.delete_inventorinator_entity(
   '60000000-0000-0000-0000-000000000001',
   'current-device',
-  jsonb_build_array(jsonb_build_object(
-    'entityType', 'locations',
-    'entityId', 'LOC-EMPTY',
-    'fields', '{}'::jsonb,
-    'baseFields', jsonb_build_object(
-      '(explicitDelete)', true,
-      '(deleted)', jsonb_build_object(
-        'id', 'LOC-EMPTY',
-        'name', 'Empty shelf'
-      )
-    ),
-    'deleted', true
-  ))
+  'locations', 'LOC-EMPTY',
+  (select revision from public.inventorinator_entities
+    where workspace_id = '60000000-0000-0000-0000-000000000001'
+      and entity_type = 'locations' and entity_id = 'LOC-EMPTY' and not deleted)
 );
 
 do $$

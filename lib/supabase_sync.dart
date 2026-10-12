@@ -11,7 +11,7 @@ import 'scratch_pad.dart';
 
 // v22-v24 add optional services without changing the v21 inventory protocol.
 const minimumInventorySchemaVersion = 21;
-const latestInventorinatorSchemaVersion = 38;
+const latestInventorinatorSchemaVersion = 39;
 
 String? normalizeWorkspaceRole(String? role) => role?.trim().toLowerCase();
 
@@ -734,6 +734,37 @@ class SupabaseSyncService {
       throw SupabaseSyncException(_message(response));
     }
     return (jsonDecode(response.body) as num).toInt();
+  }
+
+  /// Deletion is intentionally not part of the generic sync transport. The
+  /// Remote locks and validates this exact record before it writes a
+  /// tombstone, so an old or partial device cannot turn an omission into a
+  /// deletion.
+  Future<int> deleteEntity(
+    SupabaseSession session,
+    WorkshopEntityChange change, {
+    required String deviceId,
+    List<Map<String, Object?>> auditEvents = const [],
+  }) async {
+    final workspaceId = config.workspaceId;
+    if (workspaceId == null) {
+      throw const SupabaseSyncException('Connect this device before syncing.');
+    }
+    final base = change.baseFields ?? const <String, dynamic>{};
+    final expectedRevision = base['(expectedRevision)'];
+    final expectedPayload = base['(deleted)'];
+    final result = await _rpc(session, 'delete_inventorinator_entity', {
+      'target_workspace': workspaceId,
+      'source_device': deviceId,
+      'entity_type': change.entityType,
+      'entity_id': change.entityId,
+      if (expectedRevision is num)
+        'expected_revision': expectedRevision.toInt(),
+      if (expectedPayload is Map) 'expected_payload': expectedPayload,
+      'import_undo': base['(importUndo)'] == true,
+      'audit_events': auditEvents,
+    });
+    return (result as num?)?.toInt() ?? 0;
   }
 
   Future<String> createWorkspace(SupabaseSession session) async {

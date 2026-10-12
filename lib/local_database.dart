@@ -301,9 +301,18 @@ class LocalDatabase {
         entity_type TEXT NOT NULL,
         entity_id TEXT NOT NULL,
         payload_json TEXT NOT NULL,
+        remote_revision INTEGER,
         PRIMARY KEY(entity_type, entity_id)
       ) STRICT
     ''');
+    final entityStateColumns = _database.select(
+      'PRAGMA table_info(entity_state)',
+    );
+    if (!entityStateColumns.any((row) => row['name'] == 'remote_revision')) {
+      _database.execute(
+        'ALTER TABLE entity_state ADD COLUMN remote_revision INTEGER',
+      );
+    }
     _database.execute(
       "CREATE TABLE IF NOT EXISTS inventory_metadata (entity_type TEXT NOT NULL DEFAULT 'inventory', entity_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)",
     );
@@ -1376,17 +1385,29 @@ class LocalDatabase {
   }
 
   void deleteEntityAndQueue(String entityType, String entityId) {
+    final revision = entityRemoteRevision(entityType, entityId);
     applyAndQueueWorkshopChanges([
       WorkshopEntityChange(
         entityType: entityType,
         entityId: entityId,
         fields: const {},
         deleted: true,
-        // Tombstones must originate in an explicit user action, never from a
-        // device merely lacking a record in its local snapshot.
-        baseFields: const {'(explicitDelete)': true},
+        // A dedicated Remote delete RPC owns the actual tombstone. Retain the
+        // server revision the user saw so a stale device cannot delete a
+        // newer record. Older local databases fall back to an exact payload
+        // comparison until their next pull supplies revisions.
+        baseFields: {'(expectedRevision)': ?revision},
       ),
     ]);
+  }
+
+  int? entityRemoteRevision(String entityType, String entityId) {
+    final rows = _database.select(
+      '''SELECT remote_revision FROM entity_state
+         WHERE entity_type = ? AND entity_id = ?''',
+      [entityType, entityId],
+    );
+    return rows.isEmpty ? null : rows.single['remote_revision'] as int?;
   }
 
   void applyRemoteWorkshopChanges(Iterable<WorkshopEntityChange> changes) {
@@ -1541,12 +1562,18 @@ class LocalDatabase {
     }
     _database.execute(
       '''
-      INSERT INTO entity_state(entity_type, entity_id, payload_json)
-      VALUES (?, ?, ?)
+      INSERT INTO entity_state(entity_type, entity_id, payload_json, remote_revision)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(entity_type, entity_id) DO UPDATE SET
-        payload_json = excluded.payload_json
+        payload_json = excluded.payload_json,
+        remote_revision = coalesce(excluded.remote_revision, entity_state.remote_revision)
       ''',
-      [change.entityType, change.entityId, jsonEncode(payload)],
+      [
+        change.entityType,
+        change.entityId,
+        jsonEncode(payload),
+        change.revision,
+      ],
     );
   }
 

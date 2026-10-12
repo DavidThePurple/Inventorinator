@@ -14,24 +14,13 @@ select public.apply_inventorinator_entity_changes('34000000-0000-0000-0000-00000
 do $$ begin
  if not exists(select 1 from public.inventorinator_entities where entity_id='part' and workspace_id='34000000-0000-0000-0000-000000000010' and payload->>'modifiedAt'='2026-09-19T13:00:00Z') then raise exception 'Newer time not accepted'; end if;
 end $$;
-select public.apply_inventorinator_entity_changes(
+select public.delete_inventorinator_entity(
   '34000000-0000-0000-0000-000000000010',
   'test',
-  jsonb_build_array(jsonb_build_object(
-    'entityType', 'inventory',
-    'entityId', 'part',
-    'fields', '{}'::jsonb,
-    'deleted', true,
-    'baseFields', jsonb_build_object(
-      '(confirmedDelete)', true,
-      '(explicitDelete)', true,
-      '(deleted)', (
-        select payload from public.inventorinator_entities
-        where workspace_id = '34000000-0000-0000-0000-000000000010'
-          and entity_type = 'inventory' and entity_id = 'part' and not deleted
-      )
-    )
-  ))
+  'inventory', 'part',
+  (select revision from public.inventorinator_entities
+    where workspace_id = '34000000-0000-0000-0000-000000000010'
+      and entity_type = 'inventory' and entity_id = 'part' and not deleted)
 );
 do $$ begin
  if not exists(select 1 from public.inventorinator_entities where entity_id='part' and workspace_id='34000000-0000-0000-0000-000000000010' and deleted) then raise exception 'Deletion blocked'; end if;

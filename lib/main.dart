@@ -9877,16 +9877,14 @@ class _InventoryHomeState extends State<InventoryHome> {
       // A paged list can omit records that have not been loaded. Only the
       // in-app Delete action marks an inventory ID as an intentional removal.
       if (!_confirmedInventoryDeletes.contains(id)) continue;
+      final expectedRevision = database.entityRemoteRevision('inventory', id);
       changes.add(
         WorkshopEntityChange(
           entityType: 'inventory',
           entityId: id,
           fields: const {},
           deleted: true,
-          baseFields: const {
-            '(confirmedDelete)': true,
-            '(explicitDelete)': true,
-          },
+          baseFields: {'(expectedRevision)': ?expectedRevision},
         ),
       );
     }
@@ -19235,12 +19233,36 @@ class _InventoryHomeState extends State<InventoryHome> {
           batchSize: _syncUploadBatchSize,
         )) {
           try {
-            await service.uploadChanges(
-              session,
-              batch.map((entry) => entry.change),
-              deviceId: deviceId,
-              auditEvents: auditAcknowledged ? const [] : auditBatch,
-            );
+            final updates = batch
+                .where((entry) => !entry.change.deleted)
+                .toList();
+            if (updates.isNotEmpty) {
+              await service.uploadChanges(
+                session,
+                updates.map((entry) => entry.change),
+                deviceId: deviceId,
+                auditEvents: auditAcknowledged ? const [] : auditBatch,
+              );
+              if (!auditAcknowledged) {
+                _acknowledgeAuditBatch(auditBatch);
+                auditAcknowledged = true;
+              }
+            }
+            for (final deletion in batch.where(
+              (entry) => entry.change.deleted,
+            )) {
+              await service.deleteEntity(
+                session,
+                deletion.change,
+                deviceId: deviceId,
+                auditEvents: auditAcknowledged ? const [] : auditBatch,
+              );
+              if (!auditAcknowledged) {
+                _acknowledgeAuditBatch(auditBatch);
+                auditAcknowledged = true;
+              }
+              database.acknowledgePendingWorkshopChanges([deletion]);
+            }
           } on SupabaseSyncException catch (error) {
             if (!error.toString().contains('Sync conflict')) rethrow;
             final conflicts = await _detectUploadConflicts(
@@ -19252,13 +19274,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             _recordSyncConflicts(conflicts);
             continue;
           }
-          // Acknowledge each completed batch immediately. Version matching
-          // preserves any newer edit made to the same record during upload.
-          database.acknowledgePendingWorkshopChanges(batch);
-          if (!auditAcknowledged) {
-            _acknowledgeAuditBatch(auditBatch);
-            auditAcknowledged = true;
-          }
+          // Acknowledge each completed update batch immediately. Version
+          // matching preserves any newer edit made to the same record during
+          // upload. Deletes were acknowledged one at a time above.
+          database.acknowledgePendingWorkshopChanges(
+            batch.where((entry) => !entry.change.deleted),
+          );
         }
       }
 
@@ -25275,9 +25296,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               entityType: row['entityType'],
               entityId: row['entityId'],
               deleted: field == '(remote deleted)',
-              baseFields: field == '(remote deleted)'
-                  ? const {'(explicitDelete)': true}
-                  : null,
+              baseFields: null,
               fields: field == '(remote deleted)'
                   ? {}
                   : field == '(deleted)'

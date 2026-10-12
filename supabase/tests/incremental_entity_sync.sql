@@ -157,6 +157,12 @@ select public.apply_inventorinator_entity_changes(
     'entityType', 'locations',
     'entityId', 'LOC-EMPTY',
     'fields', '{}'::jsonb,
+    'baseFields', jsonb_build_object(
+      '(deleted)', jsonb_build_object(
+        'id', 'LOC-EMPTY',
+        'name', 'Empty shelf'
+      )
+    ),
     'deleted', true
   ))
 );

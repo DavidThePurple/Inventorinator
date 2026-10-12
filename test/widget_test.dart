@@ -283,7 +283,10 @@ void main() {
       final path = request.url.path;
       requestedPaths.add(path);
       if (path.endsWith('inventorinator_schema')) {
-        return http.Response('[{"version":35}]', 200);
+        return http.Response(
+          '[{"version":$latestInventorinatorSchemaVersion}]',
+          200,
+        );
       }
       if (path.endsWith('get_inventorinator_role')) {
         return http.Response('"admin"', 200);
@@ -7874,7 +7877,7 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('delete-kit')));
     await tester.pumpAndSettle();
     expect(
-      find.textContaining('parts not yet used return to available stock'),
+      find.textContaining('Parts not yet used return to available stock'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('confirm-delete-kit')));

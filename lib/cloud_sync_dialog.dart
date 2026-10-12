@@ -1326,6 +1326,12 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       final result = await _syncInventory();
       ServiceStatus.set(statusKey(), ConnectionStateLed.connected);
       return result;
+    } on RemoteSchemaOutOfDateException {
+      // The Remote is reachable, but must be migrated before it can exchange
+      // shared inventory. Keep the connection LED amber rather than reporting
+      // a generic failed connection.
+      ServiceStatus.set(statusKey(), ConnectionStateLed.limited);
+      rethrow;
     } catch (_) {
       ServiceStatus.set(statusKey(), ConnectionStateLed.failed);
       rethrow;

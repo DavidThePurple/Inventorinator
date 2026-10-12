@@ -15,9 +15,8 @@ import 'package:inventorinator/supabase_sync.dart';
 import 'package:inventorinator/service_status.dart';
 
 void main() {
-  for (final scenario in [(true, 21), (true, 25), (false, 21), (false, 25)]) {
-    final (succeeds, version) = scenario;
-    testWidgets('manual sync LED reflects final result: $succeeds v$version', (
+  for (final succeeds in [true, false]) {
+    testWidgets('manual sync LED reflects final result: $succeeds', (
       tester,
     ) async {
       final dir = Directory.systemTemp.createTempSync('manual-sync-led-');
@@ -41,7 +40,7 @@ void main() {
         if (request.url.path.endsWith('inventorinator_schema')) {
           return http.Response(
             jsonEncode([
-              {'version': version},
+              {'version': latestInventorinatorSchemaVersion},
             ]),
             200,
           );
@@ -51,6 +50,12 @@ void main() {
         }
         if (request.url.path.endsWith('get_inventorinator_remote_purge_days')) {
           return http.Response('3', 200);
+        }
+        if (request.url.path.endsWith('get_inventorinator_manual_drying')) {
+          return http.Response('false', 200);
+        }
+        if (request.url.path.endsWith('get_inventorinator_checkout_sync')) {
+          return http.Response('false', 200);
         }
         if (request.url.path.endsWith('workshop_states')) {
           return http.Response('[]', 200);
@@ -94,11 +99,7 @@ void main() {
       final dynamic dialog = tester.state(find.byType(CloudSyncDialog));
       expect(
         ServiceStatus.read(key),
-        succeeds
-            ? (version < 26
-                  ? ConnectionStateLed.limited
-                  : ConnectionStateLed.connected)
-            : ConnectionStateLed.failed,
+        succeeds ? ConnectionStateLed.connected : ConnectionStateLed.failed,
         reason: dialog.message as String,
       );
       expect(tester.takeException(), isNull);
@@ -108,7 +109,7 @@ void main() {
       dir.deleteSync(recursive: true);
     });
   }
-  testWidgets('background sync completes on v21 with an amber LED', (
+  testWidgets('background sync pauses for an outdated Remote schema', (
     tester,
   ) async {
     final dir = Directory.systemTemp.createTempSync('auto-sync-compat-');
@@ -177,10 +178,10 @@ void main() {
         break;
       }
     }
-    expect(downloads, greaterThanOrEqualTo(2));
+    expect(downloads, 0);
     expect(
       SupabaseConfig.fromJson(jsonDecode(db.loadSyncConfig()!)).lastSyncedAt,
-      isNotNull,
+      isNull,
     );
     expect(
       ServiceStatus.read(
@@ -188,6 +189,7 @@ void main() {
       ),
       ConnectionStateLed.limited,
     );
+    await tester.pump(const Duration(seconds: 10));
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() => db.waitForPendingWrites());
     client.close();

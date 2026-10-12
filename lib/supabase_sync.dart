@@ -47,8 +47,7 @@ bool shouldPreserveLocalInventoryAfterWorkspaceAccessDenied(
   SupabaseConfig config, {
   required bool hasOwnerRecovery,
 }) =>
-    normalizeWorkspaceRole(config.workspaceRole) == 'owner' ||
-    hasOwnerRecovery;
+    normalizeWorkspaceRole(config.workspaceRole) == 'owner' || hasOwnerRecovery;
 
 class WorkspaceRole {
   const WorkspaceRole._(this.name, [this.permissions]);
@@ -343,6 +342,15 @@ class RemoteSchemaTooNewException extends SupabaseSyncException {
   final int remoteVersion;
 }
 
+class RemoteSchemaOutOfDateException extends SupabaseSyncException {
+  const RemoteSchemaOutOfDateException(this.remoteVersion)
+    : super(
+        'Your Remote\'s database schema is out of date. Please run migrations.',
+      );
+
+  final int remoteVersion;
+}
+
 class SupabaseSyncException implements Exception {
   const SupabaseSyncException(this.message);
   final String message;
@@ -564,6 +572,12 @@ class SupabaseSyncService {
       );
     }
     return version;
+  }
+
+  void requireCurrentInventorySchema(int version) {
+    if (version < latestInventorinatorSchemaVersion) {
+      throw RemoteSchemaOutOfDateException(version);
+    }
   }
 
   Future<DateTime> upload(
@@ -992,13 +1006,11 @@ class SupabaseSyncService {
         true;
   }
 
-  Future<void> setCheckoutSyncEnabled(
-    SupabaseSession session,
-    bool enabled,
-  ) => _rpc(session, 'set_inventorinator_checkout_sync', {
-    'target_workspace': config.workspaceId,
-    'target_enabled': enabled,
-  });
+  Future<void> setCheckoutSyncEnabled(SupabaseSession session, bool enabled) =>
+      _rpc(session, 'set_inventorinator_checkout_sync', {
+        'target_workspace': config.workspaceId,
+        'target_enabled': enabled,
+      });
 
   Future<void> backupScratchPadNotes(
     SupabaseSession session,

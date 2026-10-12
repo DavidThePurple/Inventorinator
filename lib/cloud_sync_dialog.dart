@@ -710,9 +710,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
           refreshed,
           client: widget.httpClient,
         );
-        ServiceStatus.setSchemaVersion(
-          statusKey, await service.requireInventorySchema(session),
-        );
+        final schemaVersion = await service.requireInventorySchema(session);
+        ServiceStatus.setSchemaVersion(statusKey, schemaVersion);
+        service.requireCurrentInventorySchema(schemaVersion);
         // A membership check is required before any remote read. RLS correctly
         // hides removed members, but an empty response would otherwise look like
         // a successful "already up to date" sync.
@@ -931,7 +931,11 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       await service.listDevices(session),
       session.userId,
     );
-    final templates = config.workspaceRole == 'owner' && await service.schemaVersion(session) >= 25 ? await service.listRoleTemplates(session) : <WorkspaceRoleTemplate>[];
+    final templates =
+        config.workspaceRole == 'owner' &&
+            await service.schemaVersion(session) >= 25
+        ? await service.listRoleTemplates(session)
+        : <WorkspaceRoleTemplate>[];
     var accessMessage = '';
     if (!mounted) return;
     await showDialog<void>(
@@ -1006,14 +1010,22 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                             !isMe &&
                             device.role != 'owner' &&
                             (isOwner ||
-                                isAdmin && !device.role.startsWith('template:') ||
+                                isAdmin &&
+                                    !device.role.startsWith('template:') ||
                                 isManager &&
                                     (device.role == 'editor' ||
                                         device.role == 'builder' ||
                                         device.role == 'member'));
                         final assignableRoles = isManager
                             ? const ['editor', 'builder']
-                            : ['admin', 'manager', 'editor', 'builder', if (isOwner) ...templates.map((t) => 'template:${t.id}')];
+                            : [
+                                'admin',
+                                'manager',
+                                'editor',
+                                'builder',
+                                if (isOwner)
+                                  ...templates.map((t) => 'template:${t.id}'),
+                              ];
                         return ListTile(
                           leading: Icon(
                             device.role == 'owner'
@@ -1049,7 +1061,15 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                                         (role) => DropdownMenuItem(
                                           value: role,
                                           child: Text(
-                                            role.startsWith('template:') ? templates.firstWhere((t) => 'template:${t.id}' == role).name : '${role[0].toUpperCase()}${role.substring(1)}',
+                                            role.startsWith('template:')
+                                                ? templates
+                                                      .firstWhere(
+                                                        (t) =>
+                                                            'template:${t.id}' ==
+                                                            role,
+                                                      )
+                                                      .name
+                                                : '${role[0].toUpperCase()}${role.substring(1)}',
                                           ),
                                         ),
                                       )
@@ -1074,8 +1094,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                                   },
                                 )
                               else if (device.role != 'owner')
-                                Text(device.role.startsWith('template:') ? 'CUSTOM ROLE' : device.role.toUpperCase()),
-                              if (canRemoveWorkspaceDevices(me?.role) && editable && !(isAdmin && device.role == 'admin'))
+                                Text(
+                                  device.role.startsWith('template:')
+                                      ? 'CUSTOM ROLE'
+                                      : device.role.toUpperCase(),
+                                ),
+                              if (canRemoveWorkspaceDevices(me?.role) &&
+                                  editable &&
+                                  !(isAdmin && device.role == 'admin'))
                                 PopupMenuButton<bool>(
                                   tooltip: 'Device access',
                                   onSelected: (lockOut) async {
@@ -1168,6 +1194,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
   }) async {
     final workspaceId = config.workspaceId!;
     final serverSchema = await service.requireInventorySchema(session);
+    service.requireCurrentInventorySchema(serverSchema);
     final conflicts = SyncConflictStore(
       widget.database,
       '${config.url}|$workspaceId',
@@ -1248,7 +1275,8 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                   entityId: entry.change.entityId,
                   field: '(deleted)',
                   localValue: null,
-                  remoteValue: remote?.fields ?? entry.change.baseFields?['(deleted)'],
+                  remoteValue:
+                      remote?.fields ?? entry.change.baseFields?['(deleted)'],
                 ),
               ]);
               held = true;

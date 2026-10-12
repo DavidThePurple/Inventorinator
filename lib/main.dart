@@ -17894,7 +17894,10 @@ class _InventoryHomeState extends State<InventoryHome> {
           .putIfAbsent(location.name.trim().toLowerCase(), () => [])
           .add(location);
       matchesByName
-          .putIfAbsent(_locationPath(location.id).trim().toLowerCase(), () => [])
+          .putIfAbsent(
+            _locationPath(location.id).trim().toLowerCase(),
+            () => [],
+          )
           .add(location);
     }
     final repaired = <InventoryItem>[];
@@ -18915,6 +18918,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (!force && !config.autoSyncEnabled) return;
     var retryAfterRecovery = false;
     var syncSucceeded = false;
+    var remoteSchemaNeedsMigration = false;
     // This revision belongs to the state at the start of this sync pass. Any
     // local edit after this point needs another pass, even if it lands while
     // we are waiting to apply or confirm remote changes.
@@ -18961,6 +18965,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
       final installedSchema = await service.requireInventorySchema(session);
       ServiceStatus.setSchemaVersion(statusKey, installedSchema);
+      service.requireCurrentInventorySchema(installedSchema);
       try {
         final role = await service.currentRole(session);
         final remotePurgeDays = await service.remotePurgeAfterDays(session);
@@ -19177,9 +19182,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           latestPending.map((entry) => entry.change),
         );
         _recordSyncConflicts(incomingMerge.conflicts);
-        database.discardRejectedDeleteTombstones(
-          incomingMerge.rejectedDeletes,
-        );
+        database.discardRejectedDeleteTombstones(incomingMerge.rejectedDeletes);
         database.applyRemoteWorkshopChanges(incomingMerge.changes);
         _applyRemoteEntityChanges(incomingMerge.changes);
       }
@@ -19279,7 +19282,22 @@ class _InventoryHomeState extends State<InventoryHome> {
       _lastSyncedLocalRevision = syncingRevision;
       syncSucceeded = true;
     } on SupabaseSyncException catch (error) {
-      if (error is RemoteSchemaTooNewException) {
+      if (error is RemoteSchemaOutOfDateException) {
+        remoteSchemaNeedsMigration = true;
+        _autoSyncPausedForAppUpdate = true;
+        _syncPoll?.cancel();
+        if (mounted) {
+          showInventorinatorAlert(
+            context,
+            const SnackBar(
+              content: Text(
+                'Your Remote\'s database schema is out of date. Please run migrations.',
+              ),
+              duration: Duration(seconds: 10),
+            ),
+          );
+        }
+      } else if (error is RemoteSchemaTooNewException) {
         _autoSyncPausedForAppUpdate = true;
         _syncPoll?.cancel();
         if (mounted) {
@@ -19324,7 +19342,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     } finally {
       ServiceStatus.set(
         statusKey,
-        syncSucceeded
+        remoteSchemaNeedsMigration
+            ? ConnectionStateLed.limited
+            : syncSucceeded
             ? ConnectionStateLed.connected
             : ConnectionStateLed.failed,
       );

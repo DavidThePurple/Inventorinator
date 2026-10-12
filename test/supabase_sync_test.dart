@@ -136,10 +136,7 @@ void main() {
   });
 
   test('owner access failures preserve local recovery material', () {
-    final owner = config.copyWith(
-      syncMode: 'supabase',
-      workspaceRole: 'owner',
-    );
+    final owner = config.copyWith(syncMode: 'supabase', workspaceRole: 'owner');
     final member = config.copyWith(
       syncMode: 'supabase',
       workspaceRole: 'builder',
@@ -666,6 +663,22 @@ void main() {
       );
     },
   );
+
+  test('sync prompts when the Remote schema is behind this app', () {
+    final service = SupabaseSyncService(config);
+    expect(
+      () => service.requireCurrentInventorySchema(
+        latestInventorinatorSchemaVersion - 1,
+      ),
+      throwsA(
+        isA<RemoteSchemaOutOfDateException>().having(
+          (error) => error.message,
+          'message',
+          'Your Remote\'s database schema is out of date. Please run migrations.',
+        ),
+      ),
+    );
+  });
 
   test('workspace device administration uses authenticated RPCs', () async {
     final service = SupabaseSyncService(

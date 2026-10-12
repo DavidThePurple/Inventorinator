@@ -13189,97 +13189,247 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  Future<void> _openUnresolvedLocationView() async {
-    final groups = _unresolvedLocationGroups();
-    await showDialog<void>(
+  Future<bool> _assignUnresolvedLocationGroup(
+    ({String name, String id, List<InventoryItem> items}) group,
+  ) async {
+    if (!currentRole.canEditInventory) {
+      _showPermissionDenied('Your role is view/build only.');
+      return false;
+    }
+    if (locations.isEmpty) {
+      showInventorinatorAlert(
+        context,
+        const SnackBar(content: Text('Create a saved location first.')),
+      );
+      return false;
+    }
+    StockLocationRecord? destination;
+    final accepted = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('unresolved-locations-dialog'),
-        title: const Row(
-          children: [
-            Icon(Icons.location_off_outlined),
-            SizedBox(width: 10),
-            Text('Unresolved locations'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Assign ${group.items.length} items'),
+          content: SizedBox(
+            width: 500,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'All items currently grouped under “${group.name}” will be assigned to one saved location.',
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  key: const Key('unresolved-location-destination'),
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Saved location',
+                  ),
+                  initialValue: destination?.id,
+                  items: [
+                    for (final location in locations)
+                      DropdownMenuItem(
+                        value: location.id,
+                        child: Text(_locationPath(location.id)),
+                      ),
+                  ],
+                  onChanged: (id) => setDialogState(
+                    () => destination = locations
+                        .where((location) => location.id == id)
+                        .firstOrNull,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              key: const Key('confirm-unresolved-location-assignment'),
+              onPressed: destination == null
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.drive_file_move_outline),
+              label: Text(
+                'Assign ${group.items.length} item${group.items.length == 1 ? '' : 's'}',
+              ),
+            ),
           ],
         ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 560),
-          child: groups.isEmpty
-              ? const Text('Every item location resolves to a saved location.')
-              : ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: groups.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 12),
-                  itemBuilder: (_, index) {
-                    final group = groups[index];
-                    final subtitle = group.id.isEmpty
-                        ? 'Legacy name only · no saved location matches'
-                        : 'Missing saved location ID: ${group.id}';
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(dialogContext)
-                            .colorScheme
-                            .surfaceContainerLow,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Theme.of(dialogContext)
-                              .colorScheme
-                              .outlineVariant,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  group.name,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  subtitle,
-                                  style: Theme.of(dialogContext)
-                                      .textTheme
-                                      .bodySmall,
-                                ),
-                              ],
+      ),
+    );
+    if (accepted != true || destination == null || !mounted) return false;
+    final destinationLocation = destination!;
+    final destinationPath = _locationPath(destinationLocation.id);
+    final inventoryById = {for (final item in inventory) item.id: item};
+    setState(() {
+      for (final sourceItem in group.items) {
+        final currentItem = inventoryById[sourceItem.id];
+        if (currentItem == null) continue;
+        _publishInventoryItem(
+          currentItem.copyWith(
+            storageLocationId: destinationLocation.id,
+            storageLocation: destinationPath,
+            locationHistory: _locationHistoryAfterMove(
+              currentItem,
+              destinationPath,
+            ),
+          ),
+        );
+        _recordAudit('move', 'inventory', currentItem.id, {
+          'name': currentItem.name,
+          'location': destinationPath,
+          'from unresolved location': group.name,
+        });
+      }
+    });
+    _persist();
+    if (!mounted) return false;
+    showInventorinatorAlert(
+      context,
+      SnackBar(
+        content: Text(
+          '${group.items.length} item${group.items.length == 1 ? '' : 's'} assigned to $destinationPath.',
+        ),
+      ),
+    );
+    return true;
+  }
+
+  Future<void> _openUnresolvedLocationView() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refreshDialog) {
+          final groups = _unresolvedLocationGroups();
+          return AlertDialog(
+            key: const Key('unresolved-locations-dialog'),
+            title: const Row(
+              children: [
+                Icon(Icons.location_off_outlined),
+                SizedBox(width: 10),
+                Text('Unresolved locations'),
+              ],
+            ),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720, maxHeight: 560),
+              child: groups.isEmpty
+                  ? const Text(
+                      'Every item location resolves to a saved location.',
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: groups.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (_, index) {
+                        final group = groups[index];
+                        final subtitle = group.id.isEmpty
+                            ? 'Legacy name only · no saved location matches'
+                            : 'Missing saved location ID: ${group.id}';
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: Theme.of(dialogContext)
+                                .colorScheme
+                                .surfaceContainerLow,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Theme.of(dialogContext)
+                                  .colorScheme
+                                  .outlineVariant,
                             ),
                           ),
-                          const Divider(height: 1),
-                          for (final item in group.items)
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(
-                                Icons.inventory_2_outlined,
-                                size: 20,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  14,
+                                  12,
+                                  14,
+                                  8,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            group.name,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        OutlinedButton.icon(
+                                          key: Key(
+                                            'assign-unresolved-location-${group.id.isEmpty ? _normalized(group.name) : group.id}',
+                                          ),
+                                          onPressed:
+                                              currentRole.canEditInventory
+                                              ? () async {
+                                                  if (await _assignUnresolvedLocationGroup(
+                                                    group,
+                                                  )) {
+                                                    refreshDialog(() {});
+                                                  }
+                                                }
+                                              : null,
+                                          icon: const Icon(
+                                            Icons.drive_file_move_outline,
+                                            size: 17,
+                                          ),
+                                          label: Text(
+                                            'Assign all (${group.items.length})',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      subtitle,
+                                      style: Theme.of(dialogContext)
+                                          .textTheme
+                                          .bodySmall,
+                                    ),
+                                  ],
+                                ),
                               ),
-                              title: Text(item.name),
-                              subtitle: Text(
-                                'Item ID: ${item.id} · Quantity: ${item.quantity}',
-                              ),
-                              onTap: () {
-                                Navigator.pop(dialogContext);
-                                _openDetails(item);
-                              },
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
-          ),
-        ],
+                              const Divider(height: 1),
+                              for (final item in group.items)
+                                ListTile(
+                                  dense: true,
+                                  leading: const Icon(
+                                    Icons.inventory_2_outlined,
+                                    size: 20,
+                                  ),
+                                  title: Text(item.name),
+                                  subtitle: Text(
+                                    'Item ID: ${item.id} · Quantity: ${item.quantity}',
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(dialogContext);
+                                    _openDetails(item);
+                                  },
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Do not add a color plate here. Android treats a legacy launcher PNG as a
+  white-backed icon on many launchers; the transparent adaptive background
+  lets the raygun itself sit directly over the launcher wallpaper.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/transparent" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

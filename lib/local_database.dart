@@ -976,6 +976,20 @@ class LocalDatabase {
       .map((r) => r['entity_id'] as String)
       .toList();
 
+  /// Lightweight full inventory scan for diagnostics. It intentionally reads
+  /// the metadata projection, not images, so repair/audit views can inspect
+  /// every record without forcing hundreds of card images into memory.
+  List<Map<String, dynamic>> inventoryPayloads() => _database
+      .select(
+        "SELECT payload_json FROM inventory_metadata WHERE entity_type = 'inventory' ORDER BY rowid",
+      )
+      .map(
+        (row) => Map<String, dynamic>.from(
+          jsonDecode(row['payload_json'] as String) as Map,
+        ),
+      )
+      .toList();
+
   Map<String, dynamic>? inventoryPayload(String id, {bool thumbnail = false}) {
     final table = thumbnail ? 'entity_state' : 'inventory_metadata';
     final rows = _database.select(

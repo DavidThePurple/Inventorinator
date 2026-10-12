@@ -13126,6 +13126,164 @@ class _InventoryHomeState extends State<InventoryHome> {
         .firstOrNull;
   }
 
+  List<({String name, String id, List<InventoryItem> items})>
+  _unresolvedLocationGroups() {
+    final source = _diskInventory == null
+        ? inventory
+        : widget.database!
+              .inventoryPayloads()
+              .map(_decodeInventoryPayload)
+              .toList();
+    final savedIds = locations.map((location) => location.id).toSet();
+    final groups =
+        <String, ({String name, String id, List<InventoryItem> items})>{};
+    for (final item in source) {
+      final locationId = item.storageLocationId.trim();
+      final locationName = item.storageLocation.trim();
+      final missingId = locationId.isNotEmpty && !savedIds.contains(locationId);
+      final missingLegacyName =
+          locationId.isEmpty &&
+          locationName.isNotEmpty &&
+          _itemStorageLocation(item) == null;
+      if (!missingId && !missingLegacyName) continue;
+      final id = missingId ? locationId : '';
+      final name = locationName.isEmpty ? 'Unnamed location' : locationName;
+      final key = '${id.toLowerCase()}\u0000${_normalized(name)}';
+      final group = groups.putIfAbsent(
+        key,
+        () => (name: name, id: id, items: <InventoryItem>[]),
+      );
+      group.items.add(item);
+    }
+    final result = groups.values.toList()
+      ..sort((a, b) {
+        final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        return byName != 0 ? byName : a.id.compareTo(b.id);
+      });
+    for (final group in result) {
+      group.items.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
+    }
+    return result;
+  }
+
+  Widget _unresolvedLocationAuditButton() {
+    final groups = _unresolvedLocationGroups();
+    final itemCount = groups.fold<int>(
+      0,
+      (total, group) => total + group.items.length,
+    );
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        key: const Key('open-unresolved-locations'),
+        onPressed: _openUnresolvedLocationView,
+        icon: const Icon(Icons.location_off_outlined, size: 18),
+        label: Text(
+          groups.isEmpty
+              ? 'Unresolved locations'
+              : 'Unresolved locations · $itemCount item${itemCount == 1 ? '' : 's'}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openUnresolvedLocationView() async {
+    final groups = _unresolvedLocationGroups();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('unresolved-locations-dialog'),
+        title: const Row(
+          children: [
+            Icon(Icons.location_off_outlined),
+            SizedBox(width: 10),
+            Text('Unresolved locations'),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 560),
+          child: groups.isEmpty
+              ? const Text('Every item location resolves to a saved location.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: groups.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 12),
+                  itemBuilder: (_, index) {
+                    final group = groups[index];
+                    final subtitle = group.id.isEmpty
+                        ? 'Legacy name only · no saved location matches'
+                        : 'Missing saved location ID: ${group.id}';
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: Theme.of(dialogContext)
+                            .colorScheme
+                            .surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Theme.of(dialogContext)
+                              .colorScheme
+                              .outlineVariant,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  group.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  subtitle,
+                                  style: Theme.of(dialogContext)
+                                      .textTheme
+                                      .bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Divider(height: 1),
+                          for (final item in group.items)
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(
+                                Icons.inventory_2_outlined,
+                                size: 20,
+                              ),
+                              title: Text(item.name),
+                              subtitle: Text(
+                                'Item ID: ${item.id} · Quantity: ${item.quantity}',
+                              ),
+                              onTap: () {
+                                Navigator.pop(dialogContext);
+                                _openDetails(item);
+                              },
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Disk reads skip thumbnails to stay cheap, so an item read, changed and
   /// republished (a quantity step, a status change) would lose the photo its
   /// card is showing. Carry the shown thumbnail over; the stored one is
@@ -20304,6 +20462,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ],
               ),
+            if (catalogFilter == null) ...[
+              const SizedBox(height: 10),
+              _unresolvedLocationAuditButton(),
+            ],
           ],
         ),
       );

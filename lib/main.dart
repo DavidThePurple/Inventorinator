@@ -8157,6 +8157,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     locations = restored?.locations ?? [];
     auditLog = restored?.auditLog ?? [];
     final recoveredLocationParents = _recoverMissingLocationParents();
+    final repairedLocationAssignments = _reconcileMissingLocationAssignments();
     final recoveredReferencedLocations = _recoverMissingReferencedLocations();
     layoutCanvasSizes = restored?.layoutCanvasSizes ?? {};
     shoppingList = restored?.shoppingList ?? [];
@@ -8494,6 +8495,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           'locations',
           location.id,
           encodeWorkshopEntityPayload('locations', location),
+        );
+      }
+      for (final item in repairedLocationAssignments) {
+        widget.database?.saveEntityPayloadAndQueue(
+          'inventory',
+          item.id,
+          _inventoryItemJson(item, includeBinary: false),
         );
       }
     }
@@ -17790,6 +17798,41 @@ class _InventoryHomeState extends State<InventoryHome> {
     return locationsById;
   }
 
+  /// Old item records can retain a location's former ID after its structured
+  /// record was restored under the same unique name. Reconnect those items by
+  /// name/path rather than blanking the assignment or creating a duplicate.
+  List<InventoryItem> _reconcileMissingLocationAssignments() {
+    final activeIds = locations.map((location) => location.id).toSet();
+    final matchesByName = <String, List<StockLocationRecord>>{};
+    for (final location in locations) {
+      matchesByName
+          .putIfAbsent(location.name.trim().toLowerCase(), () => [])
+          .add(location);
+      matchesByName
+          .putIfAbsent(_locationPath(location.id).trim().toLowerCase(), () => [])
+          .add(location);
+    }
+    final repaired = <InventoryItem>[];
+    for (var index = 0; index < inventory.length; index++) {
+      final item = inventory[index];
+      if (item.storageLocationId.isEmpty ||
+          activeIds.contains(item.storageLocationId)) {
+        continue;
+      }
+      final candidates =
+          matchesByName[item.storageLocation.trim().toLowerCase()] ?? const [];
+      final destination = candidates.length == 1 ? candidates.single : null;
+      if (destination == null) continue;
+      final updated = item.copyWith(
+        storageLocationId: destination.id,
+        storageLocation: _locationPath(destination.id),
+      );
+      inventory[index] = updated;
+      repaired.add(updated);
+    }
+    return repaired;
+  }
+
   /// A location ID can outlive its structured location record because every
   /// inventory row stores the assignment independently. Restore only IDs that
   /// are still referenced, or IDs that the audit trail says were created and
@@ -18217,6 +18260,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     var rebuildRoot = false;
     var inventoryChanged = false;
     var repairedLocationHierarchy = false;
+    final protectedLocationDeletes = <StockLocationRecord>[];
 
     T? decodedEntity<T>(
       WorkshopEntityChange change,
@@ -18501,7 +18545,16 @@ class _InventoryHomeState extends State<InventoryHome> {
             final removed = locations
                 .where((entry) => entry.id == change.entityId)
                 .firstOrNull;
-            if (removed != null) {
+            final stillAssigned = inventory.any(
+              (item) => item.storageLocationId == change.entityId,
+            );
+            if (removed != null && stillAssigned) {
+              // A location tombstone can arrive before the inventory records
+              // which are meant to move away from it. Never turn that race
+              // into mass unassignment: retain and re-sync the location until
+              // no inventory record references it.
+              protectedLocationDeletes.add(removed);
+            } else if (removed != null) {
               for (var index = 0; index < locations.length; index++) {
                 final child = locations[index];
                 if (child.parentId != removed.id) continue;
@@ -18584,6 +18637,14 @@ class _InventoryHomeState extends State<InventoryHome> {
           }
       }
       rememberAppliedChange(change);
+    }
+
+    for (final location in protectedLocationDeletes) {
+      widget.database?.saveEntityPayloadAndQueue(
+        'locations',
+        location.id,
+        encodeWorkshopEntityPayload('locations', location),
+      );
     }
 
     if (repairedLocationHierarchy) {
@@ -21733,9 +21794,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       final item = inventory[index];
       if (item.storageLocationId.isEmpty) continue;
       if (!validIds.contains(item.storageLocationId)) {
-        _publishInventoryItem(
-          item.copyWith(storageLocationId: '', storageLocation: ''),
-        );
+        // Location metadata may arrive after inventory during a remote sync.
+        // Keep the assignment intact until the location can be recovered;
+        // silently blanking it destroys the only surviving reference.
         continue;
       }
       _publishInventoryItem(
@@ -23294,188 +23355,336 @@ class _InventoryHomeState extends State<InventoryHome> {
     },
   );
 
-  Future<void> _openStockroom() => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => DefaultTabController(
-      length: 4,
-      child: StatefulBuilder(
-        builder: (context, refresh) {
-          final compact = MediaQuery.sizeOf(context).width < 600;
-          // A phone needs the entire usable canvas; a desktop can retain the
-          // resizable floating Stockroom window.
-          final dialogFullscreen = stockroomFullscreen || compact;
-          final sortedLocations = [
-            ...locations.where(
-              (location) =>
-                  location.parentId == null ||
-                  location.displayAsParentUniqueLocation,
-            ),
-          ]..sort((a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)));
-          return AlertDialog(
-            key: const Key('stockroom-dialog'),
-            insetPadding: dialogFullscreen ? EdgeInsets.zero : null,
-            title: Row(
-              children: [
-                const Icon(Icons.warehouse_outlined),
-                const SizedBox(width: 10),
-                const Expanded(child: Text('Stockroom')),
-                if (!compact)
-                  IconButton(
-                    key: const Key('toggle-stockroom-fullscreen'),
-                    tooltip: stockroomFullscreen
-                        ? 'Exit full screen'
-                        : 'Full screen',
-                    onPressed: () => refresh(() {
-                      stockroomFullscreen = !stockroomFullscreen;
-                      _layoutFrameKey = null;
-                      _layoutFrameRequested = true;
-                    }),
-                    icon: _FullscreenIcon(expanded: stockroomFullscreen),
+  Future<void> _openStockroom() {
+    var locationQuery = '';
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => DefaultTabController(
+        length: 4,
+        child: StatefulBuilder(
+          builder: (context, refresh) {
+            final compact = MediaQuery.sizeOf(context).width < 600;
+            // A phone needs the entire usable canvas; a desktop can retain the
+            // resizable floating Stockroom window.
+            final dialogFullscreen = stockroomFullscreen || compact;
+            final sortedLocations =
+                [
+                  ...locations.where(
+                    (location) =>
+                        location.parentId == null ||
+                        location.displayAsParentUniqueLocation,
                   ),
-                IconButton(
-                  key: const Key('close-stockroom'),
-                  tooltip: 'Close Stockroom',
-                  onPressed: () => Navigator.pop(dialogContext),
-                  style: _destructiveIconButtonStyle(context),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
-            content: SizedBox(
-              width: dialogFullscreen
-                  ? MediaQuery.sizeOf(context).width
-                  : _stockroomDialogSize.width,
-              height: dialogFullscreen
-                  ? MediaQuery.sizeOf(context).height
-                  : _stockroomDialogSize.height,
-              child: Stack(
-                clipBehavior: Clip.none,
+                ]..sort(
+                  (a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)),
+                );
+            final locationNeedle = _normalized(locationQuery);
+            final shownLocations = sortedLocations
+                .where(
+                  (location) =>
+                      locationNeedle.isEmpty ||
+                      _normalized(
+                        '${_locationPath(location.id)} ${location.name} ${locationKindLabel(location.kind)}',
+                      ).contains(locationNeedle),
+                )
+                .toList();
+            return AlertDialog(
+              key: const Key('stockroom-dialog'),
+              insetPadding: dialogFullscreen ? EdgeInsets.zero : null,
+              title: Row(
                 children: [
-                  Column(
-                    children: [
-                      const TabBar(
-                        tabs: [
-                          Tab(
-                            icon: Icon(Icons.inventory_2_outlined),
-                            text: 'Items',
-                          ),
-                          Tab(icon: _LayoutTabIcon(), text: 'Layout'),
-                          Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
-                          Tab(
-                            icon: Icon(Icons.swap_horiz_rounded),
-                            text: 'Checked out',
-                          ),
-                        ],
-                      ),
-                      Expanded(
-                        child: TabBarView(
-                          physics: _layoutEditMode
-                              ? const NeverScrollableScrollPhysics()
-                              : const PageScrollPhysics(),
-                          children: [
-                            Column(
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      'Locations',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                  const Icon(Icons.warehouse_outlined),
+                  const SizedBox(width: 10),
+                  const Expanded(child: Text('Stockroom')),
+                  if (!compact)
+                    IconButton(
+                      key: const Key('toggle-stockroom-fullscreen'),
+                      tooltip: stockroomFullscreen
+                          ? 'Exit full screen'
+                          : 'Full screen',
+                      onPressed: () => refresh(() {
+                        stockroomFullscreen = !stockroomFullscreen;
+                        _layoutFrameKey = null;
+                        _layoutFrameRequested = true;
+                      }),
+                      icon: _FullscreenIcon(expanded: stockroomFullscreen),
+                    ),
+                  IconButton(
+                    key: const Key('close-stockroom'),
+                    tooltip: 'Close Stockroom',
+                    onPressed: () => Navigator.pop(dialogContext),
+                    style: _destructiveIconButtonStyle(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: dialogFullscreen
+                    ? MediaQuery.sizeOf(context).width
+                    : _stockroomDialogSize.width,
+                height: dialogFullscreen
+                    ? MediaQuery.sizeOf(context).height
+                    : _stockroomDialogSize.height,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Column(
+                      children: [
+                        const TabBar(
+                          tabs: [
+                            Tab(
+                              icon: Icon(Icons.inventory_2_outlined),
+                              text: 'Items',
+                            ),
+                            Tab(icon: _LayoutTabIcon(), text: 'Layout'),
+                            Tab(icon: _ShoppingCartIcon(), text: 'Shopping'),
+                            Tab(
+                              icon: Icon(Icons.swap_horiz_rounded),
+                              text: 'Checked out',
+                            ),
+                          ],
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            physics: _layoutEditMode
+                                ? const NeverScrollableScrollPhysics()
+                                : const PageScrollPhysics(),
+                            children: [
+                              Column(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      4,
+                                      12,
+                                      4,
+                                      4,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Expanded(
+                                          child: Text(
+                                            'Locations',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: compact ? 190 : 280,
+                                          child: TextField(
+                                            key: const Key(
+                                              'stockroom-location-search',
+                                            ),
+                                            decoration: InputDecoration(
+                                              isDense: true,
+                                              prefixIcon: const Icon(
+                                                Icons.search_rounded,
+                                              ),
+                                              hintText: 'Search locations',
+                                              suffixIcon: locationQuery.isEmpty
+                                                  ? null
+                                                  : IconButton(
+                                                      key: const Key(
+                                                        'clear-stockroom-location-search',
+                                                      ),
+                                                      tooltip: 'Clear location search',
+                                                      onPressed: () => refresh(
+                                                        () =>
+                                                            locationQuery = '',
+                                                      ),
+                                                      icon: const Icon(
+                                                        Icons
+                                                            .backspace_outlined,
+                                                      ),
+                                                    ),
+                                            ),
+                                            onChanged: (value) => refresh(
+                                              () => locationQuery = value,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ),
-                                Expanded(
-                                  child: Stack(
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 68,
-                                        ),
-                                        child: sortedLocations.isEmpty
-                                            ? const Center(
-                                                child: Text(
-                                                  'Draw or add a top-level room, rack, cabinet, or cart.',
-                                                ),
-                                              )
-                                            : ListView.builder(
-                                                itemCount:
-                                                    sortedLocations.length,
-                                                itemBuilder: (context, index) {
-                                                  final location =
-                                                      sortedLocations[index];
-                                                  final count = inventory
-                                                      .where(
-                                                        (item) =>
-                                                            item.storageLocationId ==
-                                                            location.id,
-                                                      )
-                                                      .length;
-                                                  Widget
-                                                  locationActions() => Row(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      IconButton.filledTonal(
-                                                        key: Key(
-                                                          'move-items-location-${location.id}',
+                                  Expanded(
+                                    child: Stack(
+                                      children: [
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 68,
+                                          ),
+                                          child: sortedLocations.isEmpty
+                                              ? const Center(
+                                                  child: Text(
+                                                    'Draw or add a top-level room, rack, cabinet, or cart.',
+                                                  ),
+                                                )
+                                              : shownLocations.isEmpty
+                                              ? const Center(
+                                                  child: Text(
+                                                    'No locations match that search.',
+                                                  ),
+                                                )
+                                              : ListView.builder(
+                                                  itemCount:
+                                                      shownLocations.length,
+                                                  itemBuilder: (context, index) {
+                                                    final location =
+                                                        shownLocations[index];
+                                                    final count = inventory
+                                                        .where(
+                                                          (item) =>
+                                                              item.storageLocationId ==
+                                                              location.id,
+                                                        )
+                                                        .length;
+                                                    Widget
+                                                    locationActions() => Row(
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        IconButton.filledTonal(
+                                                          key: Key(
+                                                            'move-items-location-${location.id}',
+                                                          ),
+                                                          tooltip: 'Move items',
+                                                          onPressed: () =>
+                                                              _moveItemsToLocation(
+                                                                location,
+                                                                refresh,
+                                                              ),
+                                                          icon: const Icon(
+                                                            Icons
+                                                                .drive_file_move_outline,
+                                                          ),
                                                         ),
-                                                        tooltip: 'Move items',
-                                                        onPressed: () =>
-                                                            _moveItemsToLocation(
-                                                              location,
-                                                              refresh,
+                                                        const SizedBox(
+                                                          width: 4,
+                                                        ),
+                                                        IconButton(
+                                                          key: Key(
+                                                            'rename-location-${location.id}',
+                                                          ),
+                                                          tooltip:
+                                                              'Rename ${_locationPath(location.id)}',
+                                                          onPressed: () =>
+                                                              _renameLocation(
+                                                                location,
+                                                                refresh,
+                                                              ),
+                                                          icon: const Icon(
+                                                            Icons.edit_outlined,
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          key: Key(
+                                                            'delete-location-${location.id}',
+                                                          ),
+                                                          tooltip:
+                                                              'Delete ${_locationPath(location.id)}',
+                                                          style:
+                                                              _destructiveIconButtonStyle(
+                                                                context,
+                                                              ),
+                                                          onPressed: () =>
+                                                              _deleteLocation(
+                                                                location,
+                                                                refresh,
+                                                              ),
+                                                          icon: const Icon(
+                                                            Icons
+                                                                .delete_outline_rounded,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    );
+                                                    if (compact) {
+                                                      return Card(
+                                                        clipBehavior:
+                                                            Clip.antiAlias,
+                                                        child: InkWell(
+                                                          key: Key(
+                                                            'location-${location.id}',
+                                                          ),
+                                                          onTap: () =>
+                                                              _openLocation(
+                                                                location,
+                                                                stockroomRefresh:
+                                                                    refresh,
+                                                                initialTab: 1,
+                                                              ),
+                                                          child: Padding(
+                                                            padding:
+                                                                const EdgeInsets.fromLTRB(
+                                                                  14,
+                                                                  12,
+                                                                  8,
+                                                                  8,
+                                                                ),
+                                                            child: Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .stretch,
+                                                              children: [
+                                                                Row(
+                                                                  crossAxisAlignment:
+                                                                      CrossAxisAlignment
+                                                                          .start,
+                                                                  children: [
+                                                                    Padding(
+                                                                      padding:
+                                                                          const EdgeInsets.only(
+                                                                            top:
+                                                                                2,
+                                                                          ),
+                                                                      child: _LocationIcon(
+                                                                        kind: location
+                                                                            .kind,
+                                                                        key: Key(
+                                                                          'location-pin-${location.id}',
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                    const SizedBox(
+                                                                      width: 12,
+                                                                    ),
+                                                                    Expanded(
+                                                                      child: Column(
+                                                                        crossAxisAlignment:
+                                                                            CrossAxisAlignment.start,
+                                                                        children: [
+                                                                          Text(
+                                                                            _locationPath(
+                                                                              location.id,
+                                                                            ),
+                                                                          ),
+                                                                          Text(
+                                                                            '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                                const SizedBox(
+                                                                  height: 6,
+                                                                ),
+                                                                Align(
+                                                                  alignment:
+                                                                      Alignment
+                                                                          .centerRight,
+                                                                  child:
+                                                                      locationActions(),
+                                                                ),
+                                                              ],
                                                             ),
-                                                        icon: const Icon(
-                                                          Icons
-                                                              .drive_file_move_outline,
+                                                          ),
                                                         ),
-                                                      ),
-                                                      const SizedBox(width: 4),
-                                                      IconButton(
-                                                        key: Key(
-                                                          'rename-location-${location.id}',
-                                                        ),
-                                                        tooltip:
-                                                            'Rename ${_locationPath(location.id)}',
-                                                        onPressed: () =>
-                                                            _renameLocation(
-                                                              location,
-                                                              refresh,
-                                                            ),
-                                                        icon: const Icon(
-                                                          Icons.edit_outlined,
-                                                        ),
-                                                      ),
-                                                      IconButton(
-                                                        key: Key(
-                                                          'delete-location-${location.id}',
-                                                        ),
-                                                        tooltip:
-                                                            'Delete ${_locationPath(location.id)}',
-                                                        style:
-                                                            _destructiveIconButtonStyle(
-                                                              context,
-                                                            ),
-                                                        onPressed: () =>
-                                                            _deleteLocation(
-                                                              location,
-                                                              refresh,
-                                                            ),
-                                                        icon: const Icon(
-                                                          Icons
-                                                              .delete_outline_rounded,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                  if (compact) {
+                                                      );
+                                                    }
                                                     return Card(
                                                       clipBehavior:
                                                           Clip.antiAlias,
-                                                      child: InkWell(
+                                                      child: ListTile(
                                                         key: Key(
                                                           'location-${location.id}',
                                                         ),
@@ -23486,373 +23695,292 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                                   refresh,
                                                               initialTab: 1,
                                                             ),
-                                                        child: Padding(
-                                                          padding:
-                                                              const EdgeInsets.fromLTRB(
-                                                                14,
-                                                                12,
-                                                                8,
-                                                                8,
-                                                              ),
-                                                          child: Column(
-                                                            crossAxisAlignment:
-                                                                CrossAxisAlignment
-                                                                    .stretch,
-                                                            children: [
-                                                              Row(
-                                                                crossAxisAlignment:
-                                                                    CrossAxisAlignment
-                                                                        .start,
-                                                                children: [
-                                                                  Padding(
-                                                                    padding:
-                                                                        const EdgeInsets.only(
-                                                                          top:
-                                                                              2,
-                                                                        ),
-                                                                    child: _LocationIcon(
-                                                                      kind: location
-                                                                          .kind,
-                                                                      key: Key(
-                                                                        'location-pin-${location.id}',
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                  const SizedBox(
-                                                                    width: 12,
-                                                                  ),
-                                                                  Expanded(
-                                                                    child: Column(
-                                                                      crossAxisAlignment:
-                                                                          CrossAxisAlignment
-                                                                              .start,
-                                                                      children: [
-                                                                        Text(
-                                                                          _locationPath(
-                                                                            location.id,
-                                                                          ),
-                                                                        ),
-                                                                        Text(
-                                                                          '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
-                                                                        ),
-                                                                      ],
-                                                                    ),
-                                                                  ),
-                                                                ],
-                                                              ),
-                                                              const SizedBox(
-                                                                height: 6,
-                                                              ),
-                                                              Align(
-                                                                alignment: Alignment
-                                                                    .centerRight,
-                                                                child:
-                                                                    locationActions(),
-                                                              ),
-                                                            ],
+                                                        leading: _LocationIcon(
+                                                          kind: location.kind,
+                                                          key: Key(
+                                                            'location-pin-${location.id}',
                                                           ),
                                                         ),
+                                                        title: Text(
+                                                          _locationPath(
+                                                            location.id,
+                                                          ),
+                                                        ),
+                                                        subtitle: Text(
+                                                          '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
+                                                        ),
+                                                        trailing:
+                                                            locationActions(),
                                                       ),
                                                     );
-                                                  }
-                                                  return Card(
-                                                    clipBehavior:
-                                                        Clip.antiAlias,
-                                                    child: ListTile(
-                                                      key: Key(
-                                                        'location-${location.id}',
-                                                      ),
-                                                      onTap: () =>
-                                                          _openLocation(
-                                                            location,
-                                                            stockroomRefresh:
-                                                                refresh,
-                                                            initialTab: 1,
-                                                          ),
-                                                      leading: _LocationIcon(
-                                                        kind: location.kind,
-                                                        key: Key(
-                                                          'location-pin-${location.id}',
-                                                        ),
-                                                      ),
-                                                      title: Text(
-                                                        _locationPath(
-                                                          location.id,
-                                                        ),
-                                                      ),
-                                                      subtitle: Text(
-                                                        '${locationKindLabel(location.kind)} · ${location.depthRows} row${location.depthRows == 1 ? '' : 's'} deep · $count item${count == 1 ? '' : 's'}',
-                                                      ),
-                                                      trailing:
-                                                          locationActions(),
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                      ),
-                                      Positioned(
-                                        left: 0,
-                                        right: 0,
-                                        bottom: 0,
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(
-                                            14,
-                                          ),
-                                          child: BackdropFilter(
-                                            filter: ui.ImageFilter.blur(
-                                              sigmaX: 10,
-                                              sigmaY: 10,
+                                                  },
+                                                ),
+                                        ),
+                                        Positioned(
+                                          left: 0,
+                                          right: 0,
+                                          bottom: 0,
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              14,
                                             ),
-                                            child: Container(
-                                              padding: const EdgeInsets.all(8),
-                                              decoration: BoxDecoration(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .surface
-                                                    .withValues(alpha: .12),
-                                                border: Border.all(
+                                            child: BackdropFilter(
+                                              filter: ui.ImageFilter.blur(
+                                                sigmaX: 10,
+                                                sigmaY: 10,
+                                              ),
+                                              child: Container(
+                                                padding: const EdgeInsets.all(
+                                                  8,
+                                                ),
+                                                decoration: BoxDecoration(
                                                   color: Theme.of(context)
                                                       .colorScheme
-                                                      .outlineVariant
-                                                      .withValues(alpha: .28),
+                                                      .surface
+                                                      .withValues(alpha: .12),
+                                                  border: Border.all(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .outlineVariant
+                                                        .withValues(alpha: .28),
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
                                                 ),
-                                                borderRadius:
-                                                    BorderRadius.circular(14),
-                                              ),
-                                              child: Align(
-                                                alignment:
-                                                    Alignment.centerRight,
-                                                child: FilledButton.icon(
-                                                  key: const Key(
-                                                    'add-location',
-                                                  ),
-                                                  onPressed: () =>
-                                                      _addLocation(refresh),
-                                                  icon: const Icon(
-                                                    Icons.add_rounded,
-                                                  ),
-                                                  label: const Text(
-                                                    'Add location',
+                                                child: Align(
+                                                  alignment:
+                                                      Alignment.centerRight,
+                                                  child: FilledButton.icon(
+                                                    key: const Key(
+                                                      'add-location',
+                                                    ),
+                                                    onPressed: () =>
+                                                        _addLocation(refresh),
+                                                    icon: const Icon(
+                                                      Icons.add_rounded,
+                                                    ),
+                                                    label: const Text(
+                                                      'Add location',
+                                                    ),
                                                   ),
                                                 ),
                                               ),
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              children: [
-                                Expanded(
-                                  child: _layoutEditor(
-                                    parentId: null,
-                                    title: 'Top-down shop layout. Drag blank grid to add a named room, rack, cabinet, or cart.',
-                                    stockroomRefresh: refresh,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            shoppingList.isEmpty
-                                ? const Center(
-                                    child: Text(
-                                      'Add shortages from a kit BOM to shop and receive them here.',
-                                      textAlign: TextAlign.center,
+                                      ],
                                     ),
-                                  )
-                                : ListView.builder(
-                                    padding: const EdgeInsets.only(top: 10),
-                                    itemCount: shoppingList.length,
-                                    itemBuilder: (context, index) {
-                                      final entry = shoppingList[index];
-                                      final remaining = math.max(
-                                        0,
-                                        entry.quantityNeeded -
-                                            entry.quantityReceived,
-                                      );
-                                      return Card(
-                                        key: Key('shopping-${entry.id}'),
-                                        child: Padding(
-                                          padding: const EdgeInsets.fromLTRB(
-                                            14,
-                                            12,
-                                            8,
-                                            8,
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.stretch,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  entry.status ==
-                                                          ShoppingListStatus
-                                                              .received
-                                                      ? const Icon(
-                                                          Icons
-                                                              .check_circle_rounded,
-                                                        )
-                                                      : const _ShoppingCartIcon(),
-                                                  const SizedBox(width: 10),
-                                                  Expanded(
-                                                    child: Text(
-                                                      entry.name,
-                                                      style: const TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.w700,
+                                  ),
+                                ],
+                              ),
+                              Column(
+                                children: [
+                                  Expanded(
+                                    child: _layoutEditor(
+                                      parentId: null,
+                                      title: 'Top-down shop layout. Drag blank grid to add a named room, rack, cabinet, or cart.',
+                                      stockroomRefresh: refresh,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              shoppingList.isEmpty
+                                  ? const Center(
+                                      child: Text(
+                                        'Add shortages from a kit BOM to shop and receive them here.',
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    )
+                                  : ListView.builder(
+                                      padding: const EdgeInsets.only(top: 10),
+                                      itemCount: shoppingList.length,
+                                      itemBuilder: (context, index) {
+                                        final entry = shoppingList[index];
+                                        final remaining = math.max(
+                                          0,
+                                          entry.quantityNeeded -
+                                              entry.quantityReceived,
+                                        );
+                                        return Card(
+                                          key: Key('shopping-${entry.id}'),
+                                          child: Padding(
+                                            padding: const EdgeInsets.fromLTRB(
+                                              14,
+                                              12,
+                                              8,
+                                              8,
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    entry.status ==
+                                                            ShoppingListStatus
+                                                                .received
+                                                        ? const Icon(
+                                                            Icons
+                                                                .check_circle_rounded,
+                                                          )
+                                                        : const _ShoppingCartIcon(),
+                                                    const SizedBox(width: 10),
+                                                    Expanded(
+                                                      child: Text(
+                                                        entry.name,
+                                                        style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
                                                       ),
                                                     ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                'Need ${_formatBomQuantity(entry.quantityNeeded)} · Received ${_formatBomQuantity(entry.quantityReceived)}${entry.quantityOrdered > 0 ? ' · Ordered ${_formatBomQuantity(entry.quantityOrdered)}' : ''}',
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Wrap(
-                                                alignment: WrapAlignment.end,
-                                                spacing: 6,
-                                                runSpacing: 6,
-                                                children: [
-                                                  if (entry.status ==
-                                                      ShoppingListStatus.needed)
-                                                    OutlinedButton(
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Need ${_formatBomQuantity(entry.quantityNeeded)} · Received ${_formatBomQuantity(entry.quantityReceived)}${entry.quantityOrdered > 0 ? ' · Ordered ${_formatBomQuantity(entry.quantityOrdered)}' : ''}',
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Wrap(
+                                                  alignment: WrapAlignment.end,
+                                                  spacing: 6,
+                                                  runSpacing: 6,
+                                                  children: [
+                                                    if (entry.status ==
+                                                        ShoppingListStatus
+                                                            .needed)
+                                                      OutlinedButton(
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            shoppingList[index] =
+                                                                entry.copyWith(
+                                                                  quantityOrdered:
+                                                                      entry
+                                                                          .quantityNeeded,
+                                                                  status:
+                                                                      ShoppingListStatus
+                                                                          .ordered,
+                                                                );
+                                                          });
+                                                          _persist();
+                                                          refresh(() {});
+                                                        },
+                                                        child: const Text(
+                                                          'Ordered',
+                                                        ),
+                                                      ),
+                                                    FilledButton(
+                                                      onPressed: remaining <= 0
+                                                          ? null
+                                                          : () =>
+                                                                _receiveShoppingEntry(
+                                                                  entry,
+                                                                  refresh,
+                                                                ),
+                                                      child: const Text(
+                                                        'Receive',
+                                                      ),
+                                                    ),
+                                                    IconButton(
+                                                      key: Key(
+                                                        'remove-shopping-${entry.id}',
+                                                      ),
+                                                      tooltip: 'Remove from shopping list',
+                                                      style:
+                                                          _destructiveIconButtonStyle(
+                                                            context,
+                                                          ),
                                                       onPressed: () {
-                                                        setState(() {
-                                                          shoppingList[index] =
-                                                              entry.copyWith(
-                                                                quantityOrdered:
-                                                                    entry
-                                                                        .quantityNeeded,
-                                                                status:
-                                                                    ShoppingListStatus
-                                                                        .ordered,
-                                                              );
-                                                        });
+                                                        setState(
+                                                          () => shoppingList
+                                                              .removeAt(index),
+                                                        );
                                                         _persist();
                                                         refresh(() {});
                                                       },
-                                                      child: const Text(
-                                                        'Ordered',
-                                                      ),
-                                                    ),
-                                                  FilledButton(
-                                                    onPressed: remaining <= 0
-                                                        ? null
-                                                        : () =>
-                                                              _receiveShoppingEntry(
-                                                                entry,
-                                                                refresh,
-                                                              ),
-                                                    child: const Text(
-                                                      'Receive',
-                                                    ),
-                                                  ),
-                                                  IconButton(
-                                                    key: Key(
-                                                      'remove-shopping-${entry.id}',
-                                                    ),
-                                                    tooltip: 'Remove from shopping list',
-                                                    style:
-                                                        _destructiveIconButtonStyle(
-                                                          context,
-                                                        ),
-                                                    onPressed: () {
-                                                      setState(
-                                                        () => shoppingList
-                                                            .removeAt(index),
-                                                      );
-                                                      _persist();
-                                                      refresh(() {});
-                                                    },
-                                                    icon:
-                                                        const _ShoppingCartIcon.remove(
-                                                          key: Key(
-                                                            'remove-shopping-cart-glyph',
+                                                      icon:
+                                                          const _ShoppingCartIcon.remove(
+                                                            key: Key(
+                                                              'remove-shopping-cart-glyph',
+                                                            ),
                                                           ),
-                                                        ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ],
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                            _stockroomCheckoutsTab(refresh),
-                          ],
+                                        );
+                                      },
+                                    ),
+                              _stockroomCheckoutsTab(refresh),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  if (!dialogFullscreen)
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.resizeUpLeftDownRight,
-                        child: Listener(
-                          behavior: HitTestBehavior.opaque,
-                          onPointerMove: (event) {
-                            if (event.buttons & kPrimaryMouseButton == 0) {
-                              return;
-                            }
-                            _stockroomDialogResizeRemainder += event.delta;
-                            final delta = _stockroomDialogResizeRemainder;
-                            _stockroomDialogResizeRemainder = Offset.zero;
-                            final available = MediaQuery.sizeOf(context);
-                            refresh(() {
-                              _stockroomDialogSize = Size(
-                                (_stockroomDialogSize.width + delta.dx).clamp(
-                                  420.0,
-                                  available.width - 64,
-                                ),
-                                (_stockroomDialogSize.height + delta.dy).clamp(
-                                  360.0,
-                                  available.height - 96,
-                                ),
-                              );
-                            });
-                          },
-                          onPointerUp: (_) {
-                            _stockroomDialogResizeRemainder = Offset.zero;
-                            _layoutFrameKey = null;
-                            _layoutFrameRequested = true;
-                            refresh(() {});
-                          },
-                          child: Tooltip(
-                            message: 'Drag to resize Stockroom',
-                            child: SizedBox(
-                              width: 38,
-                              height: 38,
-                              child: CustomPaint(
-                                painter: _LayoutDogearPainter(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer,
-                                  lineColor: Theme.of(context)
-                                      .colorScheme
-                                      .primary,
+                      ],
+                    ),
+                    if (!dialogFullscreen)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                          child: Listener(
+                            behavior: HitTestBehavior.opaque,
+                            onPointerMove: (event) {
+                              if (event.buttons & kPrimaryMouseButton == 0) {
+                                return;
+                              }
+                              _stockroomDialogResizeRemainder += event.delta;
+                              final delta = _stockroomDialogResizeRemainder;
+                              _stockroomDialogResizeRemainder = Offset.zero;
+                              final available = MediaQuery.sizeOf(context);
+                              refresh(() {
+                                _stockroomDialogSize = Size(
+                                  (_stockroomDialogSize.width + delta.dx).clamp(
+                                    420.0,
+                                    available.width - 64,
+                                  ),
+                                  (_stockroomDialogSize.height + delta.dy)
+                                      .clamp(360.0, available.height - 96),
+                                );
+                              });
+                            },
+                            onPointerUp: (_) {
+                              _stockroomDialogResizeRemainder = Offset.zero;
+                              _layoutFrameKey = null;
+                              _layoutFrameRequested = true;
+                              refresh(() {});
+                            },
+                            child: Tooltip(
+                              message: 'Drag to resize Stockroom',
+                              child: SizedBox(
+                                width: 38,
+                                height: 38,
+                                child: CustomPaint(
+                                  painter: _LayoutDogearPainter(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer,
+                                    lineColor: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   /// Everything that is out, grouped by who has it, with overdue returns first.
   Widget _stockroomCheckoutsTab(StateSetter refresh) {

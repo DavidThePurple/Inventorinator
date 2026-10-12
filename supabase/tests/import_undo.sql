@@ -36,8 +36,29 @@ begin
   if not (select deleted from public.inventorinator_entities where workspace_id=w and entity_id='IMPORT-A') then raise exception 'Eligible undo did not delete'; end if;
   -- Replaying an acknowledged undo is harmless.
   perform public.apply_inventorinator_entity_changes(w,'device',request);
-  -- Ordinary v29 delete behavior is unchanged.
-  perform public.apply_inventorinator_entity_changes(w,'device','[{"entityType":"inventory","entityId":"IMPORT-B","fields":{"quantity":5}},{"entityType":"inventory","entityId":"IMPORT-B","fields":{},"deleted":true,"baseFields":{"(deleted)":{"quantity":1}}}]');
+  -- Ordinary deletes require an explicit confirmation and the current Remote
+  -- baseline, while imports keep their separately guarded undo path.
+  perform public.apply_inventorinator_entity_changes(
+    w, 'device',
+    '[{"entityType":"inventory","entityId":"IMPORT-B","fields":{"quantity":5}}]'
+  );
+  perform public.apply_inventorinator_entity_changes(
+    w, 'device',
+    jsonb_build_array(jsonb_build_object(
+      'entityType', 'inventory',
+      'entityId', 'IMPORT-B',
+      'fields', '{}'::jsonb,
+      'deleted', true,
+      'baseFields', jsonb_build_object(
+        '(confirmedDelete)', true,
+        '(deleted)', (
+          select payload from public.inventorinator_entities
+          where workspace_id = w and entity_type = 'inventory'
+            and entity_id = 'IMPORT-B' and not deleted
+        )
+      )
+    ))
+  );
   if not (select deleted from public.inventorinator_entities where workspace_id=w and entity_id='IMPORT-B') then raise exception 'Ordinary deletion regressed'; end if;
 end; $$;
 rollback;

@@ -68,12 +68,20 @@ $$;
 select public.apply_inventorinator_entity_changes(
   '60000000-0000-0000-0000-000000000001',
   'test-device',
-  '[{
-    "entityType":"inventory",
-    "entityId":"INV-A",
-    "fields":{},
-    "deleted":true
-  }]'::jsonb
+  jsonb_build_array(jsonb_build_object(
+    'entityType', 'inventory',
+    'entityId', 'INV-A',
+    'fields', '{}'::jsonb,
+    'deleted', true,
+    'baseFields', jsonb_build_object(
+      '(confirmedDelete)', true,
+      '(deleted)', (
+        select payload from public.inventorinator_entities
+        where workspace_id = '60000000-0000-0000-0000-000000000001'
+          and entity_type = 'inventory' and entity_id = 'INV-A' and not deleted
+      )
+    )
+  ))
 );
 
 do $$
@@ -145,12 +153,12 @@ $$;
 select public.apply_inventorinator_entity_changes(
   '60000000-0000-0000-0000-000000000001',
   'current-device',
-  '[{
-    "entityType":"locations",
-    "entityId":"LOC-EMPTY",
-    "fields":{},
-    "deleted":true
-  }]'::jsonb
+  jsonb_build_array(jsonb_build_object(
+    'entityType', 'locations',
+    'entityId', 'LOC-EMPTY',
+    'fields', '{}'::jsonb,
+    'deleted', true
+  ))
 );
 
 do $$

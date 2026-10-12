@@ -13213,6 +13213,30 @@ class _InventoryHomeState extends State<InventoryHome> {
     _persist();
   }
 
+  /// Critical messages require an explicit acknowledgement. They are never a
+  /// short-lived toast that can disappear before the person can act on it.
+  Future<void> _showBlockingNotice({
+    required String title,
+    required String message,
+  }) => showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => PopScope(
+      canPop: false,
+      child: AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    ),
+  );
+
   Future<bool> _offerSuggestedLocationCreation(
     ({String name, String id, List<InventoryItem> items}) group,
   ) async {
@@ -13255,9 +13279,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       return false;
     }
     if (locations.isEmpty) {
-      showInventorinatorAlert(
-        context,
-        const SnackBar(content: Text('Create a saved location first.')),
+      await _showBlockingNotice(
+        title: 'No saved locations yet',
+        message: 'Create a saved location first, then return here to assign these items.',
       );
       return false;
     }
@@ -13324,13 +13348,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     final destinationPath = _locationPath(destinationLocation.id);
     _commitUnresolvedLocationAssignment(group, destinationLocation);
     if (!mounted) return false;
-    showInventorinatorAlert(
-      context,
-      SnackBar(
-        content: Text(
-          '${group.items.length} item${group.items.length == 1 ? '' : 's'} assigned to $destinationPath.',
-        ),
-      ),
+    await _showBlockingNotice(
+      title: 'Location assigned',
+      message:
+          '${group.items.length} item${group.items.length == 1 ? '' : 's'} are now assigned to $destinationPath.',
     );
     return true;
   }
@@ -19725,13 +19746,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         _autoSyncPausedForAppUpdate = true;
         _syncPoll?.cancel();
         if (mounted) {
-          showInventorinatorAlert(
-            context,
-            const SnackBar(
-              content: Text(
-                'Your Remote\'s database schema is out of date. Please run migrations.',
-              ),
-              duration: Duration(seconds: 10),
+          unawaited(
+            _showBlockingNotice(
+              title: 'Remote migration required',
+              message: 'Your Remote\'s database schema is out of date. Please run migrations, then sync again.',
             ),
           );
         }
@@ -19739,13 +19757,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         _autoSyncPausedForAppUpdate = true;
         _syncPoll?.cancel();
         if (mounted) {
-          showInventorinatorAlert(
-            context,
-            const SnackBar(
-              content: Text(
-                'Your app version is too far behind the Remote\'s database schema. Please update to sync with Remote.',
-              ),
-              duration: Duration(seconds: 10),
+          unawaited(
+            _showBlockingNotice(
+              title: 'App update required',
+              message: 'Your app version is too far behind the Remote\'s database schema. Update Inventorinator before syncing with this Remote.',
             ),
           );
         }
@@ -19761,13 +19776,10 @@ class _InventoryHomeState extends State<InventoryHome> {
             'Automatic sync paused until Remote Settings is reopened: $error',
           );
           if (mounted && canManageWorkspaceDevices(config.workspaceRole)) {
-            showInventorinatorAlert(
-              context,
-              const SnackBar(
-                content: Text(
-                  'Remote session expired. Open Remote Settings to reconnect.',
-                ),
-                duration: Duration(seconds: 8),
+            unawaited(
+              _showBlockingNotice(
+                title: 'Remote reconnect required',
+                message: 'This device\'s Remote session expired. Open Remote Settings to reconnect before syncing again.',
               ),
             );
           }

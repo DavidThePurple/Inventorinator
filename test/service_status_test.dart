@@ -189,6 +189,13 @@ void main() {
       ),
       ConnectionStateLed.limited,
     );
+    expect(find.text('Remote migration required'), findsOneWidget);
+    expect(
+      find.textContaining('Please run migrations, then sync again.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 10));
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() => db.waitForPendingWrites());

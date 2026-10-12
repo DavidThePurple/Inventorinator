@@ -1382,6 +1382,9 @@ class LocalDatabase {
         entityId: entityId,
         fields: const {},
         deleted: true,
+        // Tombstones must originate in an explicit user action, never from a
+        // device merely lacking a record in its local snapshot.
+        baseFields: const {'(explicitDelete)': true},
       ),
     ]);
   }

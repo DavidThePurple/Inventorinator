@@ -39,6 +39,7 @@ begin
       'fields', '{}'::jsonb,
       'deleted', true,
       'baseFields', jsonb_build_object(
+        '(explicitDelete)', true,
         '(deleted)', (
           select payload from public.inventorinator_entities
           where workspace_id = w and entity_type = 'kits'
@@ -66,6 +67,7 @@ begin
       'deleted', true,
       'baseFields', jsonb_build_object(
         '(confirmedDelete)', true,
+        '(explicitDelete)', true,
         '(deleted)', (
           select payload from public.inventorinator_entities
           where workspace_id = w and entity_type = 'inventory'

@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/workshop_delta.dart';
 
 void main() {
-  test('diff emits only changed fields and tombstones', () {
+  test('snapshot diff emits only changed fields, never tombstones', () {
     final changes = diffWorkshopStates(
       jsonEncode({
         'schemaVersion': 8,
@@ -23,12 +23,11 @@ void main() {
       }),
     );
 
-    expect(changes, hasLength(2));
+    expect(changes, hasLength(1));
     expect(changes.first.entityType, 'inventory');
     expect(changes.first.entityId, 'A');
     expect(changes.first.fields, {'quantity': 3});
-    expect(changes.last.entityId, 'B');
-    expect(changes.last.deleted, isTrue);
+    expect(changes.where((change) => change.deleted), isEmpty);
   });
 
   test('changes update one record without replacing its neighbors', () {

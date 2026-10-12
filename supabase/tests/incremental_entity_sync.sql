@@ -75,6 +75,7 @@ select public.apply_inventorinator_entity_changes(
     'deleted', true,
     'baseFields', jsonb_build_object(
       '(confirmedDelete)', true,
+      '(explicitDelete)', true,
       '(deleted)', (
         select payload from public.inventorinator_entities
         where workspace_id = '60000000-0000-0000-0000-000000000001'
@@ -150,6 +151,36 @@ begin
 end;
 $$;
 
+-- A record missing from a device snapshot must never become a delete merely
+-- because that device can still supply the Remote's current baseline.
+do $$
+begin
+  begin
+    perform public.apply_inventorinator_entity_changes(
+      '60000000-0000-0000-0000-000000000001',
+      'stale-device',
+      jsonb_build_array(jsonb_build_object(
+        'entityType', 'locations',
+        'entityId', 'LOC-EMPTY',
+        'fields', '{}'::jsonb,
+        'deleted', true,
+        'baseFields', jsonb_build_object(
+          '(deleted)', jsonb_build_object(
+            'id', 'LOC-EMPTY',
+            'name', 'Empty shelf'
+          )
+        )
+      ))
+    );
+    raise exception 'snapshot omission deleted an empty location entity';
+  exception when others then
+    if sqlerrm not like 'Sync conflict: deletes must originate%' then
+      raise;
+    end if;
+  end;
+end;
+$$;
+
 select public.apply_inventorinator_entity_changes(
   '60000000-0000-0000-0000-000000000001',
   'current-device',
@@ -158,6 +189,7 @@ select public.apply_inventorinator_entity_changes(
     'entityId', 'LOC-EMPTY',
     'fields', '{}'::jsonb,
     'baseFields', jsonb_build_object(
+      '(explicitDelete)', true,
       '(deleted)', jsonb_build_object(
         'id', 'LOC-EMPTY',
         'name', 'Empty shelf'

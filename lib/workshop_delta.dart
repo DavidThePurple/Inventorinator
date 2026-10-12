@@ -266,16 +266,9 @@ List<WorkshopEntityChange> diffWorkshopStates(
         );
       }
     }
-    for (final id in oldRows.keys.where((id) => !newRows.containsKey(id))) {
-      changes.add(
-        WorkshopEntityChange(
-          entityType: type,
-          entityId: id,
-          fields: const {},
-          deleted: true,
-        ),
-      );
-    }
+    // A record absent from a snapshot may simply have never been loaded on
+    // this device. Deletion is intentionally excluded from state diffs and is
+    // emitted only by a confirmed in-app delete action.
   }
 
   final metadataFields = _changedFields(_metadata(before), _metadata(after));

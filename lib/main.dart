@@ -9874,15 +9874,19 @@ class _InventoryHomeState extends State<InventoryHome> {
     final database = widget.database!;
     final changes = <WorkshopEntityChange>[];
     for (final id in disk.removed) {
+      // A paged list can omit records that have not been loaded. Only the
+      // in-app Delete action marks an inventory ID as an intentional removal.
+      if (!_confirmedInventoryDeletes.contains(id)) continue;
       changes.add(
         WorkshopEntityChange(
           entityType: 'inventory',
           entityId: id,
           fields: const {},
           deleted: true,
-          baseFields: _confirmedInventoryDeletes.contains(id)
-              ? const {'(confirmedDelete)': true}
-              : null,
+          baseFields: const {
+            '(confirmedDelete)': true,
+            '(explicitDelete)': true,
+          },
         ),
       );
     }
@@ -11138,8 +11142,19 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   void _removeInventoryItem(String itemId) {
     _confirmedInventoryDeletes.add(itemId);
+    // Paged inventory tracks removals separately and publishes its explicitly
+    // confirmed tombstone in _flushDiskInventory. Every other list can queue
+    // its deliberate delete immediately.
+    if (_diskInventory == null && !_applyingCloudState) {
+      widget.database?.deleteEntityAndQueue('inventory', itemId);
+    }
     inventory.removeWhere((item) => item.id == itemId);
     _inventoryItemNotifiers.remove(itemId)?.dispose();
+  }
+
+  void _queueExplicitEntityDelete(String entityType, String entityId) {
+    if (_applyingCloudState) return;
+    widget.database?.deleteEntityAndQueue(entityType, entityId);
   }
 
   void _synchronizeInventoryNotifiers() {
@@ -11315,6 +11330,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final build in builds.where(
         (candidate) => selectedBuildIds.contains(candidate.id),
       )) {
+        _queueExplicitEntityDelete('builds', build.id);
         _recordAudit('delete', 'build', build.id, {'name': build.name});
       }
       builds.removeWhere((build) => selectedBuildIds.contains(build.id));
@@ -11412,6 +11428,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final kit in kits.where(
         (candidate) => selectedKitIds.contains(candidate.id),
       )) {
+        _queueExplicitEntityDelete('kits', kit.id);
         _recordAudit('delete', 'kit', kit.id, {
           'name': kit.name,
           'bulk': 'true',
@@ -11420,6 +11437,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final machine in machines.where(
         (candidate) => selectedMachineIds.contains(candidate.id),
       )) {
+        _queueExplicitEntityDelete('machines', machine.id);
         _recordAudit('delete', 'machine', machine.id, {
           'name': machine.name,
           'bulk': 'true',
@@ -11428,6 +11446,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       for (final build in builds.where(
         (candidate) => selectedBuildIds.contains(candidate.id),
       )) {
+        _queueExplicitEntityDelete('builds', build.id);
         _recordAudit('delete', 'build', build.id, {
           'name': build.name,
           'bulk': 'true',
@@ -13749,6 +13768,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     if (index < 0) return;
     setState(() {
+      _queueExplicitEntityDelete('spoolUsage', entry.id);
       spoolUsage.removeAt(index);
       final spool = inventory
           .where((item) => item.id == entry.spoolId)
@@ -13972,6 +13992,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       },
       onMaterialDeleted: (material) {
         setState(() {
+          _queueExplicitEntityDelete('materials', material.id);
           materials.removeWhere((candidate) => candidate.id == material.id);
           for (var index = 0; index < inventory.length; index++) {
             if (inventory[index].materialId == material.id) {
@@ -14022,6 +14043,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       },
       onCustomItemTypeDeleted: (customType) {
         setState(() {
+          _queueExplicitEntityDelete('customItemTypes', customType.id);
           customItemTypes.removeWhere(
             (candidate) => candidate.id == customType.id,
           );
@@ -16343,6 +16365,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           );
         }
       }
+      _queueExplicitEntityDelete('kits', kit.id);
       kits.removeWhere((candidate) => candidate.id == kit.id);
       for (var index = 0; index < machines.length; index++) {
         final machine = machines[index];
@@ -17511,7 +17534,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         _flushDiskInventory();
         final previous = database.loadState();
         final current = _currentStateJson();
-        final changes = diffWorkshopStates(previous, current);
+        // A record absent from a snapshot is not a Remote deletion. Explicit
+        // delete handlers queue their own tombstones before this fallback
+        // persistence path saves the current local state.
+        final changes = diffWorkshopStates(
+          previous,
+          current,
+        ).where((change) => !change.deleted).toList();
         wroteChange = changes.isNotEmpty;
         database.saveStateAndQueueChanges(current, changes);
       }
@@ -17647,21 +17676,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           wroteChange = true;
         }
       }
-      for (final removedId in previous.keys.where(
-        (id) => !current.containsKey(id),
-      )) {
-        unawaited(
-          database.queueWorkshopChanges([
-            WorkshopEntityChange(
-              entityType: collection.key,
-              entityId: removedId,
-              fields: const {},
-              deleted: true,
-            ),
-          ]),
-        );
-        wroteChange = true;
-      }
+      // Deliberate in-app delete handlers call deleteEntityAndQueue directly.
+      // Never infer a tombstone from a record being absent from one device.
       _persistedEntityReferences[collection.key] = current;
     }
     final metadata = _workshopMetadata();
@@ -22160,6 +22176,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
     }
     locations.removeWhere((entry) => entry.id == location.id);
+    _queueExplicitEntityDelete('locations', location.id);
     _refreshStructuredLocationPaths();
     _recordAudit('delete', 'location', location.id, {
       'name': oldPath,
@@ -25258,6 +25275,9 @@ class _InventoryHomeState extends State<InventoryHome> {
               entityType: row['entityType'],
               entityId: row['entityId'],
               deleted: field == '(remote deleted)',
+              baseFields: field == '(remote deleted)'
+                  ? const {'(explicitDelete)': true}
+                  : null,
               fields: field == '(remote deleted)'
                   ? {}
                   : field == '(deleted)'

@@ -24,6 +24,7 @@ select public.apply_inventorinator_entity_changes(
     'deleted', true,
     'baseFields', jsonb_build_object(
       '(confirmedDelete)', true,
+      '(explicitDelete)', true,
       '(deleted)', (
         select payload from public.inventorinator_entities
         where workspace_id = '34000000-0000-0000-0000-000000000010'

@@ -839,14 +839,25 @@ class LocalDatabase {
   /// per-entity storage. It is a recovery source only: active entity_state is
   /// always authoritative unless a live child points at a parent that vanished.
   List<Map<String, dynamic>> loadSnapshotLocationPayloads() {
+    return _loadSnapshotCollectionPayloads('locations');
+  }
+
+  /// Old whole-workshop snapshots retain audit records too.  They let a later
+  /// structured-store migration distinguish a location that was lost from one
+  /// the user intentionally deleted.
+  List<Map<String, dynamic>> loadSnapshotAuditPayloads() {
+    return _loadSnapshotCollectionPayloads('auditLog');
+  }
+
+  List<Map<String, dynamic>> _loadSnapshotCollectionPayloads(String key) {
     final rows = _database.select(
       'SELECT state_json FROM app_state WHERE id = 1',
     );
     if (rows.isEmpty) return const [];
     try {
       final root = jsonDecode(rows.first['state_json'] as String);
-      if (root is! Map || root['locations'] is! List) return const [];
-      return (root['locations'] as List)
+      if (root is! Map || root[key] is! List) return const [];
+      return (root[key] as List)
           .whereType<Map>()
           .map((entry) => Map<String, dynamic>.from(entry))
           .toList();

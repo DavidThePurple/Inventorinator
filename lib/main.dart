@@ -8155,13 +8155,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     kits = restored?.kits ?? [];
     builds = restored?.builds ?? [];
     locations = restored?.locations ?? [];
+    auditLog = restored?.auditLog ?? [];
     final recoveredLocationParents = _recoverMissingLocationParents();
+    final recoveredReferencedLocations = _recoverMissingReferencedLocations();
     layoutCanvasSizes = restored?.layoutCanvasSizes ?? {};
     shoppingList = restored?.shoppingList ?? [];
     _pinnedKitIds.addAll(_loadPinnedDragKits());
     _pinnedMachineIds.addAll(_loadPinnedDragMachines());
     final initializedLocations = _initializeLegacyLocations();
-    auditLog = restored?.auditLog ?? [];
     additionHistory =
         restored?.additionHistory ??
         (firstLaunch
@@ -8485,7 +8486,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (!firstLaunch) {
       _capturePersistedEntityReferences();
       _incrementalPersistenceReady = true;
-      for (final location in recoveredLocationParents) {
+      for (final location in [
+        ...recoveredLocationParents,
+        ...recoveredReferencedLocations,
+      ]) {
         widget.database?.saveEntityPayloadAndQueue(
           'locations',
           location.id,
@@ -17728,28 +17732,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   );
 
   List<StockLocationRecord> _recoverMissingLocationParents() {
-    final payloads = widget.database?.loadSnapshotLocationPayloads() ?? const [];
+    final payloads =
+        widget.database?.loadSnapshotLocationPayloads() ?? const [];
     if (payloads.isEmpty || locations.isEmpty) return const [];
-    final snapshotById = {
-      for (final payload in payloads)
-        if (payload['id'] is String && payload['name'] is String)
-          payload['id'] as String: StockLocationRecord(
-            id: payload['id'] as String,
-            name: payload['name'] as String,
-            parentId: payload['parentId'] as String?,
-            kind: StockLocationKind.values.firstWhere(
-              (kind) => kind.name == payload['kind'],
-              orElse: () => StockLocationKind.location,
-            ),
-            depthRows: (payload['depthRows'] as num?)?.toInt() ?? 1,
-            gridX: (payload['gridX'] as num?)?.toInt() ?? 0,
-            gridY: (payload['gridY'] as num?)?.toInt() ?? 0,
-            gridWidth: (payload['gridWidth'] as num?)?.toInt() ?? 3,
-            gridHeight: (payload['gridHeight'] as num?)?.toInt() ?? 2,
-            displayAsParentUniqueLocation:
-                payload['displayAsParentUniqueLocation'] == true,
-          ),
-    };
+    final snapshotById = _locationPayloadIndex(payloads);
     final activeIds = locations.map((location) => location.id).toSet();
     final recovered = <StockLocationRecord>[];
     while (true) {
@@ -17768,6 +17754,137 @@ class _InventoryHomeState extends State<InventoryHome> {
     return recovered;
   }
 
+  StockLocationRecord? _locationFromPayload(Map<String, dynamic> payload) {
+    final id = payload['id'];
+    final name = payload['name'];
+    if (id is! String || name is! String || id.isEmpty || name.trim().isEmpty) {
+      return null;
+    }
+    return StockLocationRecord(
+      id: id,
+      name: name,
+      parentId: payload['parentId'] as String?,
+      kind: StockLocationKind.values.firstWhere(
+        (kind) => kind.name == payload['kind'],
+        orElse: () => StockLocationKind.location,
+      ),
+      depthRows: (payload['depthRows'] as num?)?.toInt() ?? 1,
+      gridX: (payload['gridX'] as num?)?.toInt() ?? 0,
+      gridY: (payload['gridY'] as num?)?.toInt() ?? 0,
+      gridWidth: (payload['gridWidth'] as num?)?.toInt() ?? 3,
+      gridHeight: (payload['gridHeight'] as num?)?.toInt() ?? 2,
+      displayAsParentUniqueLocation:
+          payload['displayAsParentUniqueLocation'] == true,
+    );
+  }
+
+  Map<String, StockLocationRecord> _locationPayloadIndex(
+    Iterable<Map<String, dynamic>> payloads,
+  ) {
+    final locationsById = <String, StockLocationRecord>{};
+    for (final payload in payloads) {
+      final location = _locationFromPayload(payload);
+      if (location == null) continue;
+      locationsById[location.id] = location;
+    }
+    return locationsById;
+  }
+
+  /// A location ID can outlive its structured location record because every
+  /// inventory row stores the assignment independently. Restore only IDs that
+  /// are still referenced, or IDs that the audit trail says were created and
+  /// never deleted. This prevents a deleted workspace/room from reappearing.
+  List<StockLocationRecord> _recoverMissingReferencedLocations() {
+    final activeIds = locations.map((location) => location.id).toSet();
+    final snapshotById = _locationPayloadIndex(
+      widget.database?.loadSnapshotLocationPayloads() ?? const [],
+    );
+    final namesById = <String, String>{};
+    for (final item in inventory) {
+      final id = item.storageLocationId.trim();
+      final name = item.storageLocation.trim();
+      if (id.isNotEmpty && name.isNotEmpty && !name.contains(' / ')) {
+        namesById.putIfAbsent(id, () => name);
+      }
+    }
+
+    final created = <String, String>{};
+    final deleted = <String>{};
+    final auditPayloads = <Map<String, dynamic>>[
+      ...?widget.database?.loadSnapshotAuditPayloads(),
+    ];
+    for (final entry in auditLog) {
+      auditPayloads.add({
+        'entityType': entry.entityType,
+        'entityId': entry.entityId,
+        'action': entry.action,
+        'changes': entry.changes,
+      });
+    }
+    for (final entry in auditPayloads) {
+      if (entry['entityType'] != 'location') continue;
+      final id = entry['entityId'] as String? ?? '';
+      if (id.isEmpty) continue;
+      final action = (entry['action'] as String? ?? '').toLowerCase();
+      if (action.contains('delete')) {
+        deleted.add(id);
+        created.remove(id);
+        continue;
+      }
+      if (!action.contains('create')) continue;
+      final changes = entry['changes'];
+      final name = changes is Map ? changes['name']?.toString().trim() : null;
+      if (name != null && name.isNotEmpty) created[id] = name;
+    }
+    for (final entry in created.entries) {
+      if (!deleted.contains(entry.key)) {
+        namesById.putIfAbsent(entry.key, () => entry.value);
+      }
+    }
+
+    final recovered = <StockLocationRecord>[];
+    for (final entry in namesById.entries) {
+      if (activeIds.contains(entry.key) || deleted.contains(entry.key)) {
+        continue;
+      }
+      final snapshot = snapshotById[entry.key];
+      final restored =
+          snapshot ?? _newVisibleRecoveredLocation(entry.key, entry.value);
+      locations.add(restored);
+      activeIds.add(restored.id);
+      recovered.add(restored);
+    }
+    return recovered;
+  }
+
+  StockLocationRecord _newVisibleRecoveredLocation(String id, String name) {
+    const width = 3;
+    const height = 2;
+    for (var y = 1; y <= 37; y += 3) {
+      for (var x = 1; x <= 56; x += 4) {
+        final overlaps = locations.any(
+          (location) =>
+              location.parentId == null &&
+              x < location.gridX + location.gridWidth &&
+              x + width > location.gridX &&
+              y < location.gridY + location.gridHeight &&
+              y + height > location.gridY,
+        );
+        if (!overlaps) {
+          return StockLocationRecord(
+            id: id,
+            name: name,
+            gridX: x,
+            gridY: y,
+            gridWidth: width,
+            gridHeight: height,
+          );
+        }
+      }
+    }
+    return StockLocationRecord(id: id, name: name);
+  }
+
   bool _initializeLegacyLocations() {
     var changed = false;
     // Older snapshots stored free-text paths. Resolve those against the
@@ -17776,7 +17893,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final byPath = <String, StockLocationRecord>{
       for (final location in locations)
         if (location.parentId != null)
-        _locationPath(location.id).trim().toLowerCase(): location,
+          _locationPath(location.id).trim().toLowerCase(): location,
     };
     final duplicatePathRoots = locations
         .where(
@@ -17824,15 +17941,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       final name = item.storageLocation.trim();
       if (name.isEmpty) continue;
       final key = name.toLowerCase();
-      final location = byPath[key] ?? byName.putIfAbsent(key, () {
-        final created = StockLocationRecord(
-          id: 'LOC-${base64UrlEncode(utf8.encode(key)).replaceAll('=', '')}',
-          name: name,
-        );
-        locations.add(created);
-        changed = true;
-        return created;
-      });
+      final location =
+          byPath[key] ??
+          byName.putIfAbsent(key, () {
+            final created = StockLocationRecord(
+              id: 'LOC-${base64UrlEncode(utf8.encode(key)).replaceAll('=', '')}',
+              name: name,
+            );
+            locations.add(created);
+            changed = true;
+            return created;
+          });
       if (item.storageLocationId.isEmpty) {
         inventory[index] = item.copyWith(storageLocationId: location.id);
         changed = true;
@@ -22566,10 +22685,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           width: 24,
           height: 24,
           child: Align(
-            alignment: Alignment(
-              fromLeft ? -1 : 1,
-              fromTop ? -1 : 1,
-            ),
+            alignment: Alignment(fromLeft ? -1 : 1, fromTop ? -1 : 1),
             child: Container(
               width: 12,
               height: 12,

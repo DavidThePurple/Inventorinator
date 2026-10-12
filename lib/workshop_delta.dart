@@ -87,10 +87,18 @@ class WorkshopFieldConflict {
 }
 
 class WorkshopMergeResult {
-  const WorkshopMergeResult({required this.changes, required this.conflicts});
+  const WorkshopMergeResult({
+    required this.changes,
+    required this.conflicts,
+    this.rejectedDeletes = const [],
+  });
 
   final List<WorkshopEntityChange> changes;
   final List<WorkshopFieldConflict> conflicts;
+
+  /// Current Remote records which replaced a stale local tombstone. The
+  /// caller must clear that tombstone from its outbox before applying these.
+  final List<WorkshopEntityChange> rejectedDeletes;
 }
 
 /// Keeps fields edited locally from being replaced by an incoming version of
@@ -104,10 +112,25 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       '${change.entityType}\u0000${change.entityId}': change,
   };
   final conflicts = <WorkshopFieldConflict>[];
+  final rejectedDeletes = <WorkshopEntityChange>[];
   final changes = remoteChanges.map((remote) {
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
     if (local.deleted) {
+      final baseline = local.baseFields?['(deleted)'];
+      if (!remote.deleted && !_sameJson(remote.fields, baseline)) {
+        conflicts.add(
+          WorkshopFieldConflict(
+            entityType: remote.entityType,
+            entityId: remote.entityId,
+            field: '(stale delete)',
+            localValue: null,
+            remoteValue: remote.fields,
+          ),
+        );
+        rejectedDeletes.add(remote);
+        return remote;
+      }
       if (local.baseFields?['(importUndo)'] == true &&
           !remote.deleted &&
           !sameImportRecord(remote.fields, local.baseFields?['(deleted)'])) {
@@ -174,7 +197,11 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       revision: remote.revision,
     );
   }).toList();
-  return WorkshopMergeResult(changes: changes, conflicts: conflicts);
+  return WorkshopMergeResult(
+    changes: changes,
+    conflicts: conflicts,
+    rejectedDeletes: rejectedDeletes,
+  );
 }
 
 Map<String, dynamic> _metadata(Map<String, dynamic> root) => {

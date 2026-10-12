@@ -147,13 +147,13 @@ void main() {
     expect(merged.conflicts, isEmpty);
   });
 
-  test('a queued delete supersedes an incoming record without a conflict', () {
+  test('a queued delete survives when its Remote baseline is unchanged', () {
     final merged = mergeRemoteChangesWithPending(
       const [
         WorkshopEntityChange(
           entityType: 'inventory',
           entityId: 'FILAMENT-1',
-          fields: {'name': 'PolyLite PLA', 'filamentStatus': 'ready'},
+          fields: {'name': 'PolyLite PLA', 'filamentStatus': 'wet'},
           revision: 42,
         ),
       ],
@@ -172,5 +172,35 @@ void main() {
 
     expect(merged.changes.single.deleted, isTrue);
     expect(merged.conflicts, isEmpty);
+    expect(merged.rejectedDeletes, isEmpty);
+  });
+
+  test('a stale queued delete restores the newer Remote record', () {
+    final merged = mergeRemoteChangesWithPending(
+      const [
+        WorkshopEntityChange(
+          entityType: 'locations',
+          entityId: 'LOC-RACK',
+          fields: {'name': 'AD5X Rack', 'gridX': 18},
+          revision: 43,
+        ),
+      ],
+      const [
+        WorkshopEntityChange(
+          entityType: 'locations',
+          entityId: 'LOC-RACK',
+          fields: {},
+          deleted: true,
+          baseFields: {
+            '(deleted)': {'name': 'AD5X Rack', 'gridX': 4},
+          },
+        ),
+      ],
+    );
+
+    expect(merged.changes.single.deleted, isFalse);
+    expect(merged.changes.single.fields['gridX'], 18);
+    expect(merged.conflicts.single.field, '(stale delete)');
+    expect(merged.rejectedDeletes.single.entityId, 'LOC-RACK');
   });
 }

@@ -19071,6 +19071,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           latestPending.map((entry) => entry.change),
         );
         _recordSyncConflicts(incomingMerge.conflicts);
+        database.discardRejectedDeleteTombstones(
+          incomingMerge.rejectedDeletes,
+        );
         database.applyRemoteWorkshopChanges(incomingMerge.changes);
         _applyRemoteEntityChanges(incomingMerge.changes);
       }
@@ -19090,6 +19093,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                 currentRole.canOperateBuilds && !currentRole.canEditInventory,
           ) ??
           pending;
+      if (pending.any((entry) => entry.change.deleted) &&
+          installedSchema < latestInventorinatorSchemaVersion) {
+        throw SupabaseSyncException(
+          'Hard deletes are paused until this Remote is updated to schema '
+          'v$latestInventorinatorSchemaVersion. Other sync changes remain safe.',
+        );
+      }
       if (pending.isNotEmpty) {
         var auditAcknowledged = false;
         for (final batch in workshopUploadBatches(
@@ -19148,6 +19158,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           pending.map((entry) => entry.change),
         );
         _recordSyncConflicts(confirmedMerge.conflicts);
+        database.discardRejectedDeleteTombstones(
+          confirmedMerge.rejectedDeletes,
+        );
         database.applyRemoteWorkshopChanges(confirmedMerge.changes);
         _applyRemoteEntityChanges(confirmedMerge.changes);
       }

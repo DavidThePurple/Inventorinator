@@ -1399,6 +1399,30 @@ class LocalDatabase {
     }
   }
 
+  /// A stale local delete lost to a newer Remote record. Remove only its
+  /// tombstone from the outbox; the caller then applies the Remote record.
+  /// This keeps an offline device from repeatedly attempting the same delete.
+  void discardRejectedDeleteTombstones(
+    Iterable<WorkshopEntityChange> remoteRecords,
+  ) {
+    final records = remoteRecords.toList();
+    if (records.isEmpty) return;
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final record in records) {
+        _database.execute(
+          '''DELETE FROM sync_outbox
+             WHERE entity_type = ? AND entity_id = ? AND deleted = 1''',
+          [record.entityType, record.entityId],
+        );
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   void queueAllEntitiesForSync() {
     final rows = _database.select(
       'SELECT entity_type, entity_id, payload_json FROM entity_state',
@@ -1600,9 +1624,7 @@ class LocalDatabase {
 
   List<PendingWorkshopChange> loadPendingWorkshopChanges() => _database
       .select(
-        checkoutSyncEnabled
-            ? 'SELECT * FROM sync_outbox ORDER BY id'
-            : "SELECT * FROM sync_outbox WHERE entity_type <> 'checkouts' ORDER BY id",
+        checkoutSyncEnabled ? 'SELECT * FROM sync_outbox ORDER BY id' : "SELECT * FROM sync_outbox WHERE entity_type <> 'checkouts' ORDER BY id",
       )
       .map(
         (row) => PendingWorkshopChange(

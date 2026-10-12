@@ -10580,6 +10580,12 @@ Bed Temperature: 80°C
     await tester.tap(find.byKey(const Key('custom-type-filter-TYPE-SOAP')));
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(
+      find.text('Lavender soap'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Lavender soap'), findsOneWidget);
     expect(find.text('Blue PLA'), findsNothing);
     await tester.ensureVisible(find.text('Colors'));

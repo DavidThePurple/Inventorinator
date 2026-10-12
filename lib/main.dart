@@ -13169,24 +13169,82 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _unresolvedLocationAuditButton() {
-    final groups = _unresolvedLocationGroups();
-    final itemCount = groups.fold<int>(
-      0,
-      (total, group) => total + group.items.length,
-    );
     return Align(
       alignment: Alignment.centerLeft,
       child: OutlinedButton.icon(
         key: const Key('open-unresolved-locations'),
         onPressed: _openUnresolvedLocationView,
         icon: const Icon(Icons.location_off_outlined, size: 18),
-        label: Text(
-          groups.isEmpty
-              ? 'Unresolved locations'
-              : 'Unresolved locations · $itemCount item${itemCount == 1 ? '' : 's'}',
-        ),
+        label: const Text('Unresolved locations'),
       ),
     );
+  }
+
+  void _commitUnresolvedLocationAssignment(
+    ({String name, String id, List<InventoryItem> items}) group,
+    StockLocationRecord destination, {
+    bool createLocation = false,
+  }) {
+    final destinationPath = createLocation
+        ? destination.name
+        : _locationPath(destination.id);
+    setState(() {
+      if (createLocation) {
+        locations.add(destination);
+        _recordAudit('create', 'location', destination.id, {
+          'name': destination.name,
+        });
+      }
+      for (final item in group.items) {
+        _publishInventoryItem(
+          item.copyWith(
+            storageLocationId: destination.id,
+            storageLocation: destinationPath,
+            locationHistory: _locationHistoryAfterMove(item, destinationPath),
+          ),
+        );
+        _recordAudit('move', 'inventory', item.id, {
+          'name': item.name,
+          'location': destinationPath,
+          'from unresolved location': group.name,
+        });
+      }
+    });
+    _persist();
+  }
+
+  Future<bool> _offerSuggestedLocationCreation(
+    ({String name, String id, List<InventoryItem> items}) group,
+  ) async {
+    if (!currentRole.canEditInventory || !mounted) return false;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Create “${group.name}”?'),
+        content: Text(
+          '${group.items.length} items use this location name, but it is not a saved location. Create it and link those items?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton.icon(
+            key: const Key('create-suggested-location'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.add_location_alt_outlined),
+            label: const Text('Create and assign'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return false;
+    final location = StockLocationRecord(
+      id: 'LOC-${DateTime.now().microsecondsSinceEpoch}',
+      name: group.name,
+    );
+    _commitUnresolvedLocationAssignment(group, location, createLocation: true);
+    return true;
   }
 
   Future<bool> _assignUnresolvedLocationGroup(
@@ -13264,29 +13322,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (accepted != true || destination == null || !mounted) return false;
     final destinationLocation = destination!;
     final destinationPath = _locationPath(destinationLocation.id);
-    final inventoryById = {for (final item in inventory) item.id: item};
-    setState(() {
-      for (final sourceItem in group.items) {
-        final currentItem = inventoryById[sourceItem.id];
-        if (currentItem == null) continue;
-        _publishInventoryItem(
-          currentItem.copyWith(
-            storageLocationId: destinationLocation.id,
-            storageLocation: destinationPath,
-            locationHistory: _locationHistoryAfterMove(
-              currentItem,
-              destinationPath,
-            ),
-          ),
-        );
-        _recordAudit('move', 'inventory', currentItem.id, {
-          'name': currentItem.name,
-          'location': destinationPath,
-          'from unresolved location': group.name,
-        });
-      }
-    });
-    _persist();
+    _commitUnresolvedLocationAssignment(group, destinationLocation);
     if (!mounted) return false;
     showInventorinatorAlert(
       context,
@@ -13300,11 +13336,53 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _openUnresolvedLocationView() async {
+    final groups = <({String name, String id, List<InventoryItem> items})>[];
+    var scanning = true;
+    var scanStarted = false;
+    var dialogOpen = true;
+    void removeGroup(
+      ({String name, String id, List<InventoryItem> items}) group,
+    ) {
+      groups.removeWhere(
+        (candidate) =>
+            candidate.id == group.id &&
+            _normalized(candidate.name) == _normalized(group.name),
+      );
+    }
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, refreshDialog) {
-          final groups = _unresolvedLocationGroups();
+          if (!scanStarted) {
+            scanStarted = true;
+            unawaited(
+              Future<void>(() async {
+                // Give the dialog one frame before decoding metadata. The scan
+                // never requests card images or changes inventory on its own.
+                await Future<void>.delayed(const Duration(milliseconds: 16));
+                final scanned = _unresolvedLocationGroups();
+                if (!mounted || !dialogOpen) return;
+                groups
+                  ..clear()
+                  ..addAll(scanned);
+                scanning = false;
+                refreshDialog(() {});
+                for (final group
+                    in scanned
+                        .where(
+                          (group) => group.id.isEmpty && group.items.length > 1,
+                        )
+                        .toList()) {
+                  if (!mounted || !dialogOpen) return;
+                  if (await _offerSuggestedLocationCreation(group)) {
+                    removeGroup(group);
+                    if (mounted && dialogOpen) refreshDialog(() {});
+                  }
+                }
+              }),
+            );
+          }
           return AlertDialog(
             key: const Key('unresolved-locations-dialog'),
             title: const Row(
@@ -13316,7 +13394,20 @@ class _InventoryHomeState extends State<InventoryHome> {
             ),
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 720, maxHeight: 560),
-              child: groups.isEmpty
+              child: scanning
+                  ? const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Scanning saved locations…'),
+                      ],
+                    )
+                  : groups.isEmpty
                   ? const Text(
                       'Every item location resolves to a saved location.',
                     )
@@ -13375,6 +13466,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                   if (await _assignUnresolvedLocationGroup(
                                                     group,
                                                   )) {
+                                                    removeGroup(group);
                                                     refreshDialog(() {});
                                                   }
                                                 }
@@ -13432,6 +13524,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         },
       ),
     );
+    dialogOpen = false;
   }
 
   /// Disk reads skip thumbnails to stay cheap, so an item read, changed and

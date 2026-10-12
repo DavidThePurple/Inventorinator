@@ -7815,6 +7815,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _layoutEditMode = false;
   int _layoutQuarterTurns = 0;
   String? _layoutFrameKey;
+  bool _layoutFrameRequested = false;
   final Map<String, Offset> _layoutResizeRemainders = {};
   final Map<String, Offset> _layoutMoveRemainders = {};
   Size _stockroomDialogSize = const Size(760, 650);
@@ -22436,7 +22437,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     required String canvasKey,
     required TransformationController transform,
   }) {
-    if (_layoutEditMode || viewport.isEmpty) return;
+    if (viewport.isEmpty) return;
     const grid = 24.0;
     final mapped = locationsToFrame
         .where((location) => location.gridWidth > 0 && location.gridHeight > 0)
@@ -22519,6 +22520,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   tooltip: 'Frame mapped locations',
                   onPressed: () {
                     _layoutFrameKey = null;
+                    _layoutFrameRequested = true;
                     refreshStructure(() {});
                   },
                   icon: const Icon(Icons.center_focus_strong_rounded),
@@ -22529,6 +22531,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   onPressed: () {
                     _layoutQuarterTurns = (_layoutQuarterTurns + 1) % 4;
                     _layoutFrameKey = null;
+                    _layoutFrameRequested = true;
                     stockroomRefresh(() {});
                     refreshStructure(() {});
                   },
@@ -22543,7 +22546,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                   onPressed: () {
                     refreshStructure(() {
                       _layoutEditMode = !_layoutEditMode;
-                      if (!_layoutEditMode) _layoutFrameKey = null;
+                      _layoutFrameKey = null;
+                      _layoutFrameRequested = true;
                       _layoutDrawStart = null;
                       _layoutDrawCurrent = null;
                       _layoutDrawParentId = null;
@@ -22606,12 +22610,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                 final maxY = (canvasHeight / grid).ceil() - 1;
                 final signature =
                     '$canvasKey:${constraints.maxWidth.round()}x${constraints.maxHeight.round()}:$_layoutQuarterTurns:${children.map((location) => '${location.id}:${location.gridX},${location.gridY},${location.gridWidth},${location.gridHeight}').join('|')}';
-                if (!_layoutEditMode && _layoutFrameKey != signature) {
+                final frameWhileEditing = _layoutFrameRequested;
+                if ((!_layoutEditMode || frameWhileEditing) &&
+                    _layoutFrameKey != signature) {
                   _layoutFrameKey = signature;
+                  _layoutFrameRequested = false;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (!mounted ||
-                        _layoutEditMode ||
-                        _layoutFrameKey != signature) {
+                    if (!mounted || _layoutFrameKey != signature) {
                       return;
                     }
                     _frameLayoutToLocations(
@@ -23027,9 +23032,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                     tooltip: stockroomFullscreen
                         ? 'Exit full screen'
                         : 'Full screen',
-                    onPressed: () => refresh(
-                      () => stockroomFullscreen = !stockroomFullscreen,
-                    ),
+                    onPressed: () => refresh(() {
+                      stockroomFullscreen = !stockroomFullscreen;
+                      _layoutFrameKey = null;
+                      _layoutFrameRequested = true;
+                    }),
                     icon: _FullscreenIcon(expanded: stockroomFullscreen),
                   ),
                 IconButton(
@@ -23519,8 +23526,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                               );
                             });
                           },
-                          onPointerUp: (_) =>
-                              _stockroomDialogResizeRemainder = Offset.zero,
+                          onPointerUp: (_) {
+                            _stockroomDialogResizeRemainder = Offset.zero;
+                            _layoutFrameKey = null;
+                            _layoutFrameRequested = true;
+                            refresh(() {});
+                          },
                           child: Tooltip(
                             message: 'Drag to resize Stockroom',
                             child: SizedBox(

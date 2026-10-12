@@ -835,6 +835,26 @@ class LocalDatabase {
     return rows.isEmpty ? null : rows.first['state_json'] as String;
   }
 
+  /// The original whole-workshop snapshot is retained when the app migrates to
+  /// per-entity storage. It is a recovery source only: active entity_state is
+  /// always authoritative unless a live child points at a parent that vanished.
+  List<Map<String, dynamic>> loadSnapshotLocationPayloads() {
+    final rows = _database.select(
+      'SELECT state_json FROM app_state WHERE id = 1',
+    );
+    if (rows.isEmpty) return const [];
+    try {
+      final root = jsonDecode(rows.first['state_json'] as String);
+      if (root is! Map || root['locations'] is! List) return const [];
+      return (root['locations'] as List)
+          .whereType<Map>()
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   List<Map<String, Object?>> inventoryMetricGroups(Set<String> untracked) =>
       _database.select(
         r"""

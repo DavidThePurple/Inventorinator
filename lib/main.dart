@@ -3255,6 +3255,7 @@ class StockLocationRecord {
     this.gridY = 0,
     this.gridWidth = 3,
     this.gridHeight = 2,
+    this.displayAsParentUniqueLocation = false,
   });
 
   final String id;
@@ -3267,6 +3268,10 @@ class StockLocationRecord {
   final int gridWidth;
   final int gridHeight;
 
+  /// Lets a nested shelf, bin, or station appear as a separate destination in
+  /// the Stockroom Items list while retaining its physical parent in Layout.
+  final bool displayAsParentUniqueLocation;
+
   StockLocationRecord copyWith({
     String? name,
     String? parentId,
@@ -3277,6 +3282,7 @@ class StockLocationRecord {
     int? gridY,
     int? gridWidth,
     int? gridHeight,
+    bool? displayAsParentUniqueLocation,
   }) => StockLocationRecord(
     id: id,
     name: name ?? this.name,
@@ -3287,6 +3293,8 @@ class StockLocationRecord {
     gridY: gridY ?? this.gridY,
     gridWidth: gridWidth ?? this.gridWidth,
     gridHeight: gridHeight ?? this.gridHeight,
+    displayAsParentUniqueLocation:
+        displayAsParentUniqueLocation ?? this.displayAsParentUniqueLocation,
   );
 }
 
@@ -5791,6 +5799,8 @@ String encodeWorkshopState({
           'gridY': location.gridY,
           'gridWidth': location.gridWidth,
           'gridHeight': location.gridHeight,
+          'displayAsParentUniqueLocation':
+              location.displayAsParentUniqueLocation,
         },
       )
       .toList(),
@@ -6382,6 +6392,8 @@ WorkshopState? decodeWorkshopState(String? source) {
             gridY: (location['gridY'] as num?)?.toInt() ?? 0,
             gridWidth: (location['gridWidth'] as num?)?.toInt() ?? 3,
             gridHeight: (location['gridHeight'] as num?)?.toInt() ?? 2,
+            displayAsParentUniqueLocation:
+                location['displayAsParentUniqueLocation'] == true,
           ),
         )
         .toList();
@@ -8143,6 +8155,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     kits = restored?.kits ?? [];
     builds = restored?.builds ?? [];
     locations = restored?.locations ?? [];
+    final recoveredLocationParents = _recoverMissingLocationParents();
     layoutCanvasSizes = restored?.layoutCanvasSizes ?? {};
     shoppingList = restored?.shoppingList ?? [];
     _pinnedKitIds.addAll(_loadPinnedDragKits());
@@ -8472,6 +8485,13 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (!firstLaunch) {
       _capturePersistedEntityReferences();
       _incrementalPersistenceReady = true;
+      for (final location in recoveredLocationParents) {
+        widget.database?.saveEntityPayloadAndQueue(
+          'locations',
+          location.id,
+          encodeWorkshopEntityPayload('locations', location),
+        );
+      }
     }
     if (firstLaunch) {
       WidgetsBinding.instance.addPostFrameCallback(
@@ -10828,7 +10848,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
-        onStatusPressed: _itemShowsStatus(record) && currentRole.canEditInventory
+        onStatusPressed:
+            _itemShowsStatus(record) && currentRole.canEditInventory
             ? () => _chooseCardStatus(record)
             : null,
       );
@@ -10861,7 +10882,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
-        onStatusPressed: _itemShowsStatus(record) && currentRole.canEditInventory
+        onStatusPressed:
+            _itemShowsStatus(record) && currentRole.canEditInventory
             ? () => _chooseCardStatus(record)
             : null,
       );
@@ -10905,105 +10927,111 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  Widget _inventoryDragGrip(InventoryItem item, {required bool list}) =>
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final gripWidth = math.min(
-            inventoryDragGripSize,
-            constraints.maxWidth,
-          );
-          final gripHeight = math.min(
-            inventoryDragGripSize,
-            constraints.maxHeight,
-          );
-          final gripRect = Rect.fromLTWH(
-            (constraints.maxWidth - gripWidth) / 2,
-            (constraints.maxHeight - gripHeight) / 2,
-            gripWidth,
-            gripHeight,
-          );
-          final quantityControls = list
-              ? constraints.maxWidth < 600
-                    ? Rect.fromLTWH(
-                        0,
-                        math.max(0, constraints.maxHeight - 76),
-                        math.min(180, constraints.maxWidth),
-                        math.min(76, constraints.maxHeight),
-                      )
-                    : Rect.fromLTWH(
-                        math.max(0, constraints.maxWidth - 190),
-                        0,
-                        math.min(190, constraints.maxWidth),
-                        constraints.maxHeight,
-                      )
-              : Rect.fromLTWH(
-                  0,
-                  0,
-                  math.min(176, constraints.maxWidth),
-                  math.min(80, constraints.maxHeight),
-                );
-          final statusControl = list
-              ? constraints.maxWidth < 600
-                    ? Rect.fromLTWH(
-                        math.max(0, constraints.maxWidth - 86),
-                        math.max(0, constraints.maxHeight - 76),
-                        math.min(86, constraints.maxWidth),
-                        math.min(76, constraints.maxHeight),
-                      )
-                    : Rect.fromLTWH(
-                        math.max(0, constraints.maxWidth - 94),
-                        0,
-                        math.min(94, constraints.maxWidth),
-                        constraints.maxHeight,
-                      )
-              : Rect.fromLTWH(
-                  math.max(0, constraints.maxWidth - 94),
-                  0,
-                  math.min(94, constraints.maxWidth),
-                  math.min(80, constraints.maxHeight),
-                );
-          var regions = [gripRect];
-          for (final control in [quantityControls, statusControl]) {
-            regions = [
-              for (final region in regions)
-                ..._subtractGripExclusion(region, region.intersect(control)),
-            ];
-          }
-          // A Tooltip around the whole layout stack is itself hit-testable,
-          // even in the intentionally empty control zones. Put it on each
-          // actual drag rectangle instead so the card controls receive taps.
-          return Stack(
-            children: [
-              for (var index = 0; index < regions.length; index++)
-                Positioned.fromRect(
-                  rect: regions[index],
-                  child: Tooltip(
-                    message: 'Drag ${item.name}',
-                    child: Semantics(
-                      key: index == 0
-                          ? Key('inventory-drag-grip-${item.id}')
-                          : null,
-                      label: 'Drag ${item.name}',
-                      child: _inventoryDragGripTarget(item),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
+  Widget _inventoryDragGrip(
+    InventoryItem item, {
+    required bool list,
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      final gripWidth = math.min(inventoryDragGripSize, constraints.maxWidth);
+      final gripHeight = math.min(inventoryDragGripSize, constraints.maxHeight);
+      final gripRect = Rect.fromLTWH(
+        (constraints.maxWidth - gripWidth) / 2,
+        (constraints.maxHeight - gripHeight) / 2,
+        gripWidth,
+        gripHeight,
       );
+      final quantityControls = list
+          ? constraints.maxWidth < 600
+                ? Rect.fromLTWH(
+                    0,
+                    math.max(0, constraints.maxHeight - 76),
+                    math.min(180, constraints.maxWidth),
+                    math.min(76, constraints.maxHeight),
+                  )
+                : Rect.fromLTWH(
+                    math.max(0, constraints.maxWidth - 190),
+                    0,
+                    math.min(190, constraints.maxWidth),
+                    constraints.maxHeight,
+                  )
+          : Rect.fromLTWH(
+              0,
+              0,
+              math.min(176, constraints.maxWidth),
+              math.min(80, constraints.maxHeight),
+            );
+      final statusControl = list
+          ? constraints.maxWidth < 600
+                ? Rect.fromLTWH(
+                    math.max(0, constraints.maxWidth - 86),
+                    math.max(0, constraints.maxHeight - 76),
+                    math.min(86, constraints.maxWidth),
+                    math.min(76, constraints.maxHeight),
+                  )
+                : Rect.fromLTWH(
+                    math.max(0, constraints.maxWidth - 94),
+                    0,
+                    math.min(94, constraints.maxWidth),
+                    constraints.maxHeight,
+                  )
+          : Rect.fromLTWH(
+              math.max(0, constraints.maxWidth - 94),
+              0,
+              math.min(94, constraints.maxWidth),
+              math.min(80, constraints.maxHeight),
+            );
+      var regions = [gripRect];
+      for (final control in [quantityControls, statusControl]) {
+        regions = [
+          for (final region in regions)
+            ..._subtractGripExclusion(region, region.intersect(control)),
+        ];
+      }
+      // A Tooltip around the whole layout stack is itself hit-testable,
+      // even in the intentionally empty control zones. Put it on each
+      // actual drag rectangle instead so the card controls receive taps.
+      return Stack(
+        children: [
+          for (var index = 0; index < regions.length; index++)
+            Positioned.fromRect(
+              rect: regions[index],
+              child: Tooltip(
+                message: 'Drag ${item.name}',
+                child: Semantics(
+                  key: index == 0
+                      ? Key('inventory-drag-grip-${item.id}')
+                      : null,
+                  label: 'Drag ${item.name}',
+                  child: _inventoryDragGripTarget(item),
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  );
 
   List<Rect> _subtractGripExclusion(Rect grip, Rect exclusion) {
     if (exclusion.isEmpty) return [grip];
     return [
-    if (exclusion.top > grip.top)
-      Rect.fromLTRB(grip.left, grip.top, grip.right, exclusion.top),
-    if (exclusion.bottom < grip.bottom)
-      Rect.fromLTRB(grip.left, exclusion.bottom, grip.right, grip.bottom),
-    if (exclusion.left > grip.left)
-      Rect.fromLTRB(grip.left, exclusion.top, exclusion.left, exclusion.bottom),
-    if (exclusion.right < grip.right)
-      Rect.fromLTRB(exclusion.right, exclusion.top, grip.right, exclusion.bottom),
+      if (exclusion.top > grip.top)
+        Rect.fromLTRB(grip.left, grip.top, grip.right, exclusion.top),
+      if (exclusion.bottom < grip.bottom)
+        Rect.fromLTRB(grip.left, exclusion.bottom, grip.right, grip.bottom),
+      if (exclusion.left > grip.left)
+        Rect.fromLTRB(
+          grip.left,
+          exclusion.top,
+          exclusion.left,
+          exclusion.bottom,
+        ),
+      if (exclusion.right < grip.right)
+        Rect.fromLTRB(
+          exclusion.right,
+          exclusion.top,
+          grip.right,
+          exclusion.bottom,
+        ),
     ].where((region) => region.width > 0 && region.height > 0).toList();
   }
 
@@ -11013,9 +11041,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       child: _debugShowInventoryDragGripArea
           ? DecoratedBox(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withValues(
-                  alpha: .12,
-                ),
+                color: Theme.of(context).colorScheme.primary
+                    .withValues(alpha: .12),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: Theme.of(context).colorScheme.primary,
@@ -11023,9 +11050,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Theme.of(context).colorScheme.primary.withValues(
-                      alpha: .72,
-                    ),
+                    color: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: .72),
                     blurRadius: 18,
                     spreadRadius: 2,
                   ),
@@ -14289,135 +14315,140 @@ class _InventoryHomeState extends State<InventoryHome> {
           onExit: (_) =>
               _setPinnedSidebarHover(machinesSide: machinesSide, hover: false),
           child: AnimatedContainer(
-          duration: Duration(milliseconds: open ? 180 : (hovered ? 620 : 180)),
-          curve: open
-              ? Curves.easeOutCubic
-              : hovered
-              ? Curves.easeInCubic
-              : Curves.easeOutCubic,
-          width: open ? 260 : 22,
-          height: double.infinity,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: open
-                ? Theme.of(context).colorScheme.surface.withValues(alpha: .92)
-                : Colors.transparent,
-            borderRadius: BorderRadius.horizontal(
-              right: Radius.circular(machinesSide ? 0 : 18),
-              left: Radius.circular(machinesSide ? 18 : 0),
+            duration: Duration(
+              milliseconds: open ? 180 : (hovered ? 620 : 180),
             ),
-            boxShadow: !open && hovered
-                ? [
-                    BoxShadow(
-                      color: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: .68),
-                      blurRadius: 34,
-                      spreadRadius: 5,
-                    ),
-                  ]
-                : const [],
-          ),
-          child: open
-              ? BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              machinesSide
-                                  ? Icons.precision_manufacturing_outlined
-                                  : Icons.inventory_2_outlined,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
+            curve: open
+                ? Curves.easeOutCubic
+                : hovered
+                ? Curves.easeInCubic
+                : Curves.easeOutCubic,
+            width: open ? 260 : 22,
+            height: double.infinity,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: open
+                  ? Theme.of(context).colorScheme.surface.withValues(alpha: .92)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.horizontal(
+                right: Radius.circular(machinesSide ? 0 : 18),
+                left: Radius.circular(machinesSide ? 18 : 0),
+              ),
+              boxShadow: !open && hovered
+                  ? [
+                      BoxShadow(
+                        color: Theme.of(context).colorScheme.primary
+                            .withValues(alpha: .68),
+                        blurRadius: 34,
+                        spreadRadius: 5,
+                      ),
+                    ]
+                  : const [],
+            ),
+            child: open
+                ? BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
                                 machinesSide
-                                    ? 'Pinned machines'
-                                    : 'Pinned kits',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
+                                    ? Icons.precision_manufacturing_outlined
+                                    : Icons.inventory_2_outlined,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  machinesSide
+                                      ? 'Pinned machines'
+                                      : 'Pinned kits',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
                                 ),
                               ),
+                            ],
+                          ),
+                          if (!machinesSide) ...[
+                            const SizedBox(height: 10),
+                            const ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.shopping_cart_outlined),
+                              title: Text('Shopping list'),
+                              subtitle: Text('Always on the drag rail'),
                             ),
                           ],
-                        ),
-                        if (!machinesSide) ...[
-                          const SizedBox(height: 10),
-                          const ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(Icons.shopping_cart_outlined),
-                            title: Text('Shopping list'),
-                            subtitle: Text('Always on the drag rail'),
+                          const Divider(height: 20),
+                          Expanded(
+                            child: entries.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'Nothing pinned yet.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: Color(0xff9da5b7),
+                                      ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    itemCount: entries.length,
+                                    itemBuilder: (context, index) {
+                                      final entry = entries[index];
+                                      final name = switch (entry) {
+                                        KitRecord value => value.name,
+                                        MachineRecord value => value.name,
+                                        _ => '',
+                                      };
+                                      final icon = switch (entry) {
+                                        KitRecord _ =>
+                                          Icons.inventory_2_outlined,
+                                        MachineRecord value =>
+                                          _isPrinter(value)
+                                              ? Icons.print_outlined
+                                              : Icons.handyman_outlined,
+                                        _ => Icons.push_pin_outlined,
+                                      };
+                                      return ListTile(
+                                        dense: true,
+                                        contentPadding: EdgeInsets.zero,
+                                        leading: Icon(icon),
+                                        title: Text(
+                                          name,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        trailing: Tooltip(
+                                          message: 'Unpin $name',
+                                          child: IconButton(
+                                            padding: EdgeInsets.zero,
+                                            icon: const Icon(
+                                              Icons.push_pin,
+                                              size: 19,
+                                            ),
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            onPressed: () => entry is KitRecord
+                                                ? _togglePinnedDragKit(entry.id)
+                                                : _togglePinnedDragMachine(
+                                                    (entry as MachineRecord).id,
+                                                  ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
                           ),
                         ],
-                        const Divider(height: 20),
-                        Expanded(
-                          child: entries.isEmpty
-                              ? const Center(
-                                  child: Text(
-                                    'Nothing pinned yet.',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(color: Color(0xff9da5b7)),
-                                  ),
-                                )
-                              : ListView.builder(
-                                  itemCount: entries.length,
-                                  itemBuilder: (context, index) {
-                                    final entry = entries[index];
-                                    final name = switch (entry) {
-                                      KitRecord value => value.name,
-                                      MachineRecord value => value.name,
-                                      _ => '',
-                                    };
-                                    final icon = switch (entry) {
-                                      KitRecord _ => Icons.inventory_2_outlined,
-                                      MachineRecord value =>
-                                        _isPrinter(value)
-                                            ? Icons.print_outlined
-                                            : Icons.handyman_outlined,
-                                      _ => Icons.push_pin_outlined,
-                                    };
-                                    return ListTile(
-                                      dense: true,
-                                      contentPadding: EdgeInsets.zero,
-                                      leading: Icon(icon),
-                                      title: Text(
-                                        name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      trailing: Tooltip(
-                                        message: 'Unpin $name',
-                                        child: IconButton(
-                                          padding: EdgeInsets.zero,
-                                          icon: const Icon(
-                                            Icons.push_pin,
-                                            size: 19,
-                                          ),
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                          onPressed: () => entry is KitRecord
-                                              ? _togglePinnedDragKit(entry.id)
-                                              : _togglePinnedDragMachine(
-                                                  (entry as MachineRecord).id,
-                                                ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                )
-              : const SizedBox.shrink(),
+                  )
+                : const SizedBox.shrink(),
           ),
         ),
       ),
@@ -14663,63 +14694,63 @@ class _InventoryHomeState extends State<InventoryHome> {
           width: 136,
           height: double.infinity,
           child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0, end: 1),
-          duration: const Duration(milliseconds: 380),
-          curve: Curves.easeOutCubic,
-          builder: (context, value, child) {
-            final opacity = Curves.easeOut.transform(value);
-            return Opacity(
-              opacity: opacity,
-              child: Transform.translate(
-                offset: Offset(34 * (1 - value), 0),
-                child: Transform.scale(
-                  alignment: Alignment.centerRight,
-                  scale: .94 + (.06 * value),
-                  child: child,
+            tween: Tween(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 380),
+            curve: Curves.easeOutCubic,
+            builder: (context, value, child) {
+              final opacity = Curves.easeOut.transform(value);
+              return Opacity(
+                opacity: opacity,
+                child: Transform.translate(
+                  offset: Offset(34 * (1 - value), 0),
+                  child: Transform.scale(
+                    alignment: Alignment.centerRight,
+                    scale: .94 + (.06 * value),
+                    child: child,
+                  ),
                 ),
+              );
+            },
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(22),
+                bottomLeft: Radius.circular(22),
               ),
-            );
-          },
-          child: ClipRRect(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(22),
-              bottomLeft: Radius.circular(22),
-            ),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                constraints: const BoxConstraints.expand(),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface
-                      .withValues(alpha: .62),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(22),
-                    bottomLeft: Radius.circular(22),
-                  ),
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.outlineVariant
-                        .withValues(alpha: .72),
-                  ),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black38, blurRadius: 20),
-                  ],
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      for (final machine in pinnedMachines) ...[
-                        _machineDragDestination(machine),
-                        if (machine != pinnedMachines.last)
-                          const SizedBox(height: 10),
-                      ],
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  constraints: const BoxConstraints.expand(),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface
+                        .withValues(alpha: .62),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(22),
+                      bottomLeft: Radius.circular(22),
+                    ),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant
+                          .withValues(alpha: .72),
+                    ),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black38, blurRadius: 20),
                     ],
                   ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        for (final machine in pinnedMachines) ...[
+                          _machineDragDestination(machine),
+                          if (machine != pinnedMachines.last)
+                            const SizedBox(height: 10),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
           ),
         ),
       ),
@@ -17696,8 +17727,90 @@ class _InventoryHomeState extends State<InventoryHome> {
     historyLimit: historyLimit,
   );
 
+  List<StockLocationRecord> _recoverMissingLocationParents() {
+    final payloads = widget.database?.loadSnapshotLocationPayloads() ?? const [];
+    if (payloads.isEmpty || locations.isEmpty) return const [];
+    final snapshotById = {
+      for (final payload in payloads)
+        if (payload['id'] is String && payload['name'] is String)
+          payload['id'] as String: StockLocationRecord(
+            id: payload['id'] as String,
+            name: payload['name'] as String,
+            parentId: payload['parentId'] as String?,
+            kind: StockLocationKind.values.firstWhere(
+              (kind) => kind.name == payload['kind'],
+              orElse: () => StockLocationKind.location,
+            ),
+            depthRows: (payload['depthRows'] as num?)?.toInt() ?? 1,
+            gridX: (payload['gridX'] as num?)?.toInt() ?? 0,
+            gridY: (payload['gridY'] as num?)?.toInt() ?? 0,
+            gridWidth: (payload['gridWidth'] as num?)?.toInt() ?? 3,
+            gridHeight: (payload['gridHeight'] as num?)?.toInt() ?? 2,
+            displayAsParentUniqueLocation:
+                payload['displayAsParentUniqueLocation'] == true,
+          ),
+    };
+    final activeIds = locations.map((location) => location.id).toSet();
+    final recovered = <StockLocationRecord>[];
+    while (true) {
+      final next = locations
+          .map((location) => location.parentId)
+          .whereType<String>()
+          .where((id) => !activeIds.contains(id))
+          .map((id) => snapshotById[id])
+          .whereType<StockLocationRecord>()
+          .firstOrNull;
+      if (next == null) break;
+      activeIds.add(next.id);
+      locations.add(next);
+      recovered.add(next);
+    }
+    return recovered;
+  }
+
   bool _initializeLegacyLocations() {
     var changed = false;
+    // Older snapshots stored free-text paths. Resolve those against the
+    // structured tree before creating anything, so a path such as
+    // "X1C Rack / Tippy Top" never becomes a second root-level box.
+    final byPath = <String, StockLocationRecord>{
+      for (final location in locations)
+        if (location.parentId != null)
+        _locationPath(location.id).trim().toLowerCase(): location,
+    };
+    final duplicatePathRoots = locations
+        .where(
+          (location) =>
+              location.parentId == null &&
+              location.name.contains(' / ') &&
+              byPath[location.name.trim().toLowerCase()]?.id != location.id,
+        )
+        .toList();
+    for (final duplicate in duplicatePathRoots) {
+      final structured = byPath[duplicate.name.trim().toLowerCase()];
+      if (structured == null) continue;
+      for (var index = 0; index < inventory.length; index++) {
+        final item = inventory[index];
+        if (item.storageLocationId != duplicate.id) continue;
+        inventory[index] = item.copyWith(
+          storageLocationId: structured.id,
+          storageLocation: _locationPath(structured.id),
+        );
+      }
+      locations.remove(duplicate);
+      changed = true;
+    }
+    final currentIds = locations.map((location) => location.id).toSet();
+    for (var index = 0; index < locations.length; index++) {
+      final location = locations[index];
+      if (location.parentId == null || currentIds.contains(location.parentId)) {
+        continue;
+      }
+      // No safe source exists for this vanished parent. Promote its child so
+      // it remains usable and visible rather than silently disappearing.
+      locations[index] = location.copyWith(clearParentId: true);
+      changed = true;
+    }
     final byName = <String, StockLocationRecord>{
       for (final location in locations)
         location.name.trim().toLowerCase(): location,
@@ -17711,7 +17824,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final name = item.storageLocation.trim();
       if (name.isEmpty) continue;
       final key = name.toLowerCase();
-      final location = byName.putIfAbsent(key, () {
+      final location = byPath[key] ?? byName.putIfAbsent(key, () {
         final created = StockLocationRecord(
           id: 'LOC-${base64UrlEncode(utf8.encode(key)).replaceAll('=', '')}',
           name: name,
@@ -17984,6 +18097,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _applyRemoteEntityChanges(List<WorkshopEntityChange> changes) {
     var rebuildRoot = false;
     var inventoryChanged = false;
+    var repairedLocationHierarchy = false;
 
     T? decodedEntity<T>(
       WorkshopEntityChange change,
@@ -18265,6 +18379,20 @@ class _InventoryHomeState extends State<InventoryHome> {
           }
         case 'locations':
           if (change.deleted) {
+            final removed = locations
+                .where((entry) => entry.id == change.entityId)
+                .firstOrNull;
+            if (removed != null) {
+              for (var index = 0; index < locations.length; index++) {
+                final child = locations[index];
+                if (child.parentId != removed.id) continue;
+                locations[index] = child.copyWith(
+                  parentId: removed.parentId,
+                  clearParentId: removed.parentId == null,
+                );
+                repairedLocationHierarchy = true;
+              }
+            }
             locations.removeWhere((entry) => entry.id == change.entityId);
           } else {
             final value = decodedEntity<StockLocationRecord>(
@@ -18339,6 +18467,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       rememberAppliedChange(change);
     }
 
+    if (repairedLocationHierarchy) {
+      // A remote delete may arrive without the companion child updates. Keep
+      // those children visible rather than stranding them below a dead parent.
+      _refreshStructuredLocationPaths();
+      _persist();
+    }
     _invalidateSearchCaches();
     if (rebuildRoot && mounted) setState(() {});
     if (inventoryChanged) unawaited(_playSyncChime());
@@ -21340,6 +21474,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final depthController = TextEditingController(text: '1');
     String? parentId = initialParentId;
     var kind = StockLocationKind.location;
+    var displayAsParentUniqueLocation = false;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -21376,8 +21511,23 @@ class _InventoryHomeState extends State<InventoryHome> {
                         child: Text(_locationPath(location.id)),
                       ),
                   ],
-                  onChanged: (value) => parentId = value,
+                  onChanged: (value) => setDialogState(() => parentId = value),
                 ),
+                if (parentId != null) ...[
+                  const SizedBox(height: 4),
+                  SwitchListTile.adaptive(
+                    key: const Key('new-location-display-as-parent-unique'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Display as parent unique location'),
+                    subtitle: const Text(
+                      'Also show this nested location in Stockroom Items.',
+                    ),
+                    value: displayAsParentUniqueLocation,
+                    onChanged: (value) => setDialogState(
+                      () => displayAsParentUniqueLocation = value,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 DropdownButtonFormField<StockLocationKind>(
                   key: const Key('new-location-kind'),
@@ -21448,6 +21598,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         gridY: initialGridY ?? (locations.length ~/ 4) * 3,
         gridWidth: initialGridWidth ?? 3,
         gridHeight: initialGridHeight ?? 2,
+        displayAsParentUniqueLocation:
+            parentId != null && displayAsParentUniqueLocation,
       ),
     );
     _recordAudit('create', 'location', locations.last.id, {'name': name});
@@ -21483,6 +21635,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     var parentId = location.parentId;
     var kind = location.kind;
+    var displayAsParentUniqueLocation = location.displayAsParentUniqueLocation;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -21522,6 +21675,21 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ],
                   onChanged: (value) => setDialogState(() => parentId = value),
                 ),
+                if (parentId != null) ...[
+                  const SizedBox(height: 4),
+                  SwitchListTile.adaptive(
+                    key: const Key('rename-location-display-as-parent-unique'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Display as parent unique location'),
+                    subtitle: const Text(
+                      'Also show this nested location in Stockroom Items.',
+                    ),
+                    value: displayAsParentUniqueLocation,
+                    onChanged: (value) => setDialogState(
+                      () => displayAsParentUniqueLocation = value,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 DropdownButtonFormField<StockLocationKind>(
                   initialValue: kind,
@@ -21579,6 +21747,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       parentId: parentId,
       kind: kind,
       depthRows: depthRows,
+      displayAsParentUniqueLocation:
+          parentId != null && displayAsParentUniqueLocation,
     );
     _refreshStructuredLocationPaths();
     _recordAudit('rename', 'location', location.id, {
@@ -22393,20 +22563,23 @@ class _InventoryHomeState extends State<InventoryHome> {
           if (mounted) setState(() {});
         },
         child: SizedBox(
-          width: 36,
-          height: 36,
+          width: 24,
+          height: 24,
           child: Align(
-            alignment: Alignment.topLeft,
+            alignment: Alignment(
+              fromLeft ? -1 : 1,
+              fromTop ? -1 : 1,
+            ),
             child: Container(
-              width: 18,
-              height: 18,
+              width: 12,
+              height: 12,
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.surface,
                 border: Border.all(
                   color: Theme.of(context).colorScheme.primary,
-                  width: 2,
+                  width: 1.5,
                 ),
-                borderRadius: BorderRadius.circular(5),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
           ),
@@ -23016,7 +23189,11 @@ class _InventoryHomeState extends State<InventoryHome> {
           // resizable floating Stockroom window.
           final dialogFullscreen = stockroomFullscreen || compact;
           final sortedLocations = [
-            ...locations.where((location) => location.parentId == null),
+            ...locations.where(
+              (location) =>
+                  location.parentId == null ||
+                  location.displayAsParentUniqueLocation,
+            ),
           ]..sort((a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)));
           return AlertDialog(
             key: const Key('stockroom-dialog'),
@@ -43003,132 +43180,132 @@ class InventoryCard extends StatelessWidget {
               splashColor: Theme.of(context).colorScheme.primary
                   .withValues(alpha: .26),
               child: ItemCardEffects(
-          itemId: item.id,
-          quantitySyncVersion: quantitySyncVersion,
-          lowStockVersion: lowStockAnimationVersion,
-          moistureVersion: moistureAnimationVersion,
-          lowStockActive: !item.archived && _isLowStock(item),
-          moistureActive: _hasMoistureVisualAlert(item),
-          cardEffectsEnabled: cardEffectsEnabled,
-          lowStockEffectsEnabled: lowStockEffectsEnabled,
-          moistureEffectsEnabled: moistureEffectsEnabled,
-          remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
-          durationPercent: animationDurationPercent,
-          recurrenceSeconds: animationRecurrenceSeconds,
-          scrollingListenable: scrollingListenable,
-          child:
-              photoCard &&
-                  (item.thumbnailBytes != null || item.imageBytes != null)
-              ? _PhotoInventoryCardContent(
-                  item: item,
-                  typeLabel: typeLabel ?? item.typeLabel,
-                  typeIcon: typeIcon,
-                  typeIconImageBytes: typeIconImageBytes,
-                  spoolSizeLabel: spoolSizeLabel,
-                  showStatus: false,
-                  onQuantityChanged: canEdit ? onQuantityChanged : null,
-                  onStatusPressed: canEdit ? onStatusPressed : null,
-                  scrolling: scrollingListenable,
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 220;
-                    return Padding(
-                      padding: EdgeInsets.all(compact ? 12 : 18),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Flexible(
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    child: _QuantityStepper(
-                                      item: item,
-                                      compact: compact,
-                                      onQuantityChanged: canEdit
-                                          ? onQuantityChanged
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              if (item.archived)
-                                _ArchiveBadge(item: item)
-                            ],
-                          ),
-                          const Spacer(),
-                          _CardNameAndType(
-                            item: item,
-                            typeLabel: typeLabel ?? item.typeLabel,
-                            typeIcon: typeIcon,
-                            typeIconImageBytes: typeIconImageBytes,
-                            compact: compact,
-                          ),
-                          if (!compact) ...[
-                            const SizedBox(height: 8),
-                            _CardTagMetadataRow(
-                              item: item,
-                              metadata: spoolSizeLabel,
-                            ),
-                          ],
-                          SizedBox(height: compact ? 5 : 14),
-                          SizedBox(
-                            width: double.infinity,
-                            child: Row(
+                itemId: item.id,
+                quantitySyncVersion: quantitySyncVersion,
+                lowStockVersion: lowStockAnimationVersion,
+                moistureVersion: moistureAnimationVersion,
+                lowStockActive: !item.archived && _isLowStock(item),
+                moistureActive: _hasMoistureVisualAlert(item),
+                cardEffectsEnabled: cardEffectsEnabled,
+                lowStockEffectsEnabled: lowStockEffectsEnabled,
+                moistureEffectsEnabled: moistureEffectsEnabled,
+                remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
+                durationPercent: animationDurationPercent,
+                recurrenceSeconds: animationRecurrenceSeconds,
+                scrollingListenable: scrollingListenable,
+                child:
+                    photoCard &&
+                        (item.thumbnailBytes != null || item.imageBytes != null)
+                    ? _PhotoInventoryCardContent(
+                        item: item,
+                        typeLabel: typeLabel ?? item.typeLabel,
+                        typeIcon: typeIcon,
+                        typeIconImageBytes: typeIconImageBytes,
+                        spoolSizeLabel: spoolSizeLabel,
+                        showStatus: false,
+                        onQuantityChanged: canEdit ? onQuantityChanged : null,
+                        onStatusPressed: canEdit ? onStatusPressed : null,
+                        scrolling: scrollingListenable,
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 220;
+                          return Padding(
+                            padding: EdgeInsets.all(compact ? 12 : 18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                _ItemVisual(
-                                  item: item,
-                                  size: compact ? 32 : 38,
-                                  typeIcon: typeIcon,
-                                  typeIconImageBytes: typeIconImageBytes,
-                                ),
-                                // A gradient has one name, shown inline just
-                                // like a regular color name. Coextruded has
-                                // one name per strand, so those only surface
-                                // on hover (see _ItemVisual's tooltip).
-                                if (!compact &&
-                                    _itemCoextrudedColors(item) == null &&
-                                    (item.itemColorLabel.isNotEmpty ||
-                                        _itemGradientName(item)
-                                            .isNotEmpty)) ...[
-                                  const SizedBox(width: 8),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 110,
-                                    ),
-                                    child: Text(
-                                      item.itemColorLabel.isNotEmpty
-                                          ? item.itemColorLabel
-                                          : _itemGradientName(item),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Flexible(
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: _QuantityStepper(
+                                            item: item,
+                                            compact: compact,
+                                            onQuantityChanged: canEdit
+                                                ? onQuantityChanged
+                                                : null,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    if (item.archived)
+                                      _ArchiveBadge(item: item),
+                                  ],
+                                ),
                                 const Spacer(),
-                                if (item.materialName.isNotEmpty) ...[
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 110,
-                                    ),
-                                    child: _MaterialBadge(item: item),
+                                _CardNameAndType(
+                                  item: item,
+                                  typeLabel: typeLabel ?? item.typeLabel,
+                                  typeIcon: typeIcon,
+                                  typeIconImageBytes: typeIconImageBytes,
+                                  compact: compact,
+                                ),
+                                if (!compact) ...[
+                                  const SizedBox(height: 8),
+                                  _CardTagMetadataRow(
+                                    item: item,
+                                    metadata: spoolSizeLabel,
                                   ),
                                 ],
+                                SizedBox(height: compact ? 5 : 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: Row(
+                                    children: [
+                                      _ItemVisual(
+                                        item: item,
+                                        size: compact ? 32 : 38,
+                                        typeIcon: typeIcon,
+                                        typeIconImageBytes: typeIconImageBytes,
+                                      ),
+                                      // A gradient has one name, shown inline just
+                                      // like a regular color name. Coextruded has
+                                      // one name per strand, so those only surface
+                                      // on hover (see _ItemVisual's tooltip).
+                                      if (!compact &&
+                                          _itemCoextrudedColors(item) == null &&
+                                          (item.itemColorLabel.isNotEmpty ||
+                                              _itemGradientName(item)
+                                                  .isNotEmpty)) ...[
+                                        const SizedBox(width: 8),
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 110,
+                                          ),
+                                          child: Text(
+                                            item.itemColorLabel.isNotEmpty
+                                                ? item.itemColorLabel
+                                                : _itemGradientName(item),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                      const Spacer(),
+                                      if (item.materialName.isNotEmpty) ...[
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 110,
+                                          ),
+                                          child: _MaterialBadge(item: item),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
                               ],
                             ),
-                          ),
-                        ],
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
               ),
             ),
           ),

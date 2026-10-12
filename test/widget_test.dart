@@ -8697,6 +8697,79 @@ Bed Temperature: 80°C
     );
     expect(find.byKey(const Key('location-item-INV-FIL-0001')), findsOneWidget);
   });
+
+  testWidgets('Stockroom only lists opted-in child locations', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      InventorinatorApp(
+        persistedState: encodeWorkshopState(
+          inventory: const [],
+          vendors: const [],
+          brands: const [],
+          products: const [],
+          locations: const [
+            StockLocationRecord(id: 'LOC-RACK', name: 'Rack'),
+            StockLocationRecord(
+              id: 'LOC-HIDDEN-SHELF',
+              name: 'Hidden shelf',
+              parentId: 'LOC-RACK',
+            ),
+            StockLocationRecord(
+              id: 'LOC-DISPLAYED-SHELF',
+              name: 'Displayed shelf',
+              parentId: 'LOC-RACK',
+              displayAsParentUniqueLocation: true,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('open-stockroom')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('location-LOC-RACK')), findsOneWidget);
+    expect(find.byKey(const Key('location-LOC-HIDDEN-SHELF')), findsNothing);
+    expect(find.byKey(const Key('location-LOC-DISPLAYED-SHELF')), findsOneWidget);
+  });
+
+  testWidgets('legacy location paths do not become duplicate root locations', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      InventorinatorApp(
+        persistedState: encodeWorkshopState(
+          inventory: const [],
+          vendors: const [],
+          brands: const [],
+          products: const [],
+          locations: const [
+            StockLocationRecord(id: 'LOC-X1C', name: 'X1C Rack'),
+            StockLocationRecord(
+              id: 'LOC-TIPPY',
+              name: 'Tippy Top',
+              parentId: 'LOC-X1C',
+            ),
+            StockLocationRecord(
+              id: 'LOC-LEGACY-PATH',
+              name: 'X1C Rack / Tippy Top',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('open-stockroom')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('location-LOC-X1C')), findsOneWidget);
+    expect(find.byKey(const Key('location-LOC-LEGACY-PATH')), findsNothing);
+  });
   testWidgets('filament instructions tab fills missing canned guidance', (
     tester,
   ) async {

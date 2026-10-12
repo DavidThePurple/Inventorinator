@@ -31,7 +31,22 @@ begin
     rejected := true;
   end;
   if not rejected then raise exception 'Undo erased a referenced item'; end if;
-  perform public.apply_inventorinator_entity_changes(w,'device','[{"entityType":"kits","entityId":"KIT-A","fields":{},"deleted":true}]');
+  perform public.apply_inventorinator_entity_changes(
+    w, 'device',
+    jsonb_build_array(jsonb_build_object(
+      'entityType', 'kits',
+      'entityId', 'KIT-A',
+      'fields', '{}'::jsonb,
+      'deleted', true,
+      'baseFields', jsonb_build_object(
+        '(deleted)', (
+          select payload from public.inventorinator_entities
+          where workspace_id = w and entity_type = 'kits'
+            and entity_id = 'KIT-A' and not deleted
+        )
+      )
+    ))
+  );
   perform public.apply_inventorinator_entity_changes(w,'device',request);
   if not (select deleted from public.inventorinator_entities where workspace_id=w and entity_id='IMPORT-A') then raise exception 'Eligible undo did not delete'; end if;
   -- Replaying an acknowledged undo is harmless.

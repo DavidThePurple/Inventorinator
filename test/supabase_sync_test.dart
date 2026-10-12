@@ -633,6 +633,40 @@ void main() {
     );
   });
 
+  test(
+    'startup sync prompts when the app is behind the Remote schema',
+    () async {
+      final service = SupabaseSyncService(
+        config,
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode([
+              {'version': latestInventorinatorSchemaVersion + 1},
+            ]),
+            200,
+          ),
+        ),
+      );
+
+      await expectLater(
+        service.requireInventorySchema(
+          const SupabaseSession(
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            userId: 'user-id',
+          ),
+        ),
+        throwsA(
+          isA<RemoteSchemaTooNewException>().having(
+            (error) => error.message,
+            'message',
+            'Your app version is too far behind the Remote\'s database schema. Please update to sync with Remote.',
+          ),
+        ),
+      );
+    },
+  );
+
   test('workspace device administration uses authenticated RPCs', () async {
     final service = SupabaseSyncService(
       config.copyWith(workspaceId: 'workspace-id'),

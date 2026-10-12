@@ -8006,6 +8006,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Timer? _clockTick;
   bool _syncing = false;
   bool _autoSyncPausedForAuthentication = false;
+  bool _autoSyncPausedForAppUpdate = false;
   bool _applyingCloudState = false;
   final List<Map<String, Object?>> _pendingAuditEvents = [];
   // Keep audit metadata bounded per RPC. A device that was offline for a long
@@ -9311,6 +9312,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _syncPoll?.cancel();
     _syncPoll = null;
     _autoSyncPausedForAuthentication = false;
+    _autoSyncPausedForAppUpdate = false;
     final database = widget.database;
     if (database == null) return;
     final source = database.loadSyncConfig();
@@ -18866,7 +18868,9 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   Future<void> _syncAutomatically({bool force = false}) async {
     final database = widget.database;
-    if (database == null || _autoSyncPausedForAuthentication) {
+    if (database == null ||
+        _autoSyncPausedForAuthentication ||
+        _autoSyncPausedForAppUpdate) {
       return;
     }
     if (_syncing) {
@@ -19275,7 +19279,21 @@ class _InventoryHomeState extends State<InventoryHome> {
       _lastSyncedLocalRevision = syncingRevision;
       syncSucceeded = true;
     } on SupabaseSyncException catch (error) {
-      if (error.isInvalidRefreshToken) {
+      if (error is RemoteSchemaTooNewException) {
+        _autoSyncPausedForAppUpdate = true;
+        _syncPoll?.cancel();
+        if (mounted) {
+          showInventorinatorAlert(
+            context,
+            const SnackBar(
+              content: Text(
+                'Your app version is too far behind the Remote\'s database schema. Please update to sync with Remote.',
+              ),
+              duration: Duration(seconds: 10),
+            ),
+          );
+        }
+      } else if (error.isInvalidRefreshToken) {
         retryAfterRecovery = await _recoverExpiredOwnerSession(
           database,
           config,

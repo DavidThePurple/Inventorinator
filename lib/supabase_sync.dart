@@ -333,6 +333,16 @@ class SupabaseFeatureUnavailable extends SupabaseSyncException {
   const SupabaseFeatureUnavailable(super.message);
 }
 
+class RemoteSchemaTooNewException extends SupabaseSyncException {
+  const RemoteSchemaTooNewException(this.remoteVersion)
+    : super(
+        'Your app version is too far behind the Remote\'s database schema. '
+        'Please update to sync with Remote.',
+      );
+
+  final int remoteVersion;
+}
+
 class SupabaseSyncException implements Exception {
   const SupabaseSyncException(this.message);
   final String message;
@@ -543,6 +553,9 @@ class SupabaseSyncService {
 
   Future<int> requireInventorySchema(SupabaseSession session) async {
     final version = await schemaVersion(session);
+    if (version > latestInventorinatorSchemaVersion) {
+      throw RemoteSchemaTooNewException(version);
+    }
     if (version < minimumInventorySchemaVersion) {
       throw SupabaseSyncException(
         'This server uses Inventorinator schema v$version; '

@@ -18615,10 +18615,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     _trimAdditionHistory();
   }
 
-  // A field a locally-queued edit and an incoming remote change both
-  // touched, with different values. The local value always wins (see
-  // mergeRemoteChangesWithPending) -- this just puts the collision on
-  // record instead of resolving it silently.
+  // A simultaneous edit is only surfaced when this device has no revision
+  // ordering information. Once Remote has a newer revision, it replaces the
+  // stale local outbox value without asking the user to arbitrate it.
   void _recordSyncConflicts(List<WorkshopFieldConflict> conflicts) {
     _conflictStore?.record(conflicts);
     for (final conflict in conflicts) {
@@ -19696,8 +19695,21 @@ class _InventoryHomeState extends State<InventoryHome> {
         final incomingMerge = mergeRemoteChangesWithPending(
           incoming.changes,
           latestPending.map((entry) => entry.change),
+          remoteNewerWins: true,
         );
         _recordSyncConflicts(incomingMerge.conflicts);
+        final pendingByKey = {
+          for (final entry in latestPending)
+            '${entry.change.entityType}\u0000${entry.change.entityId}': entry,
+        };
+        database.acknowledgePendingWorkshopChanges(
+          incomingMerge.remoteOverrides
+              .map(
+                (change) =>
+                    pendingByKey['${change.entityType}\u0000${change.entityId}'],
+              )
+              .whereType<PendingWorkshopChange>(),
+        );
         database.discardRejectedDeleteTombstones(incomingMerge.rejectedDeletes);
         database.applyRemoteWorkshopChanges(incomingMerge.changes);
         _applyRemoteEntityChanges(incomingMerge.changes);
@@ -19804,8 +19816,21 @@ class _InventoryHomeState extends State<InventoryHome> {
         final confirmedMerge = mergeRemoteChangesWithPending(
           confirmed.changes,
           pending.map((entry) => entry.change),
+          remoteNewerWins: true,
         );
         _recordSyncConflicts(confirmedMerge.conflicts);
+        final pendingByKey = {
+          for (final entry in pending)
+            '${entry.change.entityType}\u0000${entry.change.entityId}': entry,
+        };
+        database.acknowledgePendingWorkshopChanges(
+          confirmedMerge.remoteOverrides
+              .map(
+                (change) =>
+                    pendingByKey['${change.entityType}\u0000${change.entityId}'],
+              )
+              .whereType<PendingWorkshopChange>(),
+        );
         database.discardRejectedDeleteTombstones(
           confirmedMerge.rejectedDeletes,
         );

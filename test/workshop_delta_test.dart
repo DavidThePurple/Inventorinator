@@ -119,6 +119,32 @@ void main() {
     },
   );
 
+  test('a newer Remote revision replaces a stale pending local edit', () {
+    final merged = mergeRemoteChangesWithPending(
+      const [
+        WorkshopEntityChange(
+          entityType: 'locations',
+          entityId: 'LOC-AD5X',
+          fields: {'name': 'AD5X Rack', 'gridX': 17},
+          revision: 43,
+        ),
+      ],
+      const [
+        WorkshopEntityChange(
+          entityType: 'locations',
+          entityId: 'LOC-AD5X',
+          fields: {'gridX': 5},
+          baseFields: {'(remoteRevision)': 42, 'gridX': 4},
+        ),
+      ],
+      remoteNewerWins: true,
+    );
+
+    expect(merged.changes.single.fields['gridX'], 17);
+    expect(merged.conflicts, isEmpty);
+    expect(merged.remoteOverrides.single.entityId, 'LOC-AD5X');
+  });
+
   test('disjoint-field edits from different devices produce no conflicts', () {
     final merged = mergeRemoteChangesWithPending(
       const [

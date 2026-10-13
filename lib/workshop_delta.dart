@@ -91,6 +91,7 @@ class WorkshopMergeResult {
     required this.changes,
     required this.conflicts,
     this.rejectedDeletes = const [],
+    this.remoteOverrides = const [],
   });
 
   final List<WorkshopEntityChange> changes;
@@ -99,26 +100,47 @@ class WorkshopMergeResult {
   /// Current Remote records which replaced a stale local tombstone. The
   /// caller must clear that tombstone from its outbox before applying these.
   final List<WorkshopEntityChange> rejectedDeletes;
+
+  /// Remote records that were revised after this device's pending baseline.
+  /// Their corresponding outbox records must be acknowledged before applying
+  /// the Remote record, so a stale device cannot upload over the newer state.
+  final List<WorkshopEntityChange> remoteOverrides;
+}
+
+bool _remoteIsNewerThanLocalBaseline(
+  WorkshopEntityChange remote,
+  WorkshopEntityChange local,
+) {
+  final baseline = local.baseFields?['(remoteRevision)'];
+  if (remote.revision == null || baseline is! num) return false;
+  return remote.revision! > baseline.toInt();
 }
 
 /// Keeps fields edited locally from being replaced by an incoming version of
 /// the same entity while those edits are still waiting in the sync outbox.
 WorkshopMergeResult mergeRemoteChangesWithPending(
   Iterable<WorkshopEntityChange> remoteChanges,
-  Iterable<WorkshopEntityChange> pendingChanges,
-) {
+  Iterable<WorkshopEntityChange> pendingChanges, {
+  bool remoteNewerWins = false,
+}) {
   final pendingByKey = {
     for (final change in pendingChanges)
       '${change.entityType}\u0000${change.entityId}': change,
   };
   final conflicts = <WorkshopFieldConflict>[];
   final rejectedDeletes = <WorkshopEntityChange>[];
+  final remoteOverrides = <WorkshopEntityChange>[];
   final changes = remoteChanges.map((remote) {
     final local = pendingByKey['${remote.entityType}\u0000${remote.entityId}'];
     if (local == null) return remote;
     if (local.deleted) {
       final baseline = local.baseFields?['(deleted)'];
       if (!remote.deleted && !_sameJson(remote.fields, baseline)) {
+        if (remoteNewerWins && _remoteIsNewerThanLocalBaseline(remote, local)) {
+          rejectedDeletes.add(remote);
+          remoteOverrides.add(remote);
+          return remote;
+        }
         conflicts.add(
           WorkshopFieldConflict(
             entityType: remote.entityType,
@@ -150,6 +172,10 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       return local;
     }
     if (remote.deleted) {
+      if (remoteNewerWins && _remoteIsNewerThanLocalBaseline(remote, local)) {
+        remoteOverrides.add(remote);
+        return remote;
+      }
       conflicts.add(
         WorkshopFieldConflict(
           entityType: remote.entityType,
@@ -161,12 +187,17 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
       );
       return local;
     }
+    var hasOverlappingConflict = false;
     for (final key in local.fields.keys) {
       if (remote.entityType == 'inventory' && key == 'modifiedAt') continue;
       if (remote.fields.containsKey(key) &&
           !_sameJson(remote.fields[key], local.fields[key]) &&
           !(local.baseFields?.containsKey(key) == true &&
               _sameJson(remote.fields[key], local.baseFields![key]))) {
+        hasOverlappingConflict = true;
+        if (remoteNewerWins && _remoteIsNewerThanLocalBaseline(remote, local)) {
+          continue;
+        }
         conflicts.add(
           WorkshopFieldConflict(
             entityType: remote.entityType,
@@ -177,6 +208,12 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
           ),
         );
       }
+    }
+    if (hasOverlappingConflict &&
+        remoteNewerWins &&
+        _remoteIsNewerThanLocalBaseline(remote, local)) {
+      remoteOverrides.add(remote);
+      return remote;
     }
     return WorkshopEntityChange(
       entityType: remote.entityType,
@@ -201,6 +238,7 @@ WorkshopMergeResult mergeRemoteChangesWithPending(
     changes: changes,
     conflicts: conflicts,
     rejectedDeletes: rejectedDeletes,
+    remoteOverrides: remoteOverrides,
   );
 }
 

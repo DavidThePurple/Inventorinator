@@ -1302,6 +1302,10 @@ class LocalDatabase {
     if (!change.deleted && base['(importUndo)'] == true) base.clear();
     final previous =
         readEntityPayload(change.entityType, change.entityId) ?? {};
+    base.putIfAbsent(
+      '(remoteRevision)',
+      () => entityRemoteRevision(change.entityType, change.entityId),
+    );
     if (change.deleted) {
       // A tombstone supersedes every earlier queued local edit. Keep the
       // original remote values for future diagnostics rather than treating the
@@ -1670,23 +1674,33 @@ class LocalDatabase {
       .select(
         checkoutSyncEnabled ? 'SELECT * FROM sync_outbox ORDER BY id' : "SELECT * FROM sync_outbox WHERE entity_type <> 'checkouts' ORDER BY id",
       )
-      .map(
-        (row) => PendingWorkshopChange(
+      .map((row) {
+        final entityType = row['entity_type'] as String;
+        final entityId = row['entity_id'] as String;
+        final baseFields = Map<String, dynamic>.from(
+          jsonDecode(row['base_json'] as String) as Map,
+        );
+        // Queues created before Remote revisions were tracked still need a
+        // baseline. The current stored revision is the last Remote state
+        // this device had when it began resolving this outbox entry.
+        baseFields.putIfAbsent(
+          '(remoteRevision)',
+          () => entityRemoteRevision(entityType, entityId),
+        );
+        return PendingWorkshopChange(
           outboxId: row['id'] as int,
           localRevision: row['local_revision'] as int,
           change: WorkshopEntityChange(
-            entityType: row['entity_type'] as String,
-            entityId: row['entity_id'] as String,
+            entityType: entityType,
+            entityId: entityId,
             fields: Map<String, dynamic>.from(
               jsonDecode(row['fields_json'] as String) as Map,
             ),
             deleted: row['deleted'] == 1,
-            baseFields: Map<String, dynamic>.from(
-              jsonDecode(row['base_json'] as String) as Map,
-            ),
+            baseFields: baseFields,
           ),
-        ),
-      )
+        );
+      })
       .toList();
 
   /// Lets an explicit "keep local" conflict decision replace the stale

@@ -233,7 +233,7 @@ packages:
     source: hosted
     version: "1.0.4"
   file_picker_linux:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: file_picker_linux
       sha256: f0f01ed42967b7355f6f25c8b121ea531d1948e2a9b4b44f4b4de8489d7b04ae

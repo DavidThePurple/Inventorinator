@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:file_picker_linux/file_picker_linux.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -22484,6 +22485,55 @@ class _InventoryHomeState extends State<InventoryHome> {
                           ),
                         ),
                       ),
+                    Tooltip(
+                      message: 'Choose a custom layout color',
+                      child: InkWell(
+                        key: const Key('new-location-custom-color'),
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () async {
+                          final selected = await showDialog<String>(
+                            context: dialogContext,
+                            builder: (_) => ItemColorPickerDialog(
+                              initialValue: colorHex.isEmpty
+                                  ? '#9F8AFF'
+                                  : colorHex,
+                              title: 'Choose layout color',
+                            ),
+                          );
+                          if (selected != null) {
+                            setDialogState(() => colorHex = selected);
+                          }
+                        },
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color:
+                                _hexColor(colorHex) ??
+                                Theme.of(dialogContext).colorScheme.surface,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Theme.of(dialogContext)
+                                  .colorScheme
+                                  .outlineVariant,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.palette_outlined,
+                            size: 17,
+                            color: _hexColor(colorHex) == null
+                                ? Theme.of(dialogContext).colorScheme.primary
+                                : ThemeData.estimateBrightnessForColor(
+                                        _hexColor(colorHex)!,
+                                      ) ==
+                                      Brightness.dark
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -22516,8 +22566,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                         icon: const Icon(Icons.add_photo_alternate_outlined),
                         label: Text(
                           photoBytes == null
-                              ? 'Add location photo'
-                              : 'Replace location photo',
+                              ? 'Add location Photo/Icon'
+                              : 'Replace location Photo/Icon',
                         ),
                       ),
                     ),
@@ -22756,6 +22806,55 @@ class _InventoryHomeState extends State<InventoryHome> {
                           ),
                         ),
                       ),
+                    Tooltip(
+                      message: 'Choose a custom layout color',
+                      child: InkWell(
+                        key: const Key('rename-location-custom-color'),
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () async {
+                          final selected = await showDialog<String>(
+                            context: dialogContext,
+                            builder: (_) => ItemColorPickerDialog(
+                              initialValue: colorHex.isEmpty
+                                  ? '#9F8AFF'
+                                  : colorHex,
+                              title: 'Choose layout color',
+                            ),
+                          );
+                          if (selected != null) {
+                            setDialogState(() => colorHex = selected);
+                          }
+                        },
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color:
+                                _hexColor(colorHex) ??
+                                Theme.of(dialogContext).colorScheme.surface,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Theme.of(dialogContext)
+                                  .colorScheme
+                                  .outlineVariant,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.palette_outlined,
+                            size: 17,
+                            color: _hexColor(colorHex) == null
+                                ? Theme.of(dialogContext).colorScheme.primary
+                                : ThemeData.estimateBrightnessForColor(
+                                        _hexColor(colorHex)!,
+                                      ) ==
+                                      Brightness.dark
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -22788,8 +22887,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                         icon: const Icon(Icons.add_photo_alternate_outlined),
                         label: Text(
                           photoBytes == null
-                              ? 'Add location photo'
-                              : 'Replace location photo',
+                              ? 'Add location Photo/Icon'
+                              : 'Replace location Photo/Icon',
                         ),
                       ),
                     ),
@@ -34595,9 +34694,34 @@ class _LogoAvatar extends StatelessWidget {
 }
 
 Future<Uint8List?> _pickImageBytes() async {
+  String? parentWindow;
+  if (Platform.isLinux) {
+    try {
+      final result = await Process.run('xdotool', [
+        'search',
+        '--pid',
+        '$pid',
+        '--onlyvisible',
+      ]);
+      final windowIds = (result.stdout as String)
+          .split('\n')
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty)
+          .toList();
+      parentWindow = windowIds.isEmpty ? null : windowIds.last;
+    } catch (_) {
+      // The portal still receives a modal request when xdotool is absent.
+    }
+  }
   final result = await FilePicker.pickFile(
     type: FileType.custom,
     allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+    dialogTitle: 'Choose image',
+    linuxOptions: FilePickerLinuxOptions(
+      lockParentWindow: true,
+      parentWindow: parentWindow,
+    ),
+    windowsOptions: const WindowsOptions(lockParentWindow: true),
   );
   return result?.readAsBytes();
 }

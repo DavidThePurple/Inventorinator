@@ -410,16 +410,46 @@ class _PrintNotesPainter extends CustomPainter {
 }
 
 class _LocationIcon extends StatelessWidget {
-  const _LocationIcon({super.key, this.kind = StockLocationKind.location});
+  const _LocationIcon({super.key, this.location, this.size = 24});
 
-  final StockLocationKind kind;
+  final StockLocationRecord? location;
+  final double size;
 
   @override
-  Widget build(BuildContext context) => Icon(
-    locationKindIcon(kind),
-    size: 24,
-    semanticLabel: locationKindLabel(kind),
-  );
+  Widget build(BuildContext context) {
+    final resolvedLocation =
+        location ?? const StockLocationRecord(id: '', name: '');
+    final resolvedKind = resolvedLocation.kind;
+    final color =
+        locationColor(location) ?? Theme.of(context).colorScheme.primary;
+    final photo = location?.photoBytes;
+    final icon = Icon(
+      locationDisplayIcon(resolvedLocation),
+      size: size,
+      color: color,
+      semanticLabel: locationKindLabel(resolvedKind),
+    );
+    if (photo == null || photo.isEmpty) return icon;
+    return Container(
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(math.max(1, size * .07)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .16),
+        border: Border.all(color: color.withValues(alpha: .85)),
+        borderRadius: BorderRadius.circular(size * .24),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(size * .16),
+        child: Image.memory(
+          photo,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, _, _) => icon,
+        ),
+      ),
+    );
+  }
 }
 
 class _DotGridPainter extends CustomPainter {
@@ -3244,6 +3274,32 @@ IconData locationKindIcon(StockLocationKind kind) => switch (kind) {
   StockLocationKind.bin => Icons.inbox_outlined,
 };
 
+const Map<String, IconData> _locationIconChoices = {
+  'warehouse': Icons.warehouse_outlined,
+  'workshop': Icons.handyman_outlined,
+  'printer': Icons.print_outlined,
+  'shelves': Icons.shelves,
+  'cabinet': Icons.inventory_2_outlined,
+  'bin': Icons.inbox_outlined,
+  'home': Icons.home_work_outlined,
+  'science': Icons.science_outlined,
+};
+
+const List<Color> _locationColorChoices = [
+  Color(0xff9f8aff),
+  Color(0xff52d8ff),
+  Color(0xff75e58d),
+  Color(0xffffc46b),
+  Color(0xffff73c9),
+  Color(0xffff6f91),
+];
+
+IconData locationDisplayIcon(StockLocationRecord location) =>
+    _locationIconChoices[location.iconKey] ?? locationKindIcon(location.kind);
+
+Color? locationColor(StockLocationRecord? location) =>
+    location == null ? null : _hexColor(location.colorHex);
+
 class StockLocationRecord {
   const StockLocationRecord({
     required this.id,
@@ -3256,6 +3312,9 @@ class StockLocationRecord {
     this.gridWidth = 3,
     this.gridHeight = 2,
     this.displayAsParentUniqueLocation = false,
+    this.iconKey = '',
+    this.colorHex = '',
+    this.photoBytes,
   });
 
   final String id;
@@ -3271,6 +3330,9 @@ class StockLocationRecord {
   /// Lets a nested shelf, bin, or station appear as a separate destination in
   /// the Stockroom Items list while retaining its physical parent in Layout.
   final bool displayAsParentUniqueLocation;
+  final String iconKey;
+  final String colorHex;
+  final Uint8List? photoBytes;
 
   StockLocationRecord copyWith({
     String? name,
@@ -3283,6 +3345,10 @@ class StockLocationRecord {
     int? gridWidth,
     int? gridHeight,
     bool? displayAsParentUniqueLocation,
+    String? iconKey,
+    String? colorHex,
+    Uint8List? photoBytes,
+    bool clearPhoto = false,
   }) => StockLocationRecord(
     id: id,
     name: name ?? this.name,
@@ -3295,6 +3361,9 @@ class StockLocationRecord {
     gridHeight: gridHeight ?? this.gridHeight,
     displayAsParentUniqueLocation:
         displayAsParentUniqueLocation ?? this.displayAsParentUniqueLocation,
+    iconKey: iconKey ?? this.iconKey,
+    colorHex: colorHex ?? this.colorHex,
+    photoBytes: clearPhoto ? null : (photoBytes ?? this.photoBytes),
   );
 }
 
@@ -5801,6 +5870,9 @@ String encodeWorkshopState({
           'gridHeight': location.gridHeight,
           'displayAsParentUniqueLocation':
               location.displayAsParentUniqueLocation,
+          'iconKey': location.iconKey,
+          'colorHex': location.colorHex,
+          'photo': _bytesToJson(location.photoBytes),
         },
       )
       .toList(),
@@ -6394,6 +6466,9 @@ WorkshopState? decodeWorkshopState(String? source) {
             gridHeight: (location['gridHeight'] as num?)?.toInt() ?? 2,
             displayAsParentUniqueLocation:
                 location['displayAsParentUniqueLocation'] == true,
+            iconKey: location['iconKey'] as String? ?? '',
+            colorHex: location['colorHex'] as String? ?? '',
+            photoBytes: _bytesFromJson(location['photo']),
           ),
         )
         .toList();
@@ -13647,6 +13722,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             canArchive: currentRole.canArchiveInventory,
             canMarkDepleted: _itemCanMarkDepleted(item),
             showStatus: _itemShowsStatus(item),
+            storageLocation: storageLocation,
             onStorageLocationTap: storageLocation == null
                 ? null
                 : () => _openLocation(storageLocation),
@@ -18304,6 +18380,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       gridHeight: (payload['gridHeight'] as num?)?.toInt() ?? 2,
       displayAsParentUniqueLocation:
           payload['displayAsParentUniqueLocation'] == true,
+      iconKey: payload['iconKey'] as String? ?? '',
+      colorHex: payload['colorHex'] as String? ?? '',
+      photoBytes: _bytesFromJson(payload['photo']),
     );
   }
 
@@ -21963,7 +22042,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 children: [
                   Row(
                     children: [
-                      _LocationIcon(kind: location.kind),
+                      _LocationIcon(location: location),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
@@ -22262,11 +22341,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     String? parentId = initialParentId;
     var kind = StockLocationKind.location;
     var displayAsParentUniqueLocation = false;
+    var iconKey = '';
+    var colorHex = '';
+    Uint8List? photoBytes;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Add location'),
+          scrollable: true,
           content: SizedBox(
             width: 460,
             child: Column(
@@ -22338,6 +22421,116 @@ class _InventoryHomeState extends State<InventoryHome> {
                   },
                 ),
                 const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  key: const Key('new-location-icon'),
+                  initialValue: iconKey,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Location icon'),
+                  items: [
+                    const DropdownMenuItem(
+                      value: '',
+                      child: Text('Match location type'),
+                    ),
+                    for (final entry in _locationIconChoices.entries)
+                      DropdownMenuItem(
+                        value: entry.key,
+                        child: Row(
+                          children: [
+                            Icon(entry.value, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              entry.key[0].toUpperCase() +
+                                  entry.key.substring(1),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => iconKey = value ?? ''),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Layout color',
+                    style: Theme.of(dialogContext).textTheme.labelLarge,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final color in _locationColorChoices)
+                      InkWell(
+                        key: Key('new-location-color-${_colorHex(color)}'),
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () =>
+                            setDialogState(() => colorHex = _colorHex(color)),
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: colorHex == _colorHex(color)
+                                  ? Theme.of(dialogContext)
+                                        .colorScheme
+                                        .onSurface
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _LocationIcon(
+                      location: StockLocationRecord(
+                        id: '',
+                        name: '',
+                        kind: kind,
+                        iconKey: iconKey,
+                        colorHex: colorHex,
+                        photoBytes: photoBytes,
+                      ),
+                      size: 34,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const Key('new-location-photo'),
+                        onPressed: () async {
+                          final picked = await _pickImageBytes();
+                          if (picked != null) {
+                            setDialogState(
+                              () => photoBytes =
+                                  _createCardThumbnail(picked) ?? picked,
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.add_photo_alternate_outlined),
+                        label: Text(
+                          photoBytes == null
+                              ? 'Add location photo'
+                              : 'Replace location photo',
+                        ),
+                      ),
+                    ),
+                    if (photoBytes != null)
+                      IconButton(
+                        tooltip: 'Remove location photo',
+                        onPressed: () =>
+                            setDialogState(() => photoBytes = null),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   key: const Key('new-location-depth-rows'),
                   controller: depthController,
@@ -22387,6 +22580,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         gridHeight: initialGridHeight ?? 2,
         displayAsParentUniqueLocation:
             parentId != null && displayAsParentUniqueLocation,
+        iconKey: iconKey,
+        colorHex: colorHex,
+        photoBytes: photoBytes,
       ),
     );
     _recordAudit('create', 'location', locations.last.id, {'name': name});
@@ -22423,11 +22619,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     var parentId = location.parentId;
     var kind = location.kind;
     var displayAsParentUniqueLocation = location.displayAsParentUniqueLocation;
+    var iconKey = location.iconKey;
+    var colorHex = location.colorHex;
+    Uint8List? photoBytes = location.photoBytes;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Edit location'),
+          scrollable: true,
           content: SizedBox(
             width: 460,
             child: Column(
@@ -22493,6 +22693,116 @@ class _InventoryHomeState extends State<InventoryHome> {
                   },
                 ),
                 const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  key: const Key('rename-location-icon'),
+                  initialValue: iconKey,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Location icon'),
+                  items: [
+                    const DropdownMenuItem(
+                      value: '',
+                      child: Text('Match location type'),
+                    ),
+                    for (final entry in _locationIconChoices.entries)
+                      DropdownMenuItem(
+                        value: entry.key,
+                        child: Row(
+                          children: [
+                            Icon(entry.value, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              entry.key[0].toUpperCase() +
+                                  entry.key.substring(1),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => iconKey = value ?? ''),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Layout color',
+                    style: Theme.of(dialogContext).textTheme.labelLarge,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final color in _locationColorChoices)
+                      InkWell(
+                        key: Key('rename-location-color-${_colorHex(color)}'),
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () =>
+                            setDialogState(() => colorHex = _colorHex(color)),
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: colorHex == _colorHex(color)
+                                  ? Theme.of(dialogContext)
+                                        .colorScheme
+                                        .onSurface
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _LocationIcon(
+                      location: StockLocationRecord(
+                        id: location.id,
+                        name: location.name,
+                        kind: kind,
+                        iconKey: iconKey,
+                        colorHex: colorHex,
+                        photoBytes: photoBytes,
+                      ),
+                      size: 34,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const Key('rename-location-photo'),
+                        onPressed: () async {
+                          final picked = await _pickImageBytes();
+                          if (picked != null) {
+                            setDialogState(
+                              () => photoBytes =
+                                  _createCardThumbnail(picked) ?? picked,
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.add_photo_alternate_outlined),
+                        label: Text(
+                          photoBytes == null
+                              ? 'Add location photo'
+                              : 'Replace location photo',
+                        ),
+                      ),
+                    ),
+                    if (photoBytes != null)
+                      IconButton(
+                        tooltip: 'Remove location photo',
+                        onPressed: () =>
+                            setDialogState(() => photoBytes = null),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: depthController,
                   keyboardType: TextInputType.number,
@@ -22536,6 +22846,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       depthRows: depthRows,
       displayAsParentUniqueLocation:
           parentId != null && displayAsParentUniqueLocation,
+      iconKey: iconKey,
+      colorHex: colorHex,
+      photoBytes: photoBytes,
+      clearPhoto: photoBytes == null,
     );
     _refreshStructuredLocationPaths();
     _recordAudit('rename', 'location', location.id, {
@@ -23820,15 +24134,29 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                   : null,
                                               child: DecoratedBox(
                                                 decoration: BoxDecoration(
-                                                  color: Theme.of(context)
-                                                      .colorScheme
-                                                      .primaryContainer
-                                                      .withValues(alpha: .62),
+                                                  color:
+                                                      (locationColor(
+                                                                location,
+                                                              ) ??
+                                                              Theme.of(context)
+                                                                  .colorScheme
+                                                                  .primary)
+                                                          .withValues(
+                                                            alpha: .24,
+                                                          ),
                                                   border: Border.all(
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary
-                                                        .withValues(alpha: .85),
+                                                    color:
+                                                        (locationColor(
+                                                                  location,
+                                                                ) ??
+                                                                Theme.of(
+                                                                      context,
+                                                                    )
+                                                                    .colorScheme
+                                                                    .primary)
+                                                            .withValues(
+                                                              alpha: .92,
+                                                            ),
                                                     width: 1.5,
                                                   ),
                                                   borderRadius:
@@ -23837,6 +24165,32 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                 child: Stack(
                                                   clipBehavior: Clip.hardEdge,
                                                   children: [
+                                                    Positioned(
+                                                      top: 3,
+                                                      right: 3,
+                                                      child: Icon(
+                                                        locationDisplayIcon(
+                                                          location,
+                                                        ),
+                                                        size: 14,
+                                                        color:
+                                                            (locationColor(
+                                                                      location,
+                                                                    ) ??
+                                                                    Theme.of(
+                                                                          context,
+                                                                        )
+                                                                        .colorScheme
+                                                                        .primary)
+                                                                .withValues(
+                                                                  alpha: .95,
+                                                                ),
+                                                        semanticLabel:
+                                                            locationKindLabel(
+                                                              location.kind,
+                                                            ),
+                                                      ),
+                                                    ),
                                                     Center(
                                                       child:
                                                           location.gridWidth <=
@@ -24245,8 +24599,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                                                 2,
                                                                           ),
                                                                       child: _LocationIcon(
-                                                                        kind: location
-                                                                            .kind,
+                                                                        location:
+                                                                            location,
                                                                         key: Key(
                                                                           'location-pin-${location.id}',
                                                                         ),
@@ -24304,7 +24658,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                               initialTab: 1,
                                                             ),
                                                         leading: _LocationIcon(
-                                                          kind: location.kind,
+                                                          location: location,
                                                           key: Key(
                                                             'location-pin-${location.id}',
                                                           ),
@@ -39560,6 +39914,7 @@ class ItemDetailsPanel extends StatefulWidget {
     this.canArchive = true,
     this.canMarkDepleted = true,
     this.showStatus = true,
+    this.storageLocation,
     this.onStorageLocationTap,
     this.onFindSimilar,
   });
@@ -39591,6 +39946,7 @@ class ItemDetailsPanel extends StatefulWidget {
   final bool canArchive;
   final bool canMarkDepleted;
   final bool showStatus;
+  final StockLocationRecord? storageLocation;
   final Future<void> Function()? onStorageLocationTap;
   final Future<void> Function(InventoryItem item)? onFindSimilar;
 
@@ -41316,7 +41672,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                         ),
                         const SizedBox(height: 18),
                       ],
-                      if (item.type == InventoryType.filament)
+                      if (item.type == InventoryType.filament ||
+                          item.storageLocationId.isNotEmpty ||
+                          item.storageLocation.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 20),
                           child: Card(
@@ -41327,7 +41685,8 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                               onTap: widget.onStorageLocationTap == null
                                   ? null
                                   : _openStorageLocation,
-                              leading: const _LocationIcon(
+                              leading: _LocationIcon(
+                                location: widget.storageLocation,
                                 key: Key('sidebar-location-pin'),
                               ),
                               title: const Text('Storage location'),

@@ -145,12 +145,15 @@ void main() {
         ],
       ),
     ],
-    locations: const [
+    locations: [
       StockLocationRecord(id: 'LOCATION-WORKSHOP', name: 'Workshop'),
       StockLocationRecord(
         id: 'LOCATION-DRY-BOX',
         name: 'Dry box',
         parentId: 'LOCATION-WORKSHOP',
+        iconKey: 'shelves',
+        colorHex: '#52D8FF',
+        photoBytes: Uint8List.fromList(const [1, 2, 3, 4]),
       ),
     ],
     shoppingList: const [
@@ -217,6 +220,12 @@ void main() {
     expect(restored.builds.single.shared, isTrue);
     expect(restored.builds.single.ownerUserId, 'USER-OWNER');
     expect(restored.locations.last.parentId, 'LOCATION-WORKSHOP');
+    expect(restored.locations.last.iconKey, 'shelves');
+    expect(restored.locations.last.colorHex, '#52D8FF');
+    expect(
+      restored.locations.last.photoBytes,
+      orderedEquals(const [1, 2, 3, 4]),
+    );
     expect(restored.shoppingList.single.status, ShoppingListStatus.ordered);
     expect(restored.auditLog.single.entityId, 'BUILD-1');
     expect(restored.additionHistory.single.deviceName, 'Linux desktop');

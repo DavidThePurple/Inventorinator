@@ -16,6 +16,18 @@ const supportedKitPackageTypes = <String>{
   'sock',
 };
 
+/// Lets generic inventory import stop before it mistakes a kit package for a
+/// single ordinary JSON item.
+bool isInventorinatorKitPackageDocument(String source) {
+  try {
+    final decoded = jsonDecode(source);
+    return decoded is Map &&
+        decoded['format'] == inventorinatorKitPackageFormat;
+  } on FormatException {
+    return false;
+  }
+}
+
 class KitPackageSource {
   const KitPackageSource({required this.url, this.title = ''});
 

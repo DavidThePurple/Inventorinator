@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <mmsystem.h>
 
+#include <string>
+
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -91,6 +93,50 @@ bool FlutterWindow::OnCreate() {
         }
         result->Success();
       });
+  native_theme_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "inventorinator/window_theme",
+          &flutter::StandardMethodCodec::GetInstance());
+  native_theme_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        if (call.method_name() != "setTheme" || call.arguments() == nullptr) {
+          result->NotImplemented();
+          return;
+        }
+        const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+        if (arguments == nullptr) {
+          result->Error("window_theme", "Expected theme colors.");
+          return;
+        }
+        const auto color = [&arguments](const char* key, COLORREF fallback) {
+          const auto entry = arguments->find(flutter::EncodableValue(key));
+          if (entry == arguments->end()) return fallback;
+          const auto* value = std::get_if<std::string>(&entry->second);
+          if (value == nullptr || value->size() != 7 || (*value)[0] != '#') {
+            return fallback;
+          }
+          try {
+            const unsigned long rgb = std::stoul(value->substr(1), nullptr, 16);
+            return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
+          } catch (...) {
+            return fallback;
+          }
+        };
+        bool inventory_craft = false;
+        const auto design = arguments->find(flutter::EncodableValue("design"));
+        if (design != arguments->end()) {
+          if (const auto* value = std::get_if<std::string>(&design->second)) {
+            inventory_craft = *value == "inventoryCraft";
+          }
+        }
+        SetCustomFrameColors(
+            color("canvas", RGB(18, 13, 28)), color("surface", RGB(27, 23, 38)),
+            color("base", RGB(117, 93, 165)), color("container", RGB(73, 57, 112)),
+            color("outlineVariant", RGB(70, 57, 85)),
+            color("rim", RGB(130, 100, 180)),
+            color("foreground", RGB(238, 234, 255)), inventory_craft);
+        result->Success();
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -108,6 +154,7 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   if (flutter_controller_) {
     audio_channel_.reset();
+    native_theme_channel_.reset();
     xreal_r1_channel_.reset();
     xreal_r1_camera_.reset();
     flutter_controller_ = nullptr;
@@ -120,8 +167,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  const bool custom_frame_message =
+      message == WM_NCHITTEST || message == WM_LBUTTONUP ||
+      message == WM_LBUTTONDBLCLK || message == WM_MOUSEMOVE ||
+      message == WM_MOUSELEAVE || message == WM_PAINT ||
+      message == WM_ERASEBKGND;
   // Give Flutter, including plugins, an opportunity to handle window messages.
-  if (flutter_controller_) {
+  if (flutter_controller_ && !custom_frame_message) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
                                                       lparam);

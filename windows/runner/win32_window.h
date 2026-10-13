@@ -53,7 +53,16 @@ class Win32Window {
   void SetQuitOnClose(bool quit_on_close);
 
   // Return a RECT representing the bounds of the current client area.
+  // The Inventorinator desktop shell reserves its custom title bar above this
+  // area, so hosted Flutter content never covers the window controls.
   RECT GetClientArea();
+
+  // Keeps the Windows custom frame in lockstep with Inventorinator's selected
+  // in-app theme. Colors are standard COLORREF values.
+  void SetCustomFrameColors(COLORREF canvas, COLORREF surface, COLORREF base,
+                            COLORREF container, COLORREF outline,
+                            COLORREF rim, COLORREF foreground,
+                            bool inventory_craft = false);
 
  protected:
   // Processes and route salient window messages for mouse handling,
@@ -90,6 +99,12 @@ class Win32Window {
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
+  int TitleBarHeight() const;
+  int ResizeBorderWidth() const;
+  int TitleBarControlAt(POINT point) const;
+  void PaintCustomTitleBar(HDC dc);
+  void TrackTitleBarMouse();
+
   bool quit_on_close_ = false;
 
   // window handle for top level window.
@@ -97,6 +112,17 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+
+  bool tracking_titlebar_mouse_ = false;
+  int hovered_titlebar_control_ = 0;
+  COLORREF frame_canvas_ = RGB(18, 13, 28);
+  COLORREF frame_surface_ = RGB(27, 23, 38);
+  COLORREF frame_base_ = RGB(117, 93, 165);
+  COLORREF frame_container_ = RGB(73, 57, 112);
+  COLORREF frame_outline_ = RGB(70, 57, 85);
+  COLORREF frame_rim_ = RGB(130, 100, 180);
+  COLORREF frame_foreground_ = RGB(238, 234, 255);
+  bool frame_inventory_craft_ = false;
 };
 
 #endif  // RUNNER_WIN32_WINDOW_H_

@@ -61,6 +61,7 @@ import 'sync_conflicts.dart';
 import 'workshop_reports.dart';
 import 'digikey_search_dialog.dart';
 import 'scratch_pad.dart';
+import 'visual_effect_preferences.dart' as visual_effect_preferences;
 
 // A single explicit very-dark violet canvas across every platform. Keeping the
 // green channel lowest prevents the background from drifting teal/green.
@@ -567,28 +568,32 @@ class _EdgeLightPainter extends CustomPainter {
       required Color second,
       required double strength,
     }) {
-      final startFade = math.max(0.0, center - width * 1.8);
-      final coreStart = math.max(startFade, center - width * .55);
-      final coreEnd = math.min(1.0, center + width * .25);
-      final endFade = math.min(1.0, math.max(coreEnd, center + width * 1.8));
+      // Paint a real, bounded pool rather than a full-width transparent
+      // stroke. A transparent shader still makes the GPU blur the whole edge
+      // every tick on large desktop displays. These short segments preserve
+      // the big moving blobs while keeping the expensive blur local.
+      final halfLength = math.min(.30, width * .78);
+      final from = (center - halfLength).clamp(0.0, 1.0);
+      final to = (center + halfLength).clamp(0.0, 1.0);
+      final poolStart = Offset.lerp(start, end, from)!;
+      final poolEnd = Offset.lerp(start, end, to)!;
       final rect = Rect.fromLTRB(
-        math.min(start.dx, end.dx),
-        math.min(start.dy, end.dy),
-        math.max(start.dx, end.dx),
-        math.max(start.dy, end.dy),
-      ).inflate(1);
+        math.min(poolStart.dx, poolEnd.dx),
+        math.min(poolStart.dy, poolEnd.dy),
+        math.max(poolStart.dx, poolEnd.dx),
+        math.max(poolStart.dy, poolEnd.dy),
+      ).inflate(14);
       final shader = LinearGradient(
         begin: horizontal ? const Alignment(-1, 0) : const Alignment(0, -1),
         end: horizontal ? const Alignment(1, 0) : const Alignment(0, 1),
         colors: [
-          Colors.transparent,
           Colors.transparent,
           first.withValues(alpha: bandAlpha * strength * .20),
           second.withValues(alpha: bandAlpha * strength * .42),
           second.withValues(alpha: bandAlpha * strength * .12),
           Colors.transparent,
         ],
-        stops: [0, startFade, coreStart, coreEnd, endFade, 1],
+        stops: const [0, .18, .46, .72, 1],
       ).createShader(rect);
       final glow = Paint()
         ..style = PaintingStyle.stroke
@@ -596,13 +601,13 @@ class _EdgeLightPainter extends CustomPainter {
         ..strokeWidth = 9
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10)
         ..shader = shader;
-      canvas.drawLine(start, end, glow);
+      canvas.drawLine(poolStart, poolEnd, glow);
       final core = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeWidth = 1.8
         ..shader = shader;
-      canvas.drawLine(start, end, core);
+      canvas.drawLine(poolStart, poolEnd, core);
     }
 
     final time = progress * math.pi * 2;
@@ -789,10 +794,15 @@ class _EdgeLitSearchField extends StatefulWidget {
 }
 
 class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
-  static const _edgePaintInterval = Duration(milliseconds: 50);
+  // JellyStock keeps its slower rim. InventoryCraft emits one short scan every
+  // ten seconds instead of continuously animating the search field.
+  static const _edgePaintInterval = Duration(milliseconds: 67);
+  static const _inventoryCraftScanInterval = Duration(seconds: 10);
+  static const _inventoryCraftScanDuration = Duration(milliseconds: 1200);
   final ValueNotifier<double> _edgeProgress = ValueNotifier(0);
   final Stopwatch _edgeClock = Stopwatch();
   Timer? _edgeTimer;
+  bool _technical = false;
 
   @override
   void initState() {
@@ -812,6 +822,15 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
     _handleFocusChanged();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final technical = _isInventoryCraft(context);
+    if (_technical == technical) return;
+    _technical = technical;
+    _handleFocusChanged();
+  }
+
   void _handleTextChanged() {
     _handleFocusChanged();
     if (mounted) setState(() {});
@@ -820,9 +839,13 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   void _handleFocusChanged() {
     // Infinite idle animation is intentionally disabled under widget tests so
     // pumpAndSettle can still settle the rest of the application.
-    if (!widget.enabled ||
-        (widget.focusNode.hasFocus && widget.controller.text.isEmpty) ||
-        Platform.environment.containsKey('FLUTTER_TEST')) {
+    // Search decoration is an idle affordance. Never compete with a cursor or
+    // typed text while the user is actively working in the field.
+    final shouldAnimate =
+        (_technical || widget.enabled) &&
+        !widget.focusNode.hasFocus &&
+        !Platform.environment.containsKey('FLUTTER_TEST');
+    if (!shouldAnimate) {
       _edgeTimer?.cancel();
       _edgeTimer = null;
       _edgeClock.stop();
@@ -833,6 +856,20 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
         ..start();
       _edgeProgress.value = 0;
       _edgeTimer = Timer.periodic(_edgePaintInterval, (_) {
+        if (_technical) {
+          final elapsed =
+              _edgeClock.elapsedMicroseconds %
+              _inventoryCraftScanInterval.inMicroseconds;
+          final visible = _isEffectWidgetVisible(context);
+          final nextProgress =
+              visible && elapsed < _inventoryCraftScanDuration.inMicroseconds
+              ? elapsed / _inventoryCraftScanDuration.inMicroseconds
+              : 1.0;
+          if (_edgeProgress.value != nextProgress) {
+            _edgeProgress.value = nextProgress;
+          }
+          return;
+        }
         const cycle = Duration(seconds: 11);
         final elapsed = _edgeClock.elapsedMicroseconds % cycle.inMicroseconds;
         _edgeProgress.value = elapsed / cycle.inMicroseconds;
@@ -853,7 +890,12 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final palette = theme.extension<InventorinatorColors>();
-    final accent = theme.colorScheme.primary;
+    final technical = _isInventoryCraft(context);
+    // InventoryCraft keeps primary monochrome for its structural controls;
+    // search scanning instead follows the user's chosen accent color.
+    final accent = technical
+        ? palette?.accent ?? theme.colorScheme.primary
+        : theme.colorScheme.primary;
     final light = theme.brightness == Brightness.light;
     final input = palette?.input ?? theme.colorScheme.surfaceContainerLow;
 
@@ -911,17 +953,25 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
             : null,
         filled: true,
         fillColor: input,
+        // InventoryCraft reserves color for the focus outline. Material's
+        // default focused fill turned the entire wide search field purple.
+        focusColor: technical ? input : null,
+        hoverColor: technical ? input : null,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(technical ? 2 : 18),
+          borderSide: technical
+              ? BorderSide(color: theme.colorScheme.outlineVariant)
+              : BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(technical ? 2 : 18),
+          borderSide: technical
+              ? BorderSide(color: theme.colorScheme.outlineVariant)
+              : BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(technical ? 2 : 18),
+          borderSide: technical ? BorderSide(color: accent) : BorderSide.none,
         ),
       ),
     );
@@ -933,7 +983,17 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
         animation: Listenable.merge([_edgeProgress, widget.focusNode]),
         child: Padding(padding: const EdgeInsets.all(1.5), child: field),
         builder: (context, child) => CustomPaint(
-          foregroundPainter: widget.enabled
+          foregroundPainter: technical
+              ? _InventoryCraftSearchSweepPainter(
+                  progress: _edgeProgress.value,
+                  accent: accent,
+                  line: theme.colorScheme.outlineVariant,
+                  active:
+                      !widget.focusNode.hasFocus &&
+                      _edgeProgress.value < 1 &&
+                      _isEffectWidgetVisible(context),
+                )
+              : widget.enabled
               ? _EdgeLightPainter(
                   progress: _edgeProgress.value,
                   accent: accent,
@@ -947,6 +1007,62 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
       ),
     );
   }
+}
+
+/// A low-cost ArtCraft-style scan: a crisp travelling segment, not a blurred
+/// neon halo. It only runs while the search is active.
+class _InventoryCraftSearchSweepPainter extends CustomPainter {
+  const _InventoryCraftSearchSweepPainter({
+    required this.progress,
+    required this.accent,
+    required this.line,
+    required this.active,
+  });
+
+  final double progress;
+  final Color accent;
+  final Color line;
+  final bool active;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 2 || size.height <= 2) return;
+    final rect = Rect.fromLTWH(.5, .5, size.width - 1, size.height - 1);
+    final border = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = line.withValues(alpha: active ? .92 : .72);
+    canvas.drawRect(rect, border);
+    if (!active) return;
+
+    // Allow the diagonal pass to enter and leave the field rather than
+    // popping at either edge. It loses intensity as it travels right.
+    final center = (-.16 + progress * 1.32) * size.width;
+    final fade = (1 - progress * .72).clamp(.18, 1.0).toDouble();
+    final scan = Paint()
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.square
+      ..color = accent.withValues(alpha: .9 * fade);
+    canvas.save();
+    canvas.clipRect(rect);
+    for (var trail = 0; trail < 3; trail++) {
+      final offset = trail * 12.0;
+      scan.color = accent.withValues(alpha: (.9 * fade) / (trail + 1));
+      canvas.drawLine(
+        Offset(center - 21 - offset, size.height - 1),
+        Offset(center + 21 - offset, 1),
+        scan,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _InventoryCraftSearchSweepPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.accent != accent ||
+      oldDelegate.line != line ||
+      oldDelegate.active != active;
 }
 
 class _NewItemGlow extends StatefulWidget {
@@ -1325,6 +1441,31 @@ Color _themeCanvas(BuildContext context) =>
     Theme.of(context).extension<InventorinatorColors>()?.canvas ??
     _appCanvasColor;
 
+/// Anchors a context menu at the pointer. Flutter already chooses left/right
+/// from the available room; we choose above/below explicitly so a tall menu
+/// never looks detached at the bottom of the window.
+RelativeRect _cursorMenuPosition(
+  BuildContext context,
+  Offset globalPosition, {
+  required double estimatedHeight,
+}) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final box = overlay.context.findRenderObject()! as RenderBox;
+  final pointer = box.globalToLocal(globalPosition);
+  final roomBelow = box.size.height - pointer.dy;
+  final roomAbove = pointer.dy;
+  final opensBelow = roomBelow >= roomAbove;
+  final desiredTop = opensBelow ? pointer.dy : pointer.dy - estimatedHeight;
+  final maxTop = math.max(8.0, box.size.height - estimatedHeight - 8.0);
+  final top = desiredTop.clamp(8.0, maxTop).toDouble();
+  return RelativeRect.fromLTRB(
+    pointer.dx,
+    top,
+    box.size.width - pointer.dx,
+    box.size.height - top,
+  );
+}
+
 enum AppColorTheme {
   darkPurple,
   darkRed,
@@ -1336,6 +1477,34 @@ enum AppColorTheme {
 }
 
 enum AppBrightnessMode { dark, light }
+
+/// The overall interface language. Accent color and brightness remain
+/// independent so every style supports the same appearance choices.
+enum AppDesignTheme { jellyStock, inventoryCraft }
+
+/// Decorative layer rendered over an optional wallpaper, below app content.
+enum BackgroundOverlay { wallpaper, grid, dotMatrix }
+
+extension BackgroundOverlayLabel on BackgroundOverlay {
+  String get label => switch (this) {
+    BackgroundOverlay.wallpaper => 'Wallpaper',
+    BackgroundOverlay.grid => 'Grid',
+    BackgroundOverlay.dotMatrix => 'Dot matrix',
+  };
+}
+
+extension AppDesignThemeLabel on AppDesignTheme {
+  String get label => switch (this) {
+    AppDesignTheme.jellyStock => 'JellyStock',
+    AppDesignTheme.inventoryCraft => 'InventoryCraft',
+  };
+
+  String get description => switch (this) {
+    AppDesignTheme.jellyStock => 'Soft, rounded inventory controls.',
+    AppDesignTheme.inventoryCraft =>
+      'Dense technical panels inspired by ArtCraft Launcher.',
+  };
+}
 
 extension AppColorThemeLabel on AppColorTheme {
   String get label => switch (this) {
@@ -1470,10 +1639,14 @@ class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
     AppColorTheme theme, {
     Color customColor = const Color(0xff8e75ff),
     AppBrightnessMode brightness = AppBrightnessMode.dark,
+    AppDesignTheme designTheme = AppDesignTheme.jellyStock,
   }) {
     final source = theme == AppColorTheme.custom
         ? customColor
         : palettes[theme]!.base;
+    if (designTheme == AppDesignTheme.inventoryCraft) {
+      return fromInventoryCraftColor(source, brightness: brightness);
+    }
     if (brightness == AppBrightnessMode.light) {
       return fromLightColor(source);
     }
@@ -1537,6 +1710,51 @@ class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
     );
   }
 
+  static InventorinatorColors fromInventoryCraftColor(
+    Color color, {
+    required AppBrightnessMode brightness,
+  }) {
+    final source = HSVColor.fromColor(color);
+    final saturation = source.saturation.clamp(0.0, 1.0);
+    Color accent(double saturationScale, double value) => HSVColor.fromAHSV(
+      1,
+      source.hue,
+      (math.max(.38, saturation * saturationScale)).clamp(0.0, 1.0),
+      value,
+    ).toColor();
+
+    if (brightness == AppBrightnessMode.light) {
+      return InventorinatorColors(
+        canvas: const Color(0xffefefeb),
+        surface: const Color(0xfffafaf7),
+        panel: const Color(0xffe3e4df),
+        input: const Color(0xffffffff),
+        accent: accent(.86, .42),
+        base: accent(.72, .50),
+        container: accent(.22, .88),
+        flash: accent(.90, .58),
+        flashDark: accent(.78, .36),
+        outline: const Color(0xff696c68),
+        outlineVariant: const Color(0xffb9bcb7),
+        rim: accent(.72, .48),
+      );
+    }
+    return InventorinatorColors(
+      canvas: const Color(0xff0b0c0e),
+      surface: const Color(0xff151619),
+      panel: const Color(0xff101114),
+      input: const Color(0xff0d0e10),
+      accent: accent(.92, .94),
+      base: accent(.76, .66),
+      container: accent(.66, .30),
+      flash: accent(.90, .78),
+      flashDark: accent(.72, .44),
+      outline: const Color(0xff5c5e63),
+      outlineVariant: const Color(0xff34363b),
+      rim: accent(.75, .66),
+    );
+  }
+
   @override
   InventorinatorColors copyWith() => this;
 
@@ -1544,6 +1762,30 @@ class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
   InventorinatorColors lerp(InventorinatorColors? other, double t) =>
       other ?? this;
 }
+
+@immutable
+class InventorinatorDesign extends ThemeExtension<InventorinatorDesign> {
+  const InventorinatorDesign(this.theme);
+
+  final AppDesignTheme theme;
+
+  bool get isInventoryCraft => theme == AppDesignTheme.inventoryCraft;
+
+  @override
+  InventorinatorDesign copyWith({AppDesignTheme? theme}) =>
+      InventorinatorDesign(theme ?? this.theme);
+
+  @override
+  InventorinatorDesign lerp(InventorinatorDesign? other, double t) =>
+      other ?? this;
+}
+
+bool _isInventoryCraft(BuildContext context) =>
+    Theme.of(context).extension<InventorinatorDesign>()?.isInventoryCraft ??
+    false;
+
+double _designRadius(BuildContext context, double jellyRadius) =>
+    _isInventoryCraft(context) ? 2 : jellyRadius;
 
 String _normalizedStockName(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -1726,36 +1968,40 @@ class _JewelPanel extends StatelessWidget {
   final Widget? trailing;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: palette.panel,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: palette.outlineVariant),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                  letterSpacing: .3,
+  Widget build(BuildContext context) {
+    final technical = _isInventoryCraft(context);
+    return Container(
+      padding: EdgeInsets.all(technical ? 10 : 14),
+      decoration: BoxDecoration(
+        color: palette.panel,
+        borderRadius: BorderRadius.circular(_designRadius(context, 16)),
+        border: Border.all(color: palette.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    letterSpacing: technical ? .7 : .3,
+                    fontFamily: technical ? 'monospace' : null,
+                  ),
                 ),
               ),
-            ),
-            ?trailing,
-          ],
-        ),
-        const SizedBox(height: 10),
-        child,
-      ],
-    ),
-  );
+              ?trailing,
+            ],
+          ),
+          SizedBox(height: technical ? 8 : 10),
+          child,
+        ],
+      ),
+    );
+  }
 }
 
 /// A glowing filled line chart in the style of a "jewel" sparkline: a
@@ -6691,11 +6937,41 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
     final palette =
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final inventoryCraft = _isInventoryCraft(context);
     final light = Theme.of(context).brightness == Brightness.light;
     final disabled = widget.states.contains(WidgetState.disabled);
     final pressed = widget.states.contains(WidgetState.pressed);
     final selected = widget.states.contains(WidgetState.selected);
     final activeHover = _hovered && _hoverPhase != _GlassHoverPhase.rest;
+    if (inventoryCraft) {
+      final radius = widget.joined
+          ? BorderRadius.zero
+          : BorderRadius.circular(2);
+      final fill = disabled
+          ? palette.panel.withValues(alpha: .55)
+          : pressed || selected
+          ? palette.container
+          : _hovered
+          ? palette.panel
+          : palette.surface;
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: radius,
+          border: widget.joined
+              ? null
+              : Border.all(
+                  color: selected || _hovered
+                      ? palette.accent
+                      : palette.outline,
+                  width: selected ? 2 : 1,
+                ),
+        ),
+        child: widget.child ?? const SizedBox.shrink(),
+      );
+    }
     // This is the Flutter counterpart of #inventorinator-window-button in the
     // Linux runner. Keep its stops, rim, inset, shadow, and radius identical.
     final mobileTouchSurface =
@@ -6880,8 +7156,10 @@ class _GlassFilterChipState extends State<_GlassFilterChip> {
       selectedShadowColor: Colors.transparent,
       elevation: 0,
       pressElevation: 0,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(10)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(
+          Radius.circular(_designRadius(context, 10)),
+        ),
         side: BorderSide.none,
       ),
     );
@@ -6915,15 +7193,16 @@ class _GlassFilterChipState extends State<_GlassFilterChip> {
 }
 
 class _NotchedSliderTrackShape extends SliderTrackShape {
-  _NotchedSliderTrackShape(this.palette);
+  _NotchedSliderTrackShape(this.palette, {this.technical = false});
 
   final InventorinatorColors palette;
+  final bool technical;
 
   // Keep the endpoint centers inside the capsule by its radius. Without this,
   // Flutter places a zero/max thumb at the track edge and half the handle
   // hangs outside the rail.
   @override
-  bool get isRounded => true;
+  bool get isRounded => !technical;
 
   @override
   Rect getPreferredRect({
@@ -6934,6 +7213,9 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
     bool isDiscrete = false,
   }) {
     const horizontalInset = 8.0;
+    // Keep the established control footprint.  The technical treatment is a
+    // ruler drawn *inside* the existing rail, not a thinner replacement that
+    // makes the surrounding layout look misaligned.
     const height = 26.0;
     return Rect.fromLTWH(
       offset.dx + horizontalInset,
@@ -6964,37 +7246,47 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
       isEnabled: isEnabled,
       isDiscrete: isDiscrete,
     );
-    final track = RRect.fromRectAndRadius(rect, const Radius.circular(13));
+    final track = RRect.fromRectAndRadius(
+      rect,
+      Radius.circular(technical ? 0 : 13),
+    );
     final interior = track.deflate(1);
     final activeRight = thumbCenter.dx.clamp(rect.left, rect.right);
 
-    canvas.drawShadow(
-      Path()..addRRect(track),
-      Colors.black.withValues(alpha: .28),
-      5,
-      false,
-    );
+    if (!technical) {
+      canvas.drawShadow(
+        Path()..addRRect(track),
+        Colors.black.withValues(alpha: .28),
+        5,
+        false,
+      );
+    }
     canvas.drawRRect(track, Paint()..color = palette.input);
     canvas.drawRRect(
       interior,
       Paint()
-        ..shader = ui.Gradient.linear(
-          interior.outerRect.topLeft,
-          interior.outerRect.bottomLeft,
-          [
-            Colors.black.withValues(alpha: .34),
-            palette.surface.withValues(alpha: .52),
-          ],
-        ),
+        ..color = technical ? palette.panel : Colors.transparent
+        ..shader = technical
+            ? null
+            : ui.Gradient.linear(
+                interior.outerRect.topLeft,
+                interior.outerRect.bottomLeft,
+                [
+                  Colors.black.withValues(alpha: .34),
+                  palette.surface.withValues(alpha: .52),
+                ],
+              ),
     );
-    final active = RRect.fromRectAndRadius(
-      Rect.fromLTRB(rect.left, rect.top, activeRight, rect.bottom),
-      const Radius.circular(13),
-    );
-    canvas.drawRRect(
-      active,
-      Paint()..color = palette.accent.withValues(alpha: .18),
-    );
+    if (!technical) {
+      final active = RRect.fromRectAndRadius(
+        Rect.fromLTRB(rect.left, rect.top, activeRight, rect.bottom),
+        const Radius.circular(13),
+      );
+      canvas.drawRRect(
+        active,
+        Paint()..color = palette.accent.withValues(alpha: .18),
+      );
+    }
     canvas.drawRRect(
       track,
       Paint()
@@ -7003,6 +7295,39 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
         ..color = palette.outline,
     );
 
+    if (technical) {
+      canvas.save();
+      canvas.clipRRect(interior);
+      final railPaint = Paint()
+        ..color = palette.outline.withValues(alpha: .82)
+        ..strokeWidth = 1;
+      canvas.drawLine(
+        Offset(interior.left, interior.center.dy),
+        Offset(interior.right, interior.center.dy),
+        railPaint,
+      );
+      const tickSpacing = 7.0;
+      var tickIndex = 0;
+      for (
+        var x = interior.left + 3;
+        x < interior.right - 2;
+        x += tickSpacing
+      ) {
+        final major = tickIndex % 5 == 0;
+        final tickLength = major ? 11.0 : 5.0;
+        canvas.drawLine(
+          Offset(x, interior.center.dy - tickLength / 2),
+          Offset(x, interior.center.dy + tickLength / 2),
+          Paint()
+            ..strokeWidth = 1
+            ..color = (major ? palette.outline : palette.outlineVariant)
+                .withValues(alpha: major ? .88 : .68),
+        );
+        tickIndex++;
+      }
+      canvas.restore();
+      return;
+    }
     canvas.save();
     canvas.clipRRect(interior);
     const spacing = 5.0;
@@ -7097,6 +7422,475 @@ class _NotchedSliderThumbShape extends SliderComponentShape {
   }
 }
 
+/// The ArtCraft ruler uses a narrow, high-contrast rider rather than a bulbous
+/// slider knob. This is the horizontal equivalent for the inventory controls.
+class _RulerSliderThumbShape extends SliderComponentShape {
+  const _RulerSliderThumbShape();
+
+  // Retain a generous hit target while painting only the narrow accent reader
+  // used by the page-position ruler.
+  static const _size = Size(14, 28);
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) => _size;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    required bool isDiscrete,
+    required TextPainter labelPainter,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required TextDirection textDirection,
+    required double value,
+    required double textScaleFactor,
+    required Size sizeWithOverflow,
+  }) {
+    final canvas = context.canvas;
+    final pressed = activationAnimation.value;
+    final hitRect = Rect.fromCenter(
+      center: center,
+      width: _size.width,
+      height: _size.height - pressed * 2,
+    );
+    final reader = Rect.fromCenter(
+      center: center,
+      width: 2,
+      height: hitRect.height,
+    );
+    final accent = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
+    canvas.drawRect(
+      reader,
+      Paint()
+        ..color = accent
+        ..strokeWidth = 2,
+    );
+    canvas.drawRect(
+      reader.inflate(.5),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.white.withValues(alpha: .56),
+    );
+  }
+}
+
+class _WallpaperBackdrop extends StatelessWidget {
+  const _WallpaperBackdrop({
+    required this.bytes,
+    required this.gridEnabled,
+    required this.dotMatrixEnabled,
+    required this.gridUsesAccent,
+    required this.dotMatrixUsesAccent,
+    required this.child,
+  });
+
+  final Uint8List? bytes;
+  final bool gridEnabled;
+  final bool dotMatrixEnabled;
+  final bool gridUsesAccent;
+  final bool dotMatrixUsesAccent;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: palette.canvas),
+        if (bytes != null)
+          RepaintBoundary(
+            child: Image.memory(
+              bytes!,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.low,
+              gaplessPlayback: true,
+            ),
+          ),
+        if (bytes != null)
+          ColoredBox(color: palette.canvas.withValues(alpha: dark ? .58 : .32)),
+        if (gridEnabled)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: _BackgroundOverlayPainter(
+                    overlay: BackgroundOverlay.grid,
+                    color:
+                        (gridUsesAccent
+                                ? Color.lerp(
+                                    palette.outline,
+                                    palette.accent,
+                                    .20,
+                                  )!
+                                : palette.outlineVariant)
+                            .withValues(alpha: dark ? .58 : .42),
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+        if (dotMatrixEnabled)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: _BackgroundOverlayPainter(
+                    overlay: BackgroundOverlay.dotMatrix,
+                    color:
+                        (dotMatrixUsesAccent
+                                ? palette.accent
+                                : palette.outlineVariant)
+                            .withValues(alpha: dark ? .62 : .48),
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+        child,
+      ],
+    );
+  }
+}
+
+class _BackgroundOverlayPainter extends CustomPainter {
+  const _BackgroundOverlayPainter({required this.overlay, required this.color});
+
+  final BackgroundOverlay overlay;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    switch (overlay) {
+      case BackgroundOverlay.wallpaper:
+        return;
+      case BackgroundOverlay.grid:
+        const spacing = 36.0;
+        for (var x = 0.0; x <= size.width; x += spacing) {
+          canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+        }
+        for (var y = 0.0; y <= size.height; y += spacing) {
+          canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+        }
+      case BackgroundOverlay.dotMatrix:
+        const spacing = 14.0;
+        final dot = Paint()..color = color;
+        for (var x = 7.0; x <= size.width; x += spacing) {
+          for (var y = 7.0; y <= size.height; y += spacing) {
+            canvas.drawCircle(Offset(x, y), 1, dot);
+          }
+        }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BackgroundOverlayPainter oldDelegate) =>
+      oldDelegate.overlay != overlay || oldDelegate.color != color;
+}
+
+/// The InventoryCraft page-position ruler.  Unlike JellyStock's scrollbar,
+/// this is the interactive scroll rail: click or drag anywhere on it to move
+/// through the inventory.
+class _InventoryCraftScrollRuler extends StatelessWidget {
+  const _InventoryCraftScrollRuler({
+    required this.controller,
+    required this.topInset,
+    required this.bottomInset,
+    this.ignorePointer = false,
+  });
+
+  final ScrollController controller;
+  final double topInset;
+  final double bottomInset;
+  final bool ignorePointer;
+
+  void _scrollTo(double localY, double height) {
+    if (!controller.hasClients || height <= 0) return;
+    final position = controller.position;
+    if (position.maxScrollExtent <= 0) return;
+    // The ruler is read bottom-to-top: pulling its marker down should move
+    // toward the beginning of the inventory, matching the physical scale.
+    final fraction = (1 - (localY / height)).clamp(0.0, 1.0);
+    position.jumpTo(fraction * position.maxScrollExtent);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    return Positioned(
+      key: const Key('inventorycraft-scroll-ruler'),
+      right: 0,
+      top: topInset,
+      bottom: bottomInset,
+      width: 56,
+      child: IgnorePointer(
+        ignoring: ignorePointer,
+        child: ClipRect(
+          child: BackdropFilter(
+            // A narrow blur only in the ruler lane recreates ArtCraft's soft
+            // image-to-rail edge without blurring the inventory itself.
+            filter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 0),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    palette.canvas.withValues(alpha: 0),
+                    palette.canvas.withValues(alpha: .58),
+                    palette.surface.withValues(alpha: .90),
+                  ],
+                  stops: const [0, .28, 1],
+                ),
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (details) => _scrollTo(
+                    details.localPosition.dy,
+                    constraints.maxHeight,
+                  ),
+                  onVerticalDragStart: (details) => _scrollTo(
+                    details.localPosition.dy,
+                    constraints.maxHeight,
+                  ),
+                  onVerticalDragUpdate: (details) => _scrollTo(
+                    details.localPosition.dy,
+                    constraints.maxHeight,
+                  ),
+                  child: RepaintBoundary(
+                    child: AnimatedBuilder(
+                      animation: controller,
+                      builder: (context, _) {
+                        final position = controller.hasClients
+                            ? controller.position
+                            : null;
+                        final fraction =
+                            position == null || position.maxScrollExtent <= 0
+                            ? 0.0
+                            : (position.pixels / position.maxScrollExtent)
+                                  .clamp(0.0, 1.0);
+                        return CustomPaint(
+                          painter: _InventoryCraftScrollRulerPainter(
+                            fraction: fraction,
+                            surface: palette.surface,
+                            line: palette.outlineVariant,
+                            majorLine: palette.outline,
+                            accent: palette.accent,
+                            foreground: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Transparent input layer for the ruler. The visual rail stays below page
+/// content; this narrow strip preserves its click-and-drag scrolling behavior.
+class _InventoryCraftScrollRulerHitTarget extends StatelessWidget {
+  const _InventoryCraftScrollRulerHitTarget({
+    required this.controller,
+    required this.topInset,
+    required this.bottomInset,
+  });
+
+  final ScrollController controller;
+  final double topInset;
+  final double bottomInset;
+
+  void _scrollTo(double localY, double height) {
+    if (!controller.hasClients || height <= 0) return;
+    final position = controller.position;
+    if (position.maxScrollExtent <= 0) return;
+    final fraction = (1 - (localY / height)).clamp(0.0, 1.0);
+    position.jumpTo(fraction * position.maxScrollExtent);
+  }
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+    right: 0,
+    top: topInset,
+    bottom: bottomInset,
+    width: 56,
+    child: LayoutBuilder(
+      builder: (context, constraints) => GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTapDown: (details) =>
+            _scrollTo(details.localPosition.dy, constraints.maxHeight),
+        onVerticalDragStart: (details) =>
+            _scrollTo(details.localPosition.dy, constraints.maxHeight),
+        onVerticalDragUpdate: (details) =>
+            _scrollTo(details.localPosition.dy, constraints.maxHeight),
+        child: const SizedBox.expand(),
+      ),
+    ),
+  );
+}
+
+/// Retains JellyStock's conventional thumb while allowing InventoryCraft to
+/// use its ruler as the sole scroll affordance.
+class _InventoryScrollChrome extends StatelessWidget {
+  const _InventoryScrollChrome({
+    required this.inventoryCraft,
+    required this.controller,
+    required this.width,
+    required this.child,
+  });
+
+  final bool inventoryCraft;
+  final ScrollController controller;
+  final double width;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (inventoryCraft) return child;
+    return Scrollbar(
+      key: const Key('main-inventory-scrollbar'),
+      controller: controller,
+      thickness: width,
+      radius: Radius.circular(width / 2),
+      interactive: true,
+      child: child,
+    );
+  }
+}
+
+class _InventoryCraftScrollRulerPainter extends CustomPainter {
+  const _InventoryCraftScrollRulerPainter({
+    required this.fraction,
+    required this.surface,
+    required this.line,
+    required this.majorLine,
+    required this.accent,
+    required this.foreground,
+  });
+
+  final double fraction;
+  final Color surface;
+  final Color line;
+  final Color majorLine;
+  final Color accent;
+  final Color foreground;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final background = Paint()..color = surface.withValues(alpha: .72);
+    canvas.drawRect(Offset.zero & size, background);
+    canvas.drawLine(
+      Offset(0, 0),
+      Offset(0, size.height),
+      Paint()
+        ..color = line.withValues(alpha: .86)
+        ..strokeWidth = 1,
+    );
+
+    const step = 58.0;
+    final centerY = size.height * .5;
+    // Move the scale continuously beneath a fixed reading line. Rounding the
+    // current tick made all labels teleport every five percent.
+    final scalePosition = fraction * 100 / 5;
+    final baseTick = scalePosition.floor();
+    final subTick = scalePosition - baseTick;
+    final startIndex = (-centerY / step + subTick).floor() - 1;
+    final endIndex = ((size.height - centerY) / step + subTick).ceil() + 1;
+    for (var index = startIndex; index <= endIndex; index++) {
+      final y = centerY + (index - subTick) * step;
+      final tick = baseTick + index;
+      final major = tick % 2 == 0;
+      final tickLength = major ? 18.0 : 9.0;
+      canvas.drawLine(
+        Offset(size.width - tickLength, y),
+        Offset(size.width, y),
+        Paint()
+          ..color = (major ? majorLine : line).withValues(
+            alpha: major ? .90 : .68,
+          )
+          ..strokeWidth = 1,
+      );
+      final value = tick * 5;
+      if (major &&
+          value >= 0 &&
+          value <= 100 &&
+          y > 8 &&
+          y < size.height - 12) {
+        final label = value.toString().padLeft(3, '0');
+        final painter = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: foreground.withValues(alpha: .56),
+              fontFamily: 'monospace',
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: .4,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        painter.paint(canvas, Offset(3, y - painter.height / 2));
+      }
+    }
+
+    canvas.drawLine(
+      Offset(0, centerY),
+      Offset(size.width, centerY),
+      Paint()
+        ..color = accent
+        ..strokeWidth = 2,
+    );
+    final percent = '${(fraction * 100).round().toString().padLeft(3, '0')}%';
+    final percentPainter = TextPainter(
+      text: TextSpan(
+        text: percent,
+        style: TextStyle(
+          color: foreground,
+          fontFamily: 'monospace',
+          fontSize: 8,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .4,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    percentPainter.paint(
+      canvas,
+      Offset(3, (centerY + 5).clamp(0.0, size.height - percentPainter.height)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _InventoryCraftScrollRulerPainter oldDelegate) =>
+      oldDelegate.fraction != fraction ||
+      oldDelegate.surface != surface ||
+      oldDelegate.line != line ||
+      oldDelegate.majorLine != majorLine ||
+      oldDelegate.accent != accent ||
+      oldDelegate.foreground != foreground;
+}
+
 enum _GlassHoverPhase { rest, magenta, purple }
 
 /// Requests the host on-screen keyboard after a finger has focused an editor.
@@ -7172,6 +7966,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   );
   late AppColorTheme colorTheme;
   late AppBrightnessMode brightnessMode;
+  late AppDesignTheme designTheme;
   late Color customThemeColor;
   late final AppLockController _appLock;
 
@@ -7189,6 +7984,10 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           ? AppBrightnessMode.light.name
           : AppBrightnessMode.dark.name,
     );
+    final savedDesignTheme = widget.database?.loadStringPreference(
+      'app_design_theme',
+      fallback: AppDesignTheme.jellyStock.name,
+    );
     colorTheme =
         AppColorTheme.values
             .where((value) => value.name == saved)
@@ -7199,6 +7998,11 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
             .where((value) => value.name == savedBrightness)
             .firstOrNull ??
         AppBrightnessMode.dark;
+    designTheme =
+        AppDesignTheme.values
+            .where((value) => value.name == savedDesignTheme)
+            .firstOrNull ??
+        AppDesignTheme.jellyStock;
     customThemeColor =
         _hexColor(
           widget.database?.loadStringPreference(
@@ -7216,6 +8020,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       colorTheme,
       customColor: customThemeColor,
       brightness: brightnessMode,
+      designTheme: designTheme,
     );
     final canvas = palette.canvas;
     final iconBrightness = brightnessMode == AppBrightnessMode.light
@@ -7232,11 +8037,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         systemNavigationBarContrastEnforced: false,
       ),
     );
-    if (!kIsWeb && Platform.isLinux) {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows)) {
       unawaited(
         _nativeThemeChannel
             .invokeMethod<void>('setTheme', {
               'theme': colorTheme.name,
+              'design': designTheme.name,
               'canvas': _colorHex(palette.canvas),
               'surface': _colorHex(palette.surface),
               'base': _colorHex(palette.base),
@@ -7247,8 +8053,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
               'rim': _colorHex(palette.rim),
               'accent': _colorHex(palette.accent),
               'foreground': brightnessMode == AppBrightnessMode.light
-                  ? '#211A2D'
-                  : '#EEEAFF',
+                  ? (designTheme == AppDesignTheme.inventoryCraft
+                        ? '#17181A'
+                        : '#211A2D')
+                  : (designTheme == AppDesignTheme.inventoryCraft
+                        ? '#F4F4EF'
+                        : '#EEEAFF'),
             })
             .catchError((_) {}),
       );
@@ -7266,6 +8076,13 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     if (value == brightnessMode) return;
     setState(() => brightnessMode = value);
     widget.database?.saveStringPreference('app_brightness_mode', value.name);
+    _applySystemColors();
+  }
+
+  void _setDesignTheme(AppDesignTheme value) {
+    if (value == designTheme) return;
+    setState(() => designTheme = value);
+    widget.database?.saveStringPreference('app_design_theme', value.name);
     _applySystemColors();
   }
 
@@ -7297,24 +8114,60 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       colorTheme,
       customColor: customThemeColor,
       brightness: brightnessMode,
+      designTheme: designTheme,
     );
     final light = brightnessMode == AppBrightnessMode.light;
+    final inventoryCraft = designTheme == AppDesignTheme.inventoryCraft;
     final brightness = light ? Brightness.light : Brightness.dark;
     final foreground = light
-        ? const Color(0xff211a2d)
-        : const Color(0xffeeeaff);
+        ? (inventoryCraft ? const Color(0xff17181a) : const Color(0xff211a2d))
+        : (inventoryCraft ? const Color(0xfff4f4ef) : const Color(0xffeeeaff));
     final mutedForeground = light
-        ? const Color(0xff625b6d)
-        : const Color(0xff929aac);
+        ? (inventoryCraft ? const Color(0xff535650) : const Color(0xff625b6d))
+        : (inventoryCraft ? const Color(0xffa6a8a5) : const Color(0xff929aac));
+    final technicalPrimary = light
+        ? const Color(0xff1b1d1c)
+        : const Color(0xfff4f4ef);
+    final technicalPrimaryContainer = light
+        ? const Color(0xffdfe1dc)
+        : const Color(0xff24262a);
+    final baseTextTheme = ThemeData(brightness: brightness).textTheme;
+    final textTheme = inventoryCraft
+        ? baseTextTheme.copyWith(
+            titleLarge: baseTextTheme.titleLarge?.copyWith(
+              color: foreground,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.4,
+            ),
+            titleMedium: baseTextTheme.titleMedium?.copyWith(
+              color: foreground,
+              fontWeight: FontWeight.w700,
+            ),
+            labelLarge: baseTextTheme.labelLarge?.copyWith(
+              color: foreground,
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w800,
+              letterSpacing: .55,
+            ),
+            labelMedium: baseTextTheme.labelMedium?.copyWith(
+              color: mutedForeground,
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w700,
+              letterSpacing: .45,
+            ),
+          )
+        : baseTextTheme;
     final scheme =
         ColorScheme.fromSeed(
           seedColor: palette.base,
           brightness: brightness,
           surface: palette.surface,
         ).copyWith(
-          primary: palette.accent,
+          primary: inventoryCraft ? technicalPrimary : palette.accent,
           onPrimary: light ? Colors.white : palette.canvas,
-          primaryContainer: palette.container,
+          primaryContainer: inventoryCraft
+              ? technicalPrimaryContainer
+              : palette.container,
           onPrimaryContainer: foreground,
           secondary: light ? const Color(0xff08766c) : const Color(0xff45d2bd),
           onSecondary: light ? Colors.white : palette.canvas,
@@ -7367,9 +8220,11 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       elevation: const WidgetStatePropertyAll(0),
       shadowColor: const WidgetStatePropertyAll(Colors.transparent),
       backgroundBuilder: glassButtonLayer,
-      shape: const WidgetStatePropertyAll(
+      shape: WidgetStatePropertyAll(
         RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(10)),
+          borderRadius: BorderRadius.all(
+            Radius.circular(inventoryCraft ? 2 : 10),
+          ),
         ),
       ),
     );
@@ -7388,8 +8243,13 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       theme: ThemeData(
         brightness: brightness,
         colorScheme: scheme,
-        extensions: [palette],
+        extensions: [palette, InventorinatorDesign(designTheme)],
         scaffoldBackgroundColor: palette.canvas,
+        textTheme: textTheme,
+        // Theme changes must not silently shrink interaction targets or alter
+        // the established card/button spacing. InventoryCraft changes surface
+        // language, not the layout density chosen for the app.
+        visualDensity: VisualDensity.adaptivePlatformDensity,
         useMaterial3: true,
         outlinedButtonTheme: OutlinedButtonThemeData(style: glassButtonStyle),
         filledButtonTheme: FilledButtonThemeData(style: glassButtonStyle),
@@ -7416,7 +8276,9 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           elevation: 4,
           hoverElevation: 8,
           shape: RoundedRectangleBorder(
-            borderRadius: const BorderRadius.all(Radius.circular(14)),
+            borderRadius: BorderRadius.all(
+              Radius.circular(inventoryCraft ? 2 : 14),
+            ),
             side: BorderSide(color: palette.outline),
           ),
         ),
@@ -7427,8 +8289,10 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
               ? const Color(0xffe3dee9)
               : const Color(0xff1a1c25),
           side: BorderSide(color: palette.outline),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(
+              Radius.circular(inventoryCraft ? 2 : 10),
+            ),
           ),
           labelStyle: TextStyle(color: foreground),
           secondaryLabelStyle: TextStyle(color: foreground),
@@ -7449,23 +8313,23 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           ),
           helperStyle: TextStyle(color: mutedForeground),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             borderSide: BorderSide(color: palette.outlineVariant),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             borderSide: BorderSide(color: palette.outlineVariant),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             borderSide: BorderSide(color: palette.accent, width: 2),
           ),
           errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             borderSide: const BorderSide(color: Color(0xffff6b7a)),
           ),
           focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             borderSide: const BorderSide(color: Color(0xffff6b7a), width: 2),
           ),
           contentPadding: const EdgeInsets.symmetric(
@@ -7477,24 +8341,32 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           color: palette.surface,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 22),
             side: BorderSide(color: palette.outlineVariant),
           ),
         ),
         dialogTheme: DialogThemeData(
           backgroundColor: palette.surface,
-          elevation: 20,
-          shadowColor: palette.accent.withValues(alpha: .28),
+          elevation: inventoryCraft ? 8 : 20,
+          shadowColor: inventoryCraft
+              ? Colors.black.withValues(alpha: .48)
+              : palette.accent.withValues(alpha: .28),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-            side: BorderSide(color: palette.accent.withValues(alpha: .28)),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 24),
+            side: BorderSide(
+              color: inventoryCraft
+                  ? palette.outlineVariant
+                  : palette.accent.withValues(alpha: .28),
+            ),
           ),
         ),
         popupMenuTheme: PopupMenuThemeData(
           color: palette.panel,
           surfaceTintColor: Colors.transparent,
-          elevation: 18,
-          shadowColor: palette.accent.withValues(alpha: .32),
+          elevation: inventoryCraft ? 8 : 18,
+          shadowColor: inventoryCraft
+              ? Colors.black.withValues(alpha: .48)
+              : palette.accent.withValues(alpha: .32),
           menuPadding: const EdgeInsets.symmetric(vertical: 8),
           textStyle: TextStyle(
             color: foreground,
@@ -7502,7 +8374,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
             fontWeight: FontWeight.w600,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
             side: BorderSide(color: palette.outlineVariant),
           ),
         ),
@@ -7521,6 +8393,118 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         ),
         hoverColor: palette.base.withValues(alpha: .35),
         splashColor: palette.container.withValues(alpha: .55),
+        dividerTheme: DividerThemeData(
+          color: inventoryCraft ? palette.outlineVariant : palette.outline,
+          thickness: inventoryCraft ? 1 : null,
+          space: inventoryCraft ? 1 : null,
+        ),
+        listTileTheme: ListTileThemeData(
+          dense: inventoryCraft,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 12),
+          ),
+          contentPadding: EdgeInsets.symmetric(
+            horizontal: inventoryCraft ? 12 : 16,
+          ),
+        ),
+        tooltipTheme: TooltipThemeData(
+          decoration: BoxDecoration(
+            color: inventoryCraft ? palette.surface : palette.panel,
+            border: Border.all(color: palette.outline),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 8),
+          ),
+          textStyle: TextStyle(
+            color: foreground,
+            fontFamily: inventoryCraft ? 'monospace' : null,
+            fontSize: 12,
+          ),
+        ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: palette.surface,
+          foregroundColor: foreground,
+          elevation: 0,
+          scrolledUnderElevation: inventoryCraft ? 0 : 3,
+          surfaceTintColor: Colors.transparent,
+          shape: inventoryCraft
+              ? Border(bottom: BorderSide(color: palette.outlineVariant))
+              : null,
+          titleTextStyle: textTheme.titleMedium?.copyWith(
+            fontFamily: inventoryCraft ? 'monospace' : null,
+          ),
+        ),
+        tabBarTheme: TabBarThemeData(
+          indicatorColor: palette.accent,
+          dividerColor: palette.outlineVariant,
+          labelColor: foreground,
+          unselectedLabelColor: mutedForeground,
+          labelStyle: TextStyle(
+            fontFamily: inventoryCraft ? 'monospace' : null,
+            fontWeight: FontWeight.w800,
+            letterSpacing: inventoryCraft ? .55 : null,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontFamily: inventoryCraft ? 'monospace' : null,
+            fontWeight: FontWeight.w700,
+          ),
+          indicatorSize: TabBarIndicatorSize.tab,
+        ),
+        bottomSheetTheme: BottomSheetThemeData(
+          backgroundColor: palette.surface,
+          modalBackgroundColor: palette.surface,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(inventoryCraft ? 2 : 24),
+            ),
+            side: BorderSide(color: palette.outlineVariant),
+          ),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: palette.panel,
+          contentTextStyle: TextStyle(
+            color: foreground,
+            fontFamily: inventoryCraft ? 'monospace' : null,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 12),
+            side: BorderSide(color: palette.outlineVariant),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: palette.surface,
+          indicatorColor: inventoryCraft ? palette.container : palette.base,
+          labelTextStyle: WidgetStatePropertyAll(
+            TextStyle(
+              color: foreground,
+              fontFamily: inventoryCraft ? 'monospace' : null,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        expansionTileTheme: ExpansionTileThemeData(
+          backgroundColor: palette.surface,
+          collapsedBackgroundColor: palette.surface,
+          iconColor: palette.accent,
+          collapsedIconColor: mutedForeground,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            side: BorderSide(color: palette.outlineVariant),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            side: BorderSide(color: palette.outlineVariant),
+          ),
+        ),
+        sliderTheme: SliderThemeData(
+          trackHeight: inventoryCraft ? 4 : null,
+          activeTrackColor: palette.accent,
+          inactiveTrackColor: palette.panel,
+          thumbColor: palette.accent,
+          overlayColor: palette.accent.withValues(alpha: .12),
+          valueIndicatorColor: palette.panel,
+          valueIndicatorTextStyle: TextStyle(color: foreground),
+        ),
       ),
       home: InventoryHome(
         database: widget.database,
@@ -7529,9 +8513,11 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         supabaseHttpClient: widget.supabaseHttpClient,
         colorTheme: colorTheme,
         brightnessMode: brightnessMode,
+        designTheme: designTheme,
         customThemeColor: customThemeColor,
         onColorThemeChanged: _setColorTheme,
         onBrightnessModeChanged: _setBrightnessMode,
+        onDesignThemeChanged: _setDesignTheme,
         onCustomThemeColorChanged: _setCustomThemeColor,
       ),
     );
@@ -7644,7 +8630,7 @@ class _ScrollAwareBackdropFilter extends StatelessWidget {
       // A backdrop blur must sample every pixel behind the rail. Turn it off
       // while content moves; the rail is simultaneously fading away, and this
       // avoids a wide, repeated GPU filter on maximized desktop windows.
-      enabled: !isScrolling,
+      enabled: !isScrolling && visual_effect_preferences.blurEffectsEnabled,
       filter: ui.ImageFilter.blur(sigmaX: sigmaX, sigmaY: sigmaY),
       child: cachedChild,
     ),
@@ -7856,9 +8842,11 @@ class InventoryHome extends StatefulWidget {
     this.supabaseHttpClient,
     this.colorTheme = AppColorTheme.darkPurple,
     this.brightnessMode = AppBrightnessMode.dark,
+    this.designTheme = AppDesignTheme.jellyStock,
     this.customThemeColor = const Color(0xff8e75ff),
     this.onColorThemeChanged,
     this.onBrightnessModeChanged,
+    this.onDesignThemeChanged,
     this.onCustomThemeColorChanged,
   });
   final LocalDatabase? database;
@@ -7867,9 +8855,11 @@ class InventoryHome extends StatefulWidget {
   final http.Client? supabaseHttpClient;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
+  final AppDesignTheme designTheme;
   final Color customThemeColor;
   final ValueChanged<AppColorTheme>? onColorThemeChanged;
   final ValueChanged<AppBrightnessMode>? onBrightnessModeChanged;
+  final ValueChanged<AppDesignTheme>? onDesignThemeChanged;
   final ValueChanged<Color>? onCustomThemeColorChanged;
   @override
   State<InventoryHome> createState() => _InventoryHomeState();
@@ -7951,6 +8941,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   late bool lowStockEffectsEnabled;
   late bool moistureEffectsEnabled;
   late bool remoteSyncEffectsEnabled;
+  late bool blurEffectsEnabled;
   late bool searchGlowEnabled;
   late bool newItemGlowEnabled;
   late MachineTimerDisplay machineTimerDisplay;
@@ -7958,6 +8949,14 @@ class _InventoryHomeState extends State<InventoryHome> {
   late int animationDurationPercent;
   late int animationRecurrenceSeconds;
   late bool photoCardsEnabled;
+  late List<Uint8List?> wallpapers;
+  late int activeWallpaperIndex;
+  late bool wallpaperAutoRotateEnabled;
+  late bool backgroundGridEnabled;
+  late bool backgroundDotMatrixEnabled;
+  late bool backgroundGridUsesAccent;
+  late bool backgroundDotMatrixUsesAccent;
+  Timer? _wallpaperRotationTimer;
   late CustomIconAnimationMode customIconAnimationMode;
   late double mainScrollbarWidth;
   late double inventoryDragGripSize;
@@ -8050,6 +9049,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       ExpansibleController();
   final ExpansibleController metricsExpansionController =
       ExpansibleController();
+  final ValueNotifier<int> _metricsDialogRevision = ValueNotifier(0);
+  BuildContext? _inventoryUtilityDialogContext;
   bool typePanelExpanded = false;
   bool colorPanelExpanded = false;
   bool metricsPanelExpanded = false;
@@ -8333,6 +9334,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: true,
         ) ??
         true;
+    blurEffectsEnabled =
+        widget.database?.loadBoolPreference(
+          'blur_effects_enabled',
+          fallback: true,
+        ) ??
+        true;
+    visual_effect_preferences.blurEffectsEnabled = blurEffectsEnabled;
     searchGlowEnabled =
         widget.database?.loadBoolPreference(
           'search_glow_enabled',
@@ -8394,6 +9402,17 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ) ??
                 100)
             .clamp(_minimumCardSizePercent, _maximumCardSizePercent);
+    final savedPageSize =
+        int.tryParse(
+          widget.database?.loadStringPreference(
+                'inventory_page_size',
+                fallback: '${_pageSizes.first}',
+              ) ??
+              '${_pageSizes.first}',
+        ) ??
+        _pageSizes.first;
+    pageSizeIndex = _pageSizes.indexOf(savedPageSize);
+    if (pageSizeIndex < 0) pageSizeIndex = 0;
     final defaultScrollbarWidth = _defaultMainScrollbarWidth;
     mainScrollbarWidth =
         (double.tryParse(
@@ -8451,6 +9470,71 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: false,
         ) ??
         false;
+    wallpapers = List<Uint8List?>.generate(5, (index) {
+      final encoded =
+          widget.database?.loadStringPreference(
+            'wallpaper_slot_$index',
+            fallback: '',
+          ) ??
+          '';
+      if (encoded.isEmpty) return null;
+      try {
+        return base64Decode(encoded);
+      } catch (_) {
+        return null;
+      }
+    });
+    activeWallpaperIndex =
+        int.tryParse(
+          widget.database?.loadStringPreference(
+                'active_wallpaper_index',
+                fallback: '-1',
+              ) ??
+              '-1',
+        ) ??
+        -1;
+    if (activeWallpaperIndex < 0 ||
+        activeWallpaperIndex >= wallpapers.length ||
+        wallpapers[activeWallpaperIndex] == null) {
+      activeWallpaperIndex = wallpapers.indexWhere((image) => image != null);
+    }
+    wallpaperAutoRotateEnabled =
+        widget.database?.loadBoolPreference(
+          'wallpaper_auto_rotate_enabled',
+          fallback: false,
+        ) ??
+        false;
+    final savedBackgroundOverlay =
+        widget.database?.loadStringPreference(
+          'background_overlay',
+          fallback: BackgroundOverlay.wallpaper.name,
+        ) ??
+        BackgroundOverlay.wallpaper.name;
+    backgroundGridEnabled =
+        widget.database?.loadBoolPreference(
+          'background_grid_enabled',
+          fallback: savedBackgroundOverlay == BackgroundOverlay.grid.name,
+        ) ??
+        false;
+    backgroundDotMatrixEnabled =
+        widget.database?.loadBoolPreference(
+          'background_dot_matrix_enabled',
+          fallback: savedBackgroundOverlay == BackgroundOverlay.dotMatrix.name,
+        ) ??
+        false;
+    backgroundGridUsesAccent =
+        widget.database?.loadBoolPreference(
+          'background_grid_uses_accent',
+          fallback: true,
+        ) ??
+        true;
+    backgroundDotMatrixUsesAccent =
+        widget.database?.loadBoolPreference(
+          'background_dot_matrix_uses_accent',
+          fallback: true,
+        ) ??
+        true;
+    _syncWallpaperRotationTimer();
     hideZeroQuantityItems =
         widget.database?.loadBoolPreference(
           'hide_zero_quantity_items',
@@ -8952,6 +10036,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleInventoryShortcut);
+    _wallpaperRotationTimer?.cancel();
     _syncDebounce?.cancel();
     _deferredAutoSync?.cancel();
     _syncPoll?.cancel();
@@ -8964,11 +10049,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     pageSizeIndex = _pageSizeSliderValue.value.round();
     cardSizePercent = _cardSizeSliderValue.value;
     widget.database?.saveStringPreference(
+      'inventory_page_size',
+      '${_pageSizes[pageSizeIndex]}',
+    );
+    widget.database?.saveStringPreference(
       'inventory_card_size_percent',
       cardSizePercent.toStringAsFixed(1),
     );
     _pageSizeSliderValue.dispose();
     _cardSizeSliderValue.dispose();
+    _metricsDialogRevision.dispose();
     _syncActivity.dispose();
     _localSaveFeedbackTimer?.cancel();
     _localSaveFeedback.dispose();
@@ -10249,6 +11339,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       'metrics_untracked_types',
       keys.join(','),
     );
+    _metricsDialogRevision.value++;
   }
 
   _InventoryMetrics get _inventoryMetrics {
@@ -10588,6 +11679,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         ? allCatalogRecords.length
         : everythingCatalog.length + itemCount;
     final pageSize = _pageSizes[pageSizeIndex];
+    // The quick-action rail floats above the page, so reserve room for it
+    // instead of letting it chop off the last visible card row.
+    final reserveQuickActionSpace =
+        !_hasCatalogSelection && selectedInventoryIds.isEmpty;
     final pageCount = resultCount == 0 ? 1 : (resultCount / pageSize).ceil();
     final page = currentPage.clamp(0, pageCount - 1);
     final start = page * pageSize;
@@ -10605,209 +11700,311 @@ class _InventoryHomeState extends State<InventoryHome> {
       typeDisplays: typeTimerDisplaySettings,
       child: _CustomIconAnimationScope(
         mode: customIconAnimationMode,
-        child: TickerMode(
-          enabled: true,
-          child: Scaffold(
-            extendBody: true,
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: SafeArea(
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: _handleInventoryScrollNotification,
-                      child: Listener(
-                        behavior: HitTestBehavior.translucent,
-                        onPointerMove: _handleInventoryPointerMove,
-                        onPointerSignal: _handleInventoryPointerSignal,
-                        onPointerUp: _handleInventoryPointerUp,
-                        onPointerCancel: _handleInventoryPointerCancel,
-                        child: ScrollConfiguration(
-                          behavior: ScrollConfiguration.of(context).copyWith(
-                            scrollbars: false,
-                            // Match the Scratch Pad canvas: a held primary mouse
-                            // drag pans the desktop inventory without needing to
-                            // catch the scrollbar thumb.
-                            dragDevices: const {
-                              PointerDeviceKind.mouse,
-                              PointerDeviceKind.touch,
-                              PointerDeviceKind.stylus,
-                              PointerDeviceKind.trackpad,
-                            },
-                          ),
-                          child: Scrollbar(
-                            key: const Key('main-inventory-scrollbar'),
-                            controller: inventoryScrollController,
-                            thickness: mainScrollbarWidth,
-                            radius: Radius.circular(mainScrollbarWidth / 2),
-                            // Keep the normal clean, transient scrollbar
-                            // treatment. The side rails are inset below, so a
-                            // revealed thumb remains draggable without a
-                            // permanent track changing the page visuals.
-                            interactive: true,
-                            child: MediaQuery(
-                              data: MediaQuery.of(context).copyWith(
-                                // Desktop mouse drags should start as soon as
-                                // they are intentional, rather than waiting for
-                                // the touch-oriented default slop distance.
-                                gestureSettings:
-                                    Platform.isLinux || Platform.isWindows
-                                    ? const DeviceGestureSettings(touchSlop: 2)
-                                    : MediaQuery.gestureSettingsOf(context),
-                              ),
-                              child: CustomScrollView(
-                                key: const Key('inventory-scroll-view'),
-                                controller: inventoryScrollController,
-                                scrollCacheExtent:
-                                    Platform.isAndroid ||
-                                        Platform.isLinux ||
-                                        Platform.isWindows
-                                    ? ScrollCacheExtent.viewport(
-                                        pageSize >= 100 ? .25 : .75,
-                                      )
-                                    : null,
-                                dragStartBehavior: DragStartBehavior.down,
-                                slivers: [
-                                  SliverToBoxAdapter(child: _titleHeader()),
-                                  SliverPersistentHeader(
-                                    pinned: true,
-                                    delegate: _PinnedActionBarDelegate(
-                                      height: 80,
-                                      child: _floatingHeaderActionBar(),
+        child: _WallpaperBackdrop(
+          bytes: _activeWallpaper,
+          gridEnabled: backgroundGridEnabled,
+          dotMatrixEnabled: backgroundDotMatrixEnabled,
+          gridUsesAccent: backgroundGridUsesAccent,
+          dotMatrixUsesAccent: backgroundDotMatrixUsesAccent,
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.escape &&
+                  selectedInventoryIds.isNotEmpty) {
+                setState(selectedInventoryIds.clear);
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: TickerMode(
+              enabled: true,
+              child: Scaffold(
+                backgroundColor: Colors.transparent,
+                extendBody: true,
+                body: Stack(
+                  children: [
+                    // The ruler spans the full window, but lives beneath the
+                    // inventory and persistent action layers.
+                    if (_isInventoryCraft(context))
+                      _InventoryCraftScrollRuler(
+                        controller: inventoryScrollController,
+                        topInset: 0,
+                        // Visual rail continues behind the transparent bottom
+                        // controls; only the hit target stops above them.
+                        bottomInset: 0,
+                        ignorePointer: true,
+                      ),
+                    Positioned.fill(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          // InventoryCraft's bottom buttons are transparent
+                          // overlays, so inventory remains visible behind them
+                          // instead of reserving an opaque black strip.
+                          bottom:
+                              reserveQuickActionSpace &&
+                                  !_isInventoryCraft(context)
+                              ? 82
+                              : 0,
+                        ),
+                        child: SafeArea(
+                          child: NotificationListener<ScrollNotification>(
+                            onNotification: _handleInventoryScrollNotification,
+                            child: Listener(
+                              behavior: HitTestBehavior.translucent,
+                              onPointerMove: _handleInventoryPointerMove,
+                              onPointerSignal: _handleInventoryPointerSignal,
+                              onPointerUp: _handleInventoryPointerUp,
+                              onPointerCancel: _handleInventoryPointerCancel,
+                              child: ScrollConfiguration(
+                                behavior: ScrollConfiguration.of(context)
+                                    .copyWith(
+                                      scrollbars: false,
+                                      // Match the Scratch Pad canvas: a held primary mouse
+                                      // drag pans the desktop inventory without needing to
+                                      // catch the scrollbar thumb.
+                                      dragDevices: const {
+                                        PointerDeviceKind.mouse,
+                                        PointerDeviceKind.touch,
+                                        PointerDeviceKind.stylus,
+                                        PointerDeviceKind.trackpad,
+                                      },
                                     ),
-                                  ),
-                                  SliverToBoxAdapter(child: _header()),
-                                  SliverPadding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      20,
-                                      6,
-                                      20,
-                                      24,
+                                child: _InventoryScrollChrome(
+                                  inventoryCraft: _isInventoryCraft(context),
+                                  controller: inventoryScrollController,
+                                  width: mainScrollbarWidth,
+                                  child: Padding(
+                                    // InventoryCraft's ruler is an actual
+                                    // right-side lane, not an overlay over
+                                    // filter controls or search affordances.
+                                    padding: EdgeInsets.only(
+                                      right: _isInventoryCraft(context)
+                                          ? 64
+                                          : 0,
                                     ),
-                                    sliver: resultCount == 0
-                                        ? const SliverFillRemaining(
-                                            hasScrollBody: false,
-                                            child: Center(
-                                              child: Text(
-                                                'Nothing matches those filters.',
+                                    child: MediaQuery(
+                                      data: MediaQuery.of(context).copyWith(
+                                        // Desktop mouse drags should start as soon as
+                                        // they are intentional, rather than waiting for
+                                        // the touch-oriented default slop distance.
+                                        gestureSettings:
+                                            Platform.isLinux ||
+                                                Platform.isWindows
+                                            ? const DeviceGestureSettings(
+                                                touchSlop: 2,
+                                              )
+                                            : MediaQuery.gestureSettingsOf(
+                                                context,
+                                              ),
+                                      ),
+                                      child: CustomScrollView(
+                                        key: const Key('inventory-scroll-view'),
+                                        controller: inventoryScrollController,
+                                        scrollCacheExtent:
+                                            Platform.isAndroid ||
+                                                Platform.isLinux ||
+                                                Platform.isWindows
+                                            ? ScrollCacheExtent.viewport(
+                                                pageSize >= 100 ? .25 : .75,
+                                              )
+                                            : null,
+                                        dragStartBehavior:
+                                            DragStartBehavior.down,
+                                        slivers: [
+                                          SliverToBoxAdapter(
+                                            child: _titleHeader(),
+                                          ),
+                                          SliverPersistentHeader(
+                                            pinned: true,
+                                            delegate: _PinnedActionBarDelegate(
+                                              height: 80,
+                                              child: _floatingHeaderActionBar(),
+                                            ),
+                                          ),
+                                          SliverToBoxAdapter(child: _header()),
+                                          SliverPadding(
+                                            padding: const EdgeInsets.fromLTRB(
+                                              20,
+                                              6,
+                                              20,
+                                              24,
+                                            ),
+                                            sliver: resultCount == 0
+                                                ? const SliverFillRemaining(
+                                                    hasScrollBody: false,
+                                                    child: Center(
+                                                      child: Text(
+                                                        'Nothing matches those filters.',
+                                                      ),
+                                                    ),
+                                                  )
+                                                : gridView
+                                                ? ValueListenableBuilder<
+                                                    double
+                                                  >(
+                                                    valueListenable:
+                                                        _cardSizeSliderValue,
+                                                    builder: (context, liveCardSizePercent, _) =>
+                                                        // No SliverLayoutBuilder here:
+                                                        // sliver constraints change on
+                                                        // every scroll pixel, which
+                                                        // rebuilt every visible card
+                                                        // each frame.
+                                                        SliverGrid.builder(
+                                                          itemCount:
+                                                              records.length,
+                                                          addAutomaticKeepAlives:
+                                                              false,
+                                                          addRepaintBoundaries:
+                                                              true,
+                                                          addSemanticIndexes:
+                                                              false,
+                                                          gridDelegate:
+                                                              _CenteredSquareGridDelegate(
+                                                                cardExtent:
+                                                                    274.0 *
+                                                                    (liveCardSizePercent /
+                                                                        100),
+                                                                spacing: 14,
+                                                              ),
+                                                          itemBuilder:
+                                                              (
+                                                                _,
+                                                                index,
+                                                              ) => _recordWidget(
+                                                                records[index],
+                                                              ),
+                                                        ),
+                                                  )
+                                                : SliverList.separated(
+                                                    itemCount: records.length,
+                                                    addAutomaticKeepAlives:
+                                                        false,
+                                                    addRepaintBoundaries: true,
+                                                    addSemanticIndexes: false,
+                                                    separatorBuilder: (_, _) =>
+                                                        const SizedBox(
+                                                          height: 10,
+                                                        ),
+                                                    itemBuilder: (_, index) =>
+                                                        _recordWidget(
+                                                          records[index],
+                                                          list: true,
+                                                        ),
+                                                  ),
+                                          ),
+                                          if (resultCount > 0)
+                                            SliverToBoxAdapter(
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      20,
+                                                      8,
+                                                      20,
+                                                      110,
+                                                    ),
+                                                child: _pageNavigation(
+                                                  page,
+                                                  pageCount,
+                                                  resultCount,
+                                                ),
                                               ),
                                             ),
-                                          )
-                                        : gridView
-                                        ? ValueListenableBuilder<double>(
-                                            valueListenable:
-                                                _cardSizeSliderValue,
-                                            builder: (context, liveCardSizePercent, _) =>
-                                                // No SliverLayoutBuilder here:
-                                                // sliver constraints change on
-                                                // every scroll pixel, which
-                                                // rebuilt every visible card
-                                                // each frame.
-                                                SliverGrid.builder(
-                                                  itemCount: records.length,
-                                                  addAutomaticKeepAlives: false,
-                                                  addRepaintBoundaries: true,
-                                                  addSemanticIndexes: false,
-                                                  gridDelegate:
-                                                      _CenteredSquareGridDelegate(
-                                                        cardExtent:
-                                                            274.0 *
-                                                            (liveCardSizePercent /
-                                                                100),
-                                                        spacing: 14,
-                                                      ),
-                                                  itemBuilder: (_, index) =>
-                                                      _recordWidget(
-                                                        records[index],
-                                                      ),
-                                                ),
-                                          )
-                                        : SliverList.separated(
-                                            itemCount: records.length,
-                                            addAutomaticKeepAlives: false,
-                                            addRepaintBoundaries: true,
-                                            addSemanticIndexes: false,
-                                            separatorBuilder: (_, _) =>
-                                                const SizedBox(height: 10),
-                                            itemBuilder: (_, index) =>
-                                                _recordWidget(
-                                                  records[index],
-                                                  list: true,
-                                                ),
-                                          ),
-                                  ),
-                                  if (resultCount > 0)
-                                    SliverToBoxAdapter(
-                                      child: Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          20,
-                                          8,
-                                          20,
-                                          110,
-                                        ),
-                                        child: _pageNavigation(
-                                          page,
-                                          pageCount,
-                                          resultCount,
-                                        ),
+                                        ],
                                       ),
                                     ),
-                                ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                    // Keep the visual rail behind the content, while its
+                    // interaction strip remains reachable beside the page.
+                    if (_isInventoryCraft(context))
+                      _InventoryCraftScrollRulerHitTarget(
+                        controller: inventoryScrollController,
+                        topInset: 132,
+                        bottomInset:
+                            !_hasCatalogSelection &&
+                                selectedInventoryIds.isEmpty
+                            ? 82
+                            : 0,
+                      ),
+                    Positioned.fill(
+                      child: ValueListenableBuilder<InventoryItem?>(
+                        valueListenable: _draggedInventoryItem,
+                        builder: (context, item, _) => item == null
+                            ? const SizedBox.shrink()
+                            : _inventoryDragRail(item),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: ValueListenableBuilder<InventoryItem?>(
+                        valueListenable: _draggedInventoryItem,
+                        builder: (context, item, _) => item != null
+                            ? const SizedBox.shrink()
+                            : Stack(
+                                children: [
+                                  _pinnedSidebarHoverRail(machinesSide: false),
+                                  _pinnedSidebarHoverRail(machinesSide: true),
+                                ],
+                              ),
+                      ),
+                    ),
+                    if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
+                      Positioned(
+                        key: const Key('bottom-action-overlay'),
+                        left: 0,
+                        // The vertical ruler owns the final 64 px, just as it
+                        // does for the header and page content.
+                        right: _isInventoryCraft(context) ? 64 : 0,
+                        bottom: 0,
+                        child: _bottomActionBar(),
+                      ),
+                  ],
                 ),
-                Positioned.fill(
-                  child: ValueListenableBuilder<InventoryItem?>(
-                    valueListenable: _draggedInventoryItem,
-                    builder: (context, item, _) => item == null
-                        ? const SizedBox.shrink()
-                        : _inventoryDragRail(item),
-                  ),
-                ),
-                Positioned.fill(
-                  child: ValueListenableBuilder<InventoryItem?>(
-                    valueListenable: _draggedInventoryItem,
-                    builder: (context, item, _) => item != null
-                        ? const SizedBox.shrink()
-                        : Stack(
-                            children: [
-                              _pinnedSidebarHoverRail(machinesSide: false),
-                              _pinnedSidebarHoverRail(machinesSide: true),
-                            ],
-                          ),
-                  ),
-                ),
-                if (!_hasCatalogSelection && selectedInventoryIds.isEmpty)
-                  Positioned(
-                    key: const Key('bottom-action-overlay'),
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _bottomActionBar(),
-                  ),
-              ],
+                bottomNavigationBar: selectedInventoryIds.isNotEmpty
+                    ? _bulkEditToolbar()
+                    : selectedBuildIds.isNotEmpty &&
+                          selectedKitIds.isEmpty &&
+                          selectedMachineIds.isEmpty
+                    ? _bulkBuildToolbar()
+                    : _hasCatalogSelection
+                    ? _bulkCatalogToolbar()
+                    : null,
+              ),
             ),
-            bottomNavigationBar: selectedInventoryIds.isNotEmpty
-                ? _bulkEditToolbar()
-                : selectedBuildIds.isNotEmpty &&
-                      selectedKitIds.isEmpty &&
-                      selectedMachineIds.isEmpty
-                ? _bulkBuildToolbar()
-                : _hasCatalogSelection
-                ? _bulkCatalogToolbar()
-                : null,
           ),
         ),
       ),
     );
   }
 
-  void _syncCountdownClockPause() =>
-      countdownClock.paused = _inventoryIsScrolling.value;
+  void _syncCountdownClockPause() {
+    countdownClock.paused = _inventoryIsScrolling.value;
+    if (!_inventoryIsScrolling.value) return;
+
+    // Scrolling takes precedence over edge-hover navigation. A pointer that
+    // passes the right edge while wheeling or dragging must never open a
+    // pinned sidebar mid-scroll.
+    _leftPinnedSidebarOpenTimer?.cancel();
+    _rightPinnedSidebarOpenTimer?.cancel();
+    if (_leftPinnedSidebarHovered ||
+        _rightPinnedSidebarHovered ||
+        _leftPinnedSidebarOpen ||
+        _rightPinnedSidebarOpen) {
+      setState(() {
+        _leftPinnedSidebarHovered = false;
+        _rightPinnedSidebarHovered = false;
+        _leftPinnedSidebarOpen = false;
+        _rightPinnedSidebarOpen = false;
+      });
+    }
+  }
 
   void _beginInventoryScrollInteraction() {
     _inventoryOverlayRestore?.cancel();
@@ -10938,6 +12135,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         canDelete: currentRole.canHardDeleteItems,
         onOpen: () => _handleInventoryTap(record),
         onSelect: () => _selectInventoryItem(record),
+        onBulkContextMenu: (position) =>
+            _openBulkItemContextMenu(record, position),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
         onStatusPressed:
@@ -10972,6 +12171,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         canDelete: currentRole.canHardDeleteItems,
         onOpen: () => _handleInventoryTap(record),
         onSelect: () => _selectInventoryItem(record),
+        onBulkContextMenu: (position) =>
+            _openBulkItemContextMenu(record, position),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
         onStatusPressed:
@@ -11162,6 +12363,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       // The middle zone is deliberately where a drag begins, but a stationary
       // click still needs to behave exactly like clicking the card itself.
       onTap: () => _handleInventoryTap(item),
+      onSecondaryTapDown: (details) =>
+          unawaited(_openBulkItemContextMenu(item, details.globalPosition)),
       onLongPress: () {
         final touchPlatform =
             defaultTargetPlatform == TargetPlatform.android ||
@@ -11291,6 +12494,131 @@ class _InventoryHomeState extends State<InventoryHome> {
           ? selectedInventoryIds.remove(item.id)
           : selectedInventoryIds.add(item.id);
     });
+  }
+
+  Future<void> _openBulkItemContextMenu(
+    InventoryItem item,
+    Offset position,
+  ) async {
+    // A normal right-click is a direct action on one item. It must not
+    // silently enter bulk-selection mode. If this item is already part of an
+    // explicit selection, the menu intentionally operates on that selection.
+    final selected = selectedInventoryIds.contains(item.id)
+        ? _selectedInventoryItems
+        : [item];
+    final hasFilament = selected.any(
+      (candidate) => candidate.type == InventoryType.filament,
+    );
+    final restore =
+        selected.isNotEmpty &&
+        selected.every((candidate) => candidate.archived);
+    final menuRows =
+        (currentRole.canManageCatalog ? 1 : 0) +
+        (currentRole.canArchiveInventory ? 1 : 0) +
+        (currentRole.canEditInventory ? 2 : 0) +
+        (currentRole.canEditInventory && hasFilament ? 1 : 0) +
+        (currentRole.canHardDeleteItems ? 1 : 0);
+    final menuHeight =
+        16.0 + (menuRows * 52) + (currentRole.canHardDeleteItems ? 12 : 0);
+    final action = await showMenu<_InventoryBulkContextAction>(
+      context: context,
+      position: _cursorMenuPosition(
+        context,
+        position,
+        estimatedHeight: menuHeight,
+      ),
+      constraints: const BoxConstraints(minWidth: 240, maxWidth: 320),
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      elevation: 12,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(_designRadius(context, 16)),
+      ),
+      items: [
+        if (currentRole.canManageCatalog)
+          const PopupMenuItem(
+            value: _InventoryBulkContextAction.createKit,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-create-kit',
+              icon: Icons.inventory_2_outlined,
+              label: 'Create Kit',
+            ),
+          ),
+        if (currentRole.canArchiveInventory)
+          PopupMenuItem(
+            value: _InventoryBulkContextAction.archive,
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-archive',
+              icon: restore ? Icons.unarchive_outlined : Icons.archive_outlined,
+              label: restore ? 'Restore' : 'Archive',
+            ),
+          ),
+        if (currentRole.canEditInventory)
+          const PopupMenuItem(
+            value: _InventoryBulkContextAction.changeType,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-change-type',
+              icon: Icons.swap_horiz_rounded,
+              label: 'Change Type',
+            ),
+          ),
+        if (currentRole.canEditInventory)
+          const PopupMenuItem(
+            value: _InventoryBulkContextAction.changeLocation,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-change-location',
+              icon: Icons.location_on_outlined,
+              label: 'Change Location',
+            ),
+          ),
+        if (currentRole.canEditInventory && hasFilament)
+          const PopupMenuItem(
+            value: _InventoryBulkContextAction.changeStatus,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-change-status',
+              icon: Icons.water_drop_outlined,
+              label: 'Set Status',
+            ),
+          ),
+        if (currentRole.canHardDeleteItems) const PopupMenuDivider(height: 12),
+        if (currentRole.canHardDeleteItems)
+          const PopupMenuItem(
+            value: _InventoryBulkContextAction.delete,
+            height: 52,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: _PopupActionRow(
+              actionKey: 'bulk-context-delete',
+              icon: Icons.delete_outline_rounded,
+              label: 'Delete',
+              destructive: true,
+            ),
+          ),
+      ],
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _InventoryBulkContextAction.createKit:
+        await _bulkCreateKit(selected);
+      case _InventoryBulkContextAction.archive:
+        _bulkArchiveOrRestore(selected);
+      case _InventoryBulkContextAction.changeType:
+        await _bulkChangeType(selected);
+      case _InventoryBulkContextAction.changeLocation:
+        await _bulkChangeLocation(selected);
+      case _InventoryBulkContextAction.changeStatus:
+        await _bulkChangeStatus(selected);
+      case _InventoryBulkContextAction.delete:
+        await _bulkDelete(selected);
+    }
   }
 
   void _handleCatalogRecordTap(Object record) {
@@ -11601,6 +12929,15 @@ class _InventoryHomeState extends State<InventoryHome> {
             destructive: false,
           ),
           (
+            key: const Key('bulk-change-location'),
+            icon: Icons.location_on_outlined,
+            label: 'Change Location',
+            onPressed: currentRole.canEditInventory
+                ? _bulkChangeLocation
+                : null,
+            destructive: false,
+          ),
+          (
             key: const Key('bulk-change-status'),
             icon: Icons.water_drop_outlined,
             label: 'Set Status',
@@ -11615,91 +12952,115 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     return Material(
       key: const Key('bulk-edit-toolbar'),
-      color: Theme.of(context).colorScheme.surface,
+      color: Colors.transparent,
       elevation: 20,
-      child: SafeArea(
-        top: false,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final selectionHeader = Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  key: const Key('clear-bulk-selection'),
-                  tooltip: 'Clear selection',
-                  onPressed: () => setState(selectedInventoryIds.clear),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${selected.length} selected',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ],
-            );
-            if (constraints.maxWidth < 650) {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: selectionHeader,
-                    ),
-                    if (noActionsAvailable)
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(8, 0, 8, 4),
-                        child: Row(
-                          children: [
-                            Icon(Icons.lock_outline_rounded, size: 16),
-                            SizedBox(width: 6),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Theme.of(context).colorScheme.primary.withValues(alpha: .28),
+              Theme.of(context).colorScheme.surface.withValues(alpha: .96),
+              Theme.of(context).colorScheme.primaryContainer
+                  .withValues(alpha: .22),
+            ],
+            stops: const [0, .48, 1],
+          ),
+          border: Border(
+            top: BorderSide(
+              color: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: .58),
+            ),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final selectionHeader = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: const Key('clear-bulk-selection'),
+                    tooltip: 'Clear selection',
+                    onPressed: () => setState(selectedInventoryIds.clear),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${selected.length} selected',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              );
+              if (constraints.maxWidth < 650) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: selectionHeader,
+                      ),
+                      if (noActionsAvailable)
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(8, 0, 8, 4),
+                          child: Row(
+                            children: [
+                              Icon(Icons.lock_outline_rounded, size: 16),
+                              SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Builder role: ask the inventory owner to promote this device for bulk editing.',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      Row(
+                        children: [
+                          for (final action in actions)
                             Expanded(
-                              child: Text(
-                                'Builder role: ask the inventory owner to promote this device for bulk editing.',
-                                style: TextStyle(fontSize: 12),
+                              child: _bulkMobileToolbarButton(
+                                key: action.key,
+                                icon: action.icon,
+                                label: action.label,
+                                onPressed: action.onPressed,
+                                destructive: action.destructive,
                               ),
                             ),
-                          ],
-                        ),
+                        ],
                       ),
-                    Row(
-                      children: [
-                        for (final action in actions)
-                          Expanded(
-                            child: _bulkMobileToolbarButton(
-                              key: action.key,
-                              icon: action.icon,
-                              label: action.label,
-                              onPressed: action.onPressed,
-                              destructive: action.destructive,
-                            ),
-                          ),
-                      ],
-                    ),
+                    ],
+                  ),
+                );
+              }
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: [
+                    selectionHeader,
+                    const SizedBox(width: 18),
+                    for (final action in actions)
+                      _bulkToolbarButton(
+                        key: action.key,
+                        icon: action.icon,
+                        label: action.label,
+                        onPressed: action.onPressed,
+                        destructive: action.destructive,
+                      ),
                   ],
                 ),
               );
-            }
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  selectionHeader,
-                  const SizedBox(width: 18),
-                  for (final action in actions)
-                    _bulkToolbarButton(
-                      key: action.key,
-                      icon: action.icon,
-                      label: action.label,
-                      onPressed: action.onPressed,
-                      destructive: action.destructive,
-                    ),
-                ],
-              ),
-            );
-          },
+            },
+          ),
         ),
       ),
     );
@@ -11711,19 +13072,25 @@ class _InventoryHomeState extends State<InventoryHome> {
     required String label,
     required VoidCallback? onPressed,
     bool destructive = false,
-  }) => TextButton(
-    key: key,
-    onPressed: onPressed,
-    style: destructive
-        ? TextButton.styleFrom(foregroundColor: const Color(0xffff7777))
-        : null,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon),
-        const SizedBox(height: 3),
-        FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
-      ],
+  }) => SizedBox(
+    height: 48,
+    child: TextButton(
+      key: key,
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: destructive ? const Color(0xffff7777) : null,
+        minimumSize: const Size(0, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon),
+          const SizedBox(height: 3),
+          FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
+        ],
+      ),
     ),
   );
 
@@ -11735,24 +13102,27 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool destructive = false,
   }) => Padding(
     padding: const EdgeInsets.only(right: 8),
-    child: OutlinedButton.icon(
-      key: key,
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-      style: destructive
-          ? OutlinedButton.styleFrom(foregroundColor: const Color(0xffff7777))
-          : null,
+    child: SizedBox(
+      height: 48,
+      child: OutlinedButton.icon(
+        key: key,
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: destructive ? const Color(0xffff7777) : null,
+          minimumSize: const Size(0, 48),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
     ),
   );
 
-  Future<void> _bulkCreateKit() async {
-    final selected = _selectedInventoryItems;
+  Future<void> _bulkCreateKit([List<InventoryItem>? targetItems]) async {
+    final selected = targetItems ?? _selectedInventoryItems;
     if (selected.isEmpty) return;
     final stamp = DateTime.now().microsecondsSinceEpoch;
-    setState(() {
-      selectedInventoryIds.clear();
-    });
+    if (targetItems == null) setState(selectedInventoryIds.clear);
     await _openCatalog(
       initialKitBom: [
         for (final (index, item) in selected.indexed)
@@ -11767,14 +13137,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  void _bulkArchiveOrRestore() {
-    final selected = _selectedInventoryItems;
+  void _bulkArchiveOrRestore([List<InventoryItem>? targetItems]) {
+    final selected = targetItems ?? _selectedInventoryItems;
     if (selected.isEmpty) return;
     final restore = selected.every((item) => item.archived);
+    final targetIds = selected.map((item) => item.id).toSet();
     setState(() {
       for (var index = 0; index < inventory.length; index++) {
         final item = inventory[index];
-        if (!selectedInventoryIds.contains(item.id)) continue;
+        if (!targetIds.contains(item.id)) continue;
         _publishInventoryItem(
           item.copyWith(
             archived: !restore,
@@ -11786,13 +13157,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           'bulk': 'true',
         });
       }
-      selectedInventoryIds.clear();
+      if (targetItems == null) selectedInventoryIds.clear();
     });
     _persist();
   }
 
-  Future<void> _bulkDelete() async {
-    final selected = _selectedInventoryItems;
+  Future<void> _bulkDelete([List<InventoryItem>? targetItems]) async {
+    final selected = targetItems ?? _selectedInventoryItems;
     if (selected.isEmpty) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -11823,16 +13194,16 @@ class _InventoryHomeState extends State<InventoryHome> {
           'bulk': 'true',
         });
       }
-      for (final id in selectedInventoryIds.toList()) {
-        _removeInventoryItem(id);
+      for (final item in selected) {
+        _removeInventoryItem(item.id);
       }
-      selectedInventoryIds.clear();
+      if (targetItems == null) selectedInventoryIds.clear();
     });
     _persist();
   }
 
-  Future<void> _bulkChangeType() async {
-    final selected = _selectedInventoryItems;
+  Future<void> _bulkChangeType([List<InventoryItem>? targetItems]) async {
+    final selected = targetItems ?? _selectedInventoryItems;
     if (selected.isEmpty) return;
     final choice =
         await showDialog<
@@ -11880,10 +13251,11 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (choice == null || !mounted) return;
     final targetLabel =
         choice.customType?.name ?? _inventoryTypeDisplayLabel(choice.type);
+    final targetIds = selected.map((item) => item.id).toSet();
     setState(() {
       for (var index = 0; index < inventory.length; index++) {
         final item = inventory[index];
-        if (!selectedInventoryIds.contains(item.id)) continue;
+        if (!targetIds.contains(item.id)) continue;
         _publishInventoryItem(
           item.copyWith(
             type: choice.type,
@@ -11904,7 +13276,113 @@ class _InventoryHomeState extends State<InventoryHome> {
           'bulk': 'true',
         });
       }
-      selectedInventoryIds.clear();
+      if (targetItems == null) selectedInventoryIds.clear();
+    });
+    _persist();
+  }
+
+  Future<void> _bulkChangeLocation([List<InventoryItem>? targetItems]) async {
+    final selected = targetItems ?? _selectedInventoryItems;
+    if (selected.isEmpty) return;
+    var query = '';
+    final choice = await showDialog<({String? locationId, bool apply})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final needle = _normalized(query);
+          final matches =
+              locations.where((location) {
+                if (needle.isEmpty) return true;
+                return _normalized(
+                  '${location.name} ${_locationPath(location.id)} ${location.id}',
+                ).contains(needle);
+              }).toList()..sort(
+                (a, b) => _locationPath(a.id).compareTo(_locationPath(b.id)),
+              );
+          return AlertDialog(
+            key: const Key('bulk-change-location-dialog'),
+            title: Text('Change location for ${selected.length} items'),
+            content: SizedBox(
+              width: 520,
+              height: 440,
+              child: Column(
+                children: [
+                  TextField(
+                    key: const Key('bulk-location-search'),
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      hintText: 'Find a location…',
+                    ),
+                    onChanged: (value) => setDialogState(() => query = value),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        ListTile(
+                          key: const Key('bulk-location-clear'),
+                          leading: const Icon(Icons.location_off_outlined),
+                          title: const Text('No location'),
+                          subtitle: const Text(
+                            'Remove location from selected items',
+                          ),
+                          onTap: () => Navigator.pop(dialogContext, (
+                            locationId: null,
+                            apply: true,
+                          )),
+                        ),
+                        const Divider(height: 1),
+                        for (final location in matches)
+                          ListTile(
+                            key: Key('bulk-location-${location.id}'),
+                            leading: _LocationIcon(
+                              location: location,
+                              size: 26,
+                            ),
+                            title: Text(_locationPath(location.id)),
+                            subtitle: Text(location.id),
+                            onTap: () => Navigator.pop(dialogContext, (
+                              locationId: location.id,
+                              apply: true,
+                            )),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (choice?.apply != true || !mounted) return;
+    final destinationPath = choice!.locationId == null
+        ? ''
+        : _locationPath(choice.locationId!);
+    setState(() {
+      for (final item in selected) {
+        _publishInventoryItem(
+          item.copyWith(
+            storageLocationId: choice.locationId ?? '',
+            storageLocation: destinationPath,
+            locationHistory: _locationHistoryAfterMove(item, destinationPath),
+          ),
+        );
+        _recordAudit('move', 'inventory', item.id, {
+          'name': item.name,
+          'location': destinationPath.isEmpty ? 'No location' : destinationPath,
+          'bulk': 'true',
+        });
+      }
+      if (targetItems == null) selectedInventoryIds.clear();
     });
     _persist();
   }
@@ -11999,8 +13477,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
-  Future<void> _bulkChangeStatus() async {
-    final selected = _selectedInventoryItems
+  Future<void> _bulkChangeStatus([List<InventoryItem>? targetItems]) async {
+    final selected = (targetItems ?? _selectedInventoryItems)
         .where((item) => item.type == InventoryType.filament)
         .toList();
     if (selected.isEmpty) return;
@@ -12076,7 +13554,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           'bulk': 'true',
         });
       }
-      selectedInventoryIds.clear();
+      if (targetItems == null) selectedInventoryIds.clear();
     });
     _persist();
   }
@@ -12701,15 +14179,18 @@ class _InventoryHomeState extends State<InventoryHome> {
       _showPermissionDenied('Your role cannot add inventory items.');
       return false;
     }
-    final proceed = await showDialog<bool>(
+    final choice = await showDialog<ImportFileChoice>(
       context: context,
       builder: (_) => const ImportFormatDialog(chooseFile: true),
     );
-    if (proceed != true || !mounted) return false;
+    if (choice == null || !mounted) return false;
+    if (choice.importAsKit) return _importKitPackage();
     final picked = await FilePicker.pickFile(
       dialogTitle: 'Import inventory from CSV, XLSX or JSON',
       type: FileType.custom,
       allowedExtensions: const ['csv', 'xlsx', 'json'],
+      linuxOptions: await _parentedLinuxFilePickerOptions(),
+      windowsOptions: const WindowsOptions(lockParentWindow: true),
     );
     if (picked == null || !mounted) return false;
     try {
@@ -12756,7 +14237,26 @@ class _InventoryHomeState extends State<InventoryHome> {
           jsonEncode(spreadsheetRowsToInventoryJson(table, mapping)),
         );
       } else {
-        parsed = parseInventoryJson(utf8.decode(bytes));
+        final source = utf8.decode(bytes);
+        if (isInventorinatorKitPackageDocument(source)) {
+          await showDialog<void>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('This is a kit package'),
+              content: const Text(
+                'Bulk Add imports inventory items only. Close this dialog, open Catalog, choose Import kit, then select this file there.',
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Got it'),
+                ),
+              ],
+            ),
+          );
+          return false;
+        }
+        parsed = parseInventoryJson(source);
       }
       if (!parsed.isValid) {
         await _showInventoryJsonErrors(parsed.errors);
@@ -13214,16 +14714,19 @@ class _InventoryHomeState extends State<InventoryHome> {
     final groups =
         <String, ({String name, String id, List<InventoryItem> items})>{};
     for (final item in source) {
+      // Depleted records do not need a physical home. Keep this audit focused
+      // on stock a person can actually pick up and assign.
+      if (item.quantity <= 0) continue;
       final locationId = item.storageLocationId.trim();
       final locationName = item.storageLocation.trim();
+      // The saved Stockroom ID is the one authoritative location reference.
+      // A text-only legacy path still needs assigning, even if it happens to
+      // look like a current location name.
+      final unassigned = locationId.isEmpty;
       final missingId = locationId.isNotEmpty && !savedIds.contains(locationId);
-      final missingLegacyName =
-          locationId.isEmpty &&
-          locationName.isNotEmpty &&
-          _itemStorageLocation(item) == null;
-      if (!missingId && !missingLegacyName) continue;
+      if (!unassigned && !missingId) continue;
       final id = missingId ? locationId : '';
-      final name = locationName.isEmpty ? 'Unnamed location' : locationName;
+      final name = unassigned ? 'No location assigned' : locationName;
       final key = '${id.toLowerCase()}\u0000${_normalized(name)}';
       final group = groups.putIfAbsent(
         key,
@@ -13242,18 +14745,6 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
     }
     return result;
-  }
-
-  Widget _unresolvedLocationAuditButton() {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: OutlinedButton.icon(
-        key: const Key('open-unresolved-locations'),
-        onPressed: _openUnresolvedLocationView,
-        icon: const Icon(Icons.location_off_outlined, size: 18),
-        label: const Text('Unresolved locations'),
-      ),
-    );
   }
 
   void _commitUnresolvedLocationAssignment(
@@ -13361,66 +14852,40 @@ class _InventoryHomeState extends State<InventoryHome> {
       );
       return false;
     }
-    StockLocationRecord? destination;
-    final accepted = await showDialog<bool>(
+    final destination = await showDialog<StockLocationRecord>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text('Assign ${group.items.length} items'),
-          content: SizedBox(
-            width: 500,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'All items currently grouped under “${group.name}” will be assigned to one saved location.',
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  key: const Key('unresolved-location-destination'),
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Saved location',
-                  ),
-                  initialValue: destination?.id,
-                  items: [
-                    for (final location in locations)
-                      DropdownMenuItem(
-                        value: location.id,
-                        child: Text(_locationPath(location.id)),
-                      ),
-                  ],
-                  onChanged: (id) => setDialogState(
-                    () => destination = locations
-                        .where((location) => location.id == id)
-                        .firstOrNull,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              key: const Key('confirm-unresolved-location-assignment'),
-              onPressed: destination == null
-                  ? null
-                  : () => Navigator.pop(dialogContext, true),
-              icon: const Icon(Icons.drive_file_move_outline),
-              label: Text(
-                'Assign ${group.items.length} item${group.items.length == 1 ? '' : 's'}',
-              ),
-            ),
-          ],
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          'Assign ${group.items.length} item${group.items.length == 1 ? '' : 's'}',
         ),
+        content: SizedBox(
+          width: 500,
+          height: 420,
+          child: ListView.separated(
+            itemCount: locations.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (_, index) {
+              final location = locations[index];
+              return ListTile(
+                key: Key('unresolved-location-destination-${location.id}'),
+                leading: _LocationIcon(location: location, size: 24),
+                title: Text(_locationPath(location.id)),
+                subtitle: Text(locationKindLabel(location.kind)),
+                onTap: () => Navigator.pop(dialogContext, location),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+        ],
       ),
     );
-    if (accepted != true || destination == null || !mounted) return false;
-    final destinationLocation = destination!;
+    if (destination == null || !mounted) return false;
+    final destinationLocation = destination;
     final destinationPath = _locationPath(destinationLocation.id);
     _commitUnresolvedLocationAssignment(group, destinationLocation);
     if (!mounted) return false;
@@ -13437,6 +14902,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     var scanning = true;
     var scanStarted = false;
     var dialogOpen = true;
+    var fullscreen = false;
     void removeGroup(
       ({String name, String id, List<InventoryItem> items}) group,
     ) {
@@ -13468,11 +14934,21 @@ class _InventoryHomeState extends State<InventoryHome> {
                 for (final group
                     in scanned
                         .where(
-                          (group) => group.id.isEmpty && group.items.length > 1,
+                          (group) =>
+                              group.id.isEmpty &&
+                              group.name != 'No location assigned' &&
+                              group.items.length > 1,
                         )
                         .toList()) {
                   if (!mounted || !dialogOpen) return;
-                  if (await _offerSuggestedLocationCreation(group)) {
+                  final matchesSavedLocation = locations.any(
+                    (location) =>
+                        _normalized(location.name) == _normalized(group.name) ||
+                        _normalized(_locationPath(location.id)) ==
+                            _normalized(group.name),
+                  );
+                  if (!matchesSavedLocation &&
+                      await _offerSuggestedLocationCreation(group)) {
                     removeGroup(group);
                     if (mounted && dialogOpen) refreshDialog(() {});
                   }
@@ -13480,143 +14956,174 @@ class _InventoryHomeState extends State<InventoryHome> {
               }),
             );
           }
+          final screenWidth = MediaQuery.sizeOf(dialogContext).width;
+          final screenHeight = MediaQuery.sizeOf(dialogContext).height;
+          final compactDialog = screenWidth < 700;
+          final dialogFullscreen = fullscreen || compactDialog;
+          final contentWidth = dialogFullscreen ? screenWidth - 48 : 760.0;
           return AlertDialog(
             key: const Key('unresolved-locations-dialog'),
-            title: const Row(
+            insetPadding: dialogFullscreen ? EdgeInsets.zero : null,
+            constraints: BoxConstraints(
+              maxWidth: dialogFullscreen ? screenWidth : 840,
+              maxHeight: dialogFullscreen ? screenHeight : 680,
+            ),
+            title: Row(
               children: [
-                Icon(Icons.location_off_outlined),
-                SizedBox(width: 10),
-                Text('Unresolved locations'),
+                const Icon(Icons.location_off_outlined),
+                const SizedBox(width: 10),
+                const Expanded(child: Text('Orphaned Items')),
+                if (!compactDialog)
+                  IconButton(
+                    key: const Key('toggle-orphaned-items-fullscreen'),
+                    tooltip: fullscreen ? 'Exit full screen' : 'Full screen',
+                    onPressed: () =>
+                        refreshDialog(() => fullscreen = !fullscreen),
+                    icon: _FullscreenIcon(expanded: fullscreen),
+                  ),
+                IconButton(
+                  key: const Key('close-orphaned-items'),
+                  tooltip: 'Close Orphaned Items',
+                  onPressed: () => Navigator.pop(dialogContext),
+                  style: _destructiveIconButtonStyle(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
               ],
             ),
-            content: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720, maxHeight: 560),
-              child: scanning
-                  ? const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        SizedBox(width: 12),
-                        Text('Scanning saved locations…'),
-                      ],
-                    )
-                  : groups.isEmpty
-                  ? const Text(
-                      'Every item location resolves to a saved location.',
-                    )
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: groups.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
-                      itemBuilder: (_, index) {
-                        final group = groups[index];
-                        final subtitle = group.id.isEmpty
-                            ? 'Legacy name only · no saved location matches'
-                            : 'Missing saved location ID: ${group.id}';
-                        return Container(
-                          decoration: BoxDecoration(
-                            color: Theme.of(dialogContext)
-                                .colorScheme
-                                .surfaceContainerLow,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: Theme.of(dialogContext)
-                                  .colorScheme
-                                  .outlineVariant,
-                            ),
+            content: SizedBox(
+              width: contentWidth,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: dialogFullscreen ? screenHeight - 180 : 560,
+                ),
+                child: scanning
+                    ? const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          SizedBox(width: 12),
+                          Text('Scanning saved locations…'),
+                        ],
+                      )
+                    : groups.isEmpty
+                    ? const Text('Every in-stock item has a saved location.')
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: groups.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (_, index) {
+                          final group = groups[index];
+                          final subtitle = group.name == 'No location assigned'
+                              ? 'No location has been assigned'
+                              : group.id.isEmpty
+                              ? 'Text location only · assign a saved Stockroom location'
+                              : 'Missing saved location ID: ${group.id}';
+                          return Column(
+                            key: Key(
+                              'unresolved-location-group-${group.id.isEmpty ? _normalized(group.name) : group.id}',
+                            ),
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  14,
-                                  8,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                padding: const EdgeInsets.fromLTRB(6, 0, 6, 10),
+                                child: Row(
                                   children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
+                                    const Icon(Icons.location_off_outlined),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
                                             group.name,
                                             style: const TextStyle(
                                               fontWeight: FontWeight.w800,
                                             ),
                                           ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        OutlinedButton.icon(
-                                          key: Key(
-                                            'assign-unresolved-location-${group.id.isEmpty ? _normalized(group.name) : group.id}',
+                                          Text(
+                                            '$subtitle · ${group.items.length} in-stock item${group.items.length == 1 ? '' : 's'}',
+                                            style: Theme.of(dialogContext)
+                                                .textTheme
+                                                .bodySmall,
                                           ),
-                                          onPressed:
-                                              currentRole.canEditInventory
-                                              ? () async {
-                                                  if (await _assignUnresolvedLocationGroup(
-                                                    group,
-                                                  )) {
-                                                    removeGroup(group);
-                                                    refreshDialog(() {});
-                                                  }
-                                                }
-                                              : null,
-                                          icon: const Icon(
-                                            Icons.drive_file_move_outline,
-                                            size: 17,
-                                          ),
-                                          label: Text(
-                                            'Assign all (${group.items.length})',
-                                          ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      subtitle,
-                                      style: Theme.of(dialogContext)
-                                          .textTheme
-                                          .bodySmall,
+                                    const SizedBox(width: 12),
+                                    FilledButton.tonalIcon(
+                                      key: Key(
+                                        'assign-unresolved-location-${group.id.isEmpty ? _normalized(group.name) : group.id}',
+                                      ),
+                                      onPressed: currentRole.canEditInventory
+                                          ? () async {
+                                              if (await _assignUnresolvedLocationGroup(
+                                                group,
+                                              )) {
+                                                removeGroup(group);
+                                                refreshDialog(() {});
+                                              }
+                                            }
+                                          : null,
+                                      icon: const Icon(
+                                        Icons.drive_file_move_outline,
+                                        size: 17,
+                                      ),
+                                      label: const Text('Assign all'),
                                     ),
                                   ],
                                 ),
                               ),
-                              const Divider(height: 1),
-                              for (final item in group.items)
-                                ListTile(
-                                  dense: true,
-                                  leading: const Icon(
-                                    Icons.inventory_2_outlined,
-                                    size: 20,
+                              for (final item in group.items) ...[
+                                Card(
+                                  margin: EdgeInsets.zero,
+                                  clipBehavior: Clip.antiAlias,
+                                  child: ListTile(
+                                    leading: Icon(item.icon, size: 20),
+                                    title: Text(
+                                      item.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text('Item ID: ${item.id}'),
+                                    trailing: Text(
+                                      '×${_formatBomQuantity(item.quantity)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    onTap: currentRole.canEditInventory
+                                        ? () async {
+                                            final singleItemGroup = (
+                                              name: group.name,
+                                              id: group.id,
+                                              items: [item],
+                                            );
+                                            if (await _assignUnresolvedLocationGroup(
+                                              singleItemGroup,
+                                            )) {
+                                              group.items.remove(item);
+                                              if (group.items.isEmpty) {
+                                                removeGroup(group);
+                                              }
+                                              refreshDialog(() {});
+                                            }
+                                          }
+                                        : null,
                                   ),
-                                  title: Text(item.name),
-                                  subtitle: Text(
-                                    'Item ID: ${item.id} · Quantity: ${item.quantity}',
-                                  ),
-                                  onTap: () {
-                                    Navigator.pop(dialogContext);
-                                    _openDetails(item);
-                                  },
                                 ),
+                                const SizedBox(height: 8),
+                              ],
                             ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Close'),
+                          );
+                        },
+                      ),
               ),
-            ],
+            ),
           );
         },
       ),
@@ -13669,6 +15176,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<void> _openDetails(InventoryItem item) async {
     final detailedItem = _withFullInventoryImages(item);
     final storageLocation = _itemStorageLocation(item);
+    final desktopWindow = Platform.isLinux || Platform.isWindows;
     var detailsFullscreen = false;
     await showGeneralDialog<void>(
       context: context,
@@ -13677,59 +15185,93 @@ class _InventoryHomeState extends State<InventoryHome> {
       barrierColor: Colors.black54,
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (context, _, _) => StatefulBuilder(
-        builder: (context, refreshDetails) => Align(
-          alignment: Alignment.centerRight,
-          child: ItemDetailsPanel(
-            item: detailedItem,
-            requireManualDryingTimes: manualDryingTimesRequired(
-              widget.database,
+        builder: (context, refreshDetails) {
+          final screenSize = MediaQuery.sizeOf(context);
+          final compact = screenSize.width < 700;
+          final windowFullscreen = detailsFullscreen || compact;
+          final windowWidth = windowFullscreen
+              ? screenSize.width
+              : math.min(1100.0, screenSize.width - 64);
+          final windowHeight = windowFullscreen
+              ? screenSize.height
+              : math.min(900.0, screenSize.height - 64);
+          final panelWidth = desktopWindow
+              ? windowWidth
+              : itemDetailsPanelWidth;
+          return Align(
+            alignment: desktopWindow ? Alignment.center : Alignment.centerRight,
+            child: Padding(
+              padding: desktopWindow && !windowFullscreen
+                  ? const EdgeInsets.all(32)
+                  : EdgeInsets.zero,
+              child: Material(
+                color: Colors.transparent,
+                clipBehavior: Clip.antiAlias,
+                borderRadius: BorderRadius.circular(windowFullscreen ? 0 : 24),
+                child: SizedBox(
+                  width: desktopWindow ? windowWidth : null,
+                  height: desktopWindow ? windowHeight : null,
+                  child: ItemDetailsPanel(
+                    item: detailedItem,
+                    requireManualDryingTimes: manualDryingTimesRequired(
+                      widget.database,
+                    ),
+                    typeLabel: _itemTypeDisplayLabel(detailedItem),
+                    typeIcon: _itemTypeIcon(detailedItem),
+                    typeIconImageBytes: _iconImageBytesFromKey(
+                      _itemTypeIconKey(detailedItem),
+                    ),
+                    initialWidth: windowFullscreen
+                        ? screenSize.width
+                        : panelWidth,
+                    onWidthChanged: (width) => itemDetailsPanelWidth = width,
+                    fullscreen: windowFullscreen,
+                    onFullscreenChanged: (fullscreen) =>
+                        refreshDetails(() => detailsFullscreen = fullscreen),
+                    windowed: desktopWindow,
+                    windowWidth: desktopWindow ? windowWidth : null,
+                    machines: machines,
+                    machineTypes: machineTypes,
+                    spoolTypes: spoolTypes,
+                    spoolUsage: spoolUsage,
+                    checkouts: checkouts,
+                    onCheckOut: currentRole.canRecordCheckouts
+                        ? _promptCheckout
+                        : null,
+                    onReturn: currentRole.canRecordCheckouts
+                        ? _promptReturn
+                        : null,
+                    onSpoolUsageAdded: _addSpoolUsage,
+                    onSpoolUsageChanged: currentRole.canEditInventory
+                        ? _updateSpoolUsage
+                        : null,
+                    onSpoolUsageDeleted: currentRole.canEditInventory
+                        ? _deleteSpoolUsage
+                        : null,
+                    onChanged: (updated) =>
+                        _updateItemById(_withoutFullInventoryImages(updated)),
+                    onEdit: currentRole.canEditInventory
+                        ? (item) => _handleAction(item, ItemAction.edit)
+                        : null,
+                    onSplitOne:
+                        currentRole.canEditInventory &&
+                            currentRole.canCreateInventory
+                        ? _splitOneIntoNewStack
+                        : null,
+                    canEdit: currentRole.canEditInventory,
+                    canArchive: currentRole.canArchiveInventory,
+                    canMarkDepleted: _itemCanMarkDepleted(item),
+                    showStatus: _itemShowsStatus(item),
+                    storageLocation: storageLocation,
+                    locations: locations,
+                    locationPath: _locationPath,
+                    onFindSimilar: _findSimilarItems,
+                  ),
+                ),
+              ),
             ),
-            typeLabel: _itemTypeDisplayLabel(detailedItem),
-            typeIcon: _itemTypeIcon(detailedItem),
-            typeIconImageBytes: _iconImageBytesFromKey(
-              _itemTypeIconKey(detailedItem),
-            ),
-            initialWidth: detailsFullscreen
-                ? MediaQuery.sizeOf(context).width
-                : itemDetailsPanelWidth,
-            onWidthChanged: (width) => itemDetailsPanelWidth = width,
-            fullscreen: detailsFullscreen,
-            onFullscreenChanged: (fullscreen) =>
-                refreshDetails(() => detailsFullscreen = fullscreen),
-            machines: machines,
-            machineTypes: machineTypes,
-            spoolTypes: spoolTypes,
-            spoolUsage: spoolUsage,
-            checkouts: checkouts,
-            onCheckOut: currentRole.canRecordCheckouts ? _promptCheckout : null,
-            onReturn: currentRole.canRecordCheckouts ? _promptReturn : null,
-            onSpoolUsageAdded: _addSpoolUsage,
-            onSpoolUsageChanged: currentRole.canEditInventory
-                ? _updateSpoolUsage
-                : null,
-            onSpoolUsageDeleted: currentRole.canEditInventory
-                ? _deleteSpoolUsage
-                : null,
-            onChanged: (updated) =>
-                _updateItemById(_withoutFullInventoryImages(updated)),
-            onEdit: currentRole.canEditInventory
-                ? (item) => _handleAction(item, ItemAction.edit)
-                : null,
-            onSplitOne:
-                currentRole.canEditInventory && currentRole.canCreateInventory
-                ? _splitOneIntoNewStack
-                : null,
-            canEdit: currentRole.canEditInventory,
-            canArchive: currentRole.canArchiveInventory,
-            canMarkDepleted: _itemCanMarkDepleted(item),
-            showStatus: _itemShowsStatus(item),
-            storageLocation: storageLocation,
-            onStorageLocationTap: storageLocation == null
-                ? null
-                : () => _openLocation(storageLocation),
-            onFindSimilar: _findSimilarItems,
-          ),
-        ),
+          );
+        },
       ),
       transitionBuilder: (context, animation, _, child) {
         final curved = CurvedAnimation(
@@ -13740,7 +15282,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           opacity: curved,
           child: SlideTransition(
             position: Tween(
-              begin: const Offset(.12, 0),
+              begin: desktopWindow
+                  ? const Offset(0, .04)
+                  : const Offset(.12, 0),
               end: Offset.zero,
             ).animate(curved),
             child: child,
@@ -14406,7 +15950,6 @@ class _InventoryHomeState extends State<InventoryHome> {
       kits: kits,
       initialKitId: initialKitId,
       initialKitBom: initialKitBom,
-      onImportKitPackage: _importKitPackage,
       onVendorAdded: (vendor) {
         setState(() => vendors.add(vendor));
         _persist();
@@ -14788,6 +16331,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     required bool machinesSide,
     required bool hover,
   }) {
+    if (hover && _inventoryIsScrolling.value) return;
     final timer = machinesSide
         ? _rightPinnedSidebarOpenTimer
         : _leftPinnedSidebarOpenTimer;
@@ -14840,7 +16384,11 @@ class _InventoryHomeState extends State<InventoryHome> {
         // This overlay is above the Scrollbar in the page stack. Leave a
         // permanent lane for the thumb so the reveal can never eat its drag.
         padding: EdgeInsets.only(
-          right: machinesSide ? mainScrollbarWidth + 8 : 0,
+          // InventoryCraft's ruler owns the rightmost 56 px. Put the flyout
+          // trigger beside it rather than over the interactive scroll rail.
+          right: machinesSide
+              ? (_isInventoryCraft(context) ? 64 : mainScrollbarWidth + 8)
+              : 0,
         ),
         child: MouseRegion(
           onEnter: (_) =>
@@ -14880,6 +16428,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             ),
             child: open
                 ? BackdropFilter(
+                    enabled: visual_effect_preferences.blurEffectsEnabled,
                     filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
@@ -15042,7 +16591,14 @@ class _InventoryHomeState extends State<InventoryHome> {
         elevation: 18,
         shadowColor: Colors.black87,
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(
+            _isInventoryCraft(context) ? 0 : 16,
+          ),
+          side: _isInventoryCraft(context)
+              ? BorderSide(color: Theme.of(context).colorScheme.outlineVariant)
+              : BorderSide.none,
+        ),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
@@ -15162,6 +16718,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               bottomRight: Radius.circular(22),
             ),
             child: BackdropFilter(
+              enabled: visual_effect_preferences.blurEffectsEnabled,
               filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
               child: Container(
                 padding: const EdgeInsets.all(10),
@@ -15250,6 +16807,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 bottomLeft: Radius.circular(22),
               ),
               child: BackdropFilter(
+                enabled: visual_effect_preferences.blurEffectsEnabled,
                 filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
                 child: Container(
                   padding: const EdgeInsets.all(10),
@@ -15467,14 +17025,12 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<bool> _importKitPackage() async {
-    if (!(Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      _showPermissionDenied('Kit package import is available on desktop.');
-      return false;
-    }
     final picked = await FilePicker.pickFile(
       dialogTitle: 'Import Inventorinator kit package',
       type: FileType.custom,
       allowedExtensions: const ['json'],
+      linuxOptions: await _parentedLinuxFilePickerOptions(),
+      windowsOptions: const WindowsOptions(lockParentWindow: true),
     );
     if (picked == null || !mounted) return false;
     try {
@@ -17199,11 +18755,19 @@ class _InventoryHomeState extends State<InventoryHome> {
       animationDurationPercent: animationDurationPercent,
       animationRecurrenceSeconds: animationRecurrenceSeconds,
       photoCardsEnabled: photoCardsEnabled,
+      wallpapers: wallpapers,
+      activeWallpaperIndex: activeWallpaperIndex,
+      wallpaperAutoRotateEnabled: wallpaperAutoRotateEnabled,
+      backgroundGridEnabled: backgroundGridEnabled,
+      backgroundDotMatrixEnabled: backgroundDotMatrixEnabled,
+      backgroundGridUsesAccent: backgroundGridUsesAccent,
+      backgroundDotMatrixUsesAccent: backgroundDotMatrixUsesAccent,
       mainScrollbarWidth: mainScrollbarWidth,
       inventoryDragGripSize: inventoryDragGripSize,
       customIconAnimationMode: customIconAnimationMode,
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
+      designTheme: widget.designTheme,
       customThemeColor: widget.customThemeColor,
       alertSoundsEnabled: alertSoundsEnabled,
       lowStockAlertsEnabled: lowStockAlertsEnabled,
@@ -17218,6 +18782,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       lowStockEffectsEnabled: lowStockEffectsEnabled,
       moistureEffectsEnabled: moistureEffectsEnabled,
       remoteSyncEffectsEnabled: remoteSyncEffectsEnabled,
+      blurEffectsEnabled: blurEffectsEnabled,
       searchGlowEnabled: searchGlowEnabled,
       newItemGlowEnabled: newItemGlowEnabled,
       machineTimerDisplay: machineTimerDisplay,
@@ -17225,6 +18790,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       onSettingsChanged: _updateAnimationSettings,
       onColorThemeChanged: widget.onColorThemeChanged ?? (_) {},
       onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
+      onDesignThemeChanged: widget.onDesignThemeChanged ?? (_) {},
       onCustomThemeColorChanged: widget.onCustomThemeColorChanged ?? (_) {},
       onAlertSoundsChanged: (value) {
         setState(() => alertSoundsEnabled = value);
@@ -17299,6 +18865,13 @@ class _InventoryHomeState extends State<InventoryHome> {
           value,
         );
       },
+      onBlurEffectsChanged: (value) {
+        setState(() {
+          blurEffectsEnabled = value;
+          visual_effect_preferences.blurEffectsEnabled = value;
+        });
+        widget.database?.saveBoolPreference('blur_effects_enabled', value);
+      },
       onSearchGlowChanged: (value) {
         setState(() => searchGlowEnabled = value);
         widget.database?.saveBoolPreference('search_glow_enabled', value);
@@ -17328,6 +18901,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         setState(() => photoCardsEnabled = value);
         widget.database?.saveBoolPreference('photo_cards_enabled', value);
       },
+      onWallpaperSlotChanged: _setWallpaperSlot,
+      onActiveWallpaperChanged: _setActiveWallpaper,
+      onWallpaperAutoRotateChanged: _setWallpaperAutoRotate,
+      onBackgroundGridChanged: _setBackgroundGrid,
+      onBackgroundDotMatrixChanged: _setBackgroundDotMatrix,
+      onBackgroundGridUsesAccentChanged: _setBackgroundGridUsesAccent,
+      onBackgroundDotMatrixUsesAccentChanged: _setBackgroundDotMatrixUsesAccent,
       onMainScrollbarWidthChanged: (value) {
         setState(() => mainScrollbarWidth = value);
         widget.database?.saveStringPreference(
@@ -17364,6 +18944,87 @@ class _InventoryHomeState extends State<InventoryHome> {
     widget.database?.saveStringPreference(
       'animation_recurrence_seconds',
       '$recurrenceSeconds',
+    );
+  }
+
+  Uint8List? get _activeWallpaper =>
+      activeWallpaperIndex >= 0 && activeWallpaperIndex < wallpapers.length
+      ? wallpapers[activeWallpaperIndex]
+      : null;
+
+  void _syncWallpaperRotationTimer() {
+    _wallpaperRotationTimer?.cancel();
+    if (!wallpaperAutoRotateEnabled ||
+        wallpapers.whereType<Uint8List>().length < 2) {
+      return;
+    }
+    _wallpaperRotationTimer = Timer.periodic(const Duration(minutes: 15), (_) {
+      if (!mounted) return;
+      final available = [
+        for (var index = 0; index < wallpapers.length; index++)
+          if (wallpapers[index] != null) index,
+      ];
+      if (available.length < 2) return;
+      final current = available.indexOf(activeWallpaperIndex);
+      _setActiveWallpaper(available[(current + 1) % available.length]);
+    });
+  }
+
+  void _setActiveWallpaper(int index) {
+    if (index < 0 || index >= wallpapers.length || wallpapers[index] == null) {
+      return;
+    }
+    setState(() => activeWallpaperIndex = index);
+    widget.database?.saveStringPreference('active_wallpaper_index', '$index');
+  }
+
+  void _setWallpaperSlot(int index, Uint8List? bytes) {
+    if (index < 0 || index >= wallpapers.length) return;
+    setState(() {
+      wallpapers[index] = bytes;
+      if (bytes != null) {
+        activeWallpaperIndex = index;
+      } else if (activeWallpaperIndex == index) {
+        activeWallpaperIndex = wallpapers.indexWhere((image) => image != null);
+      }
+    });
+    widget.database?.saveStringPreference(
+      'wallpaper_slot_$index',
+      bytes == null ? '' : base64Encode(bytes),
+    );
+    widget.database?.saveStringPreference(
+      'active_wallpaper_index',
+      '$activeWallpaperIndex',
+    );
+    _syncWallpaperRotationTimer();
+  }
+
+  void _setWallpaperAutoRotate(bool value) {
+    setState(() => wallpaperAutoRotateEnabled = value);
+    widget.database?.saveBoolPreference('wallpaper_auto_rotate_enabled', value);
+    _syncWallpaperRotationTimer();
+  }
+
+  void _setBackgroundGrid(bool value) {
+    setState(() => backgroundGridEnabled = value);
+    widget.database?.saveBoolPreference('background_grid_enabled', value);
+  }
+
+  void _setBackgroundDotMatrix(bool value) {
+    setState(() => backgroundDotMatrixEnabled = value);
+    widget.database?.saveBoolPreference('background_dot_matrix_enabled', value);
+  }
+
+  void _setBackgroundGridUsesAccent(bool value) {
+    setState(() => backgroundGridUsesAccent = value);
+    widget.database?.saveBoolPreference('background_grid_uses_accent', value);
+  }
+
+  void _setBackgroundDotMatrixUsesAccent(bool value) {
+    setState(() => backgroundDotMatrixUsesAccent = value);
+    widget.database?.saveBoolPreference(
+      'background_dot_matrix_uses_accent',
+      value,
     );
   }
 
@@ -20585,22 +22246,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _collapsingMainSearchField({required bool compact}) {
-    final child = _EdgeLitSearchField(
-      fieldKey: const Key('inventory-search'),
-      controller: inventorySearchController,
-      focusNode: inventorySearchFocusNode,
-      enabled: searchGlowEnabled,
-      onChanged: _handleInventorySearchChanged,
-      hintText: compact
-          ? 'Search inventory…'
-          : 'Search items, types, compatibility…  Try “E3DV6”',
-    );
     return KeyedSubtree(
       key: _tourSearchKey,
       child: ValueListenableBuilder<double>(
         valueListenable: _inventoryScrollOffset,
-        child: child,
-        builder: (context, offset, child) {
+        builder: (context, offset, _) {
           final progress =
               ((offset - _mainSearchCollapseStartOffset) /
                       (_compactHeaderScrollThreshold -
@@ -20613,7 +22263,22 @@ class _InventoryHomeState extends State<InventoryHome> {
               child: Transform.scale(
                 alignment: Alignment.topCenter,
                 scale: ui.lerpDouble(1, .82, progress)!,
-                child: child,
+                // The compact floating search takes over after the main one
+                // collapses. Do not leave this invisible, full-width glow
+                // running behind it.
+                child: _EdgeLitSearchField(
+                  fieldKey: const Key('inventory-search'),
+                  controller: inventorySearchController,
+                  focusNode: inventorySearchFocusNode,
+                  enabled:
+                      searchGlowEnabled &&
+                      !_isInventoryCraft(context) &&
+                      progress < .98,
+                  onChanged: _handleInventorySearchChanged,
+                  hintText: compact
+                      ? 'Search inventory…'
+                      : 'Search items, types, compatibility…  Try “E3DV6”',
+                ),
               ),
             ),
           );
@@ -20668,6 +22333,8 @@ class _InventoryHomeState extends State<InventoryHome> {
       // Android windows. A 400px logical-width phone otherwise leaves it only
       // a few pixels wide beside Sort/View.
       final phoneNarrow = constraints.maxWidth < 520;
+      final searchOnFilterRow =
+          catalogFilter == null && constraints.maxWidth >= 1120;
       final narrowViewGap =
           ((constraints.maxWidth - 24) -
                   (56 + 5 + _inventorySquareControlSize) -
@@ -20684,28 +22351,20 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (catalogFilter == null) ...[
-              _metricsPanel(),
-              const SizedBox(height: 14),
-            ],
-            _collapsingMainSearchField(compact: compact),
+            if (!searchOnFilterRow)
+              _collapsingMainSearchField(compact: compact),
             if (_similarItemIds.isNotEmpty) ...[
               const SizedBox(height: 8),
               _similarFilterBanner(),
             ],
             const SizedBox(height: 14),
-            if (catalogFilter == null &&
-                (availableItemColorFilters.isNotEmpty ||
-                    availableFilamentPurposeTags.isNotEmpty)) ...[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: _typeFilterPanel(compact: narrow)),
-                  const SizedBox(width: 8),
-                  Expanded(child: _colorFilterPanel(compact: narrow)),
-                ],
+            if (catalogFilter == null) ...[
+              _inventoryUtilityLaunchers(
+                leadingSearch: searchOnFilterRow
+                    ? _collapsingMainSearchField(compact: true)
+                    : null,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               if (narrow) ...[
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -20822,10 +22481,6 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ],
               ),
-            if (catalogFilter == null) ...[
-              const SizedBox(height: 10),
-              _unresolvedLocationAuditButton(),
-            ],
           ],
         ),
       );
@@ -20836,6 +22491,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     valueListenable: ServiceStatus.changes,
     builder: (context, _, child) => LayoutBuilder(
       builder: (context, constraints) {
+        final technical = _isInventoryCraft(context);
         final narrow = constraints.maxWidth < 600;
         final database = widget.database;
         final raw = database?.loadSyncConfig();
@@ -20865,7 +22521,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 children: [
                   FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: _headerIdentity(compactLogo: false),
+                    child: _headerIdentity(compactLogo: technical),
                   ),
                   const SizedBox(height: 2),
                   SizedBox(
@@ -20924,7 +22580,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                     ),
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: _headerIdentity(compactLogo: false),
+                      child: _headerIdentity(compactLogo: technical),
                     ),
                   ),
                   Expanded(
@@ -20956,9 +22612,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         return Padding(
           padding: EdgeInsets.fromLTRB(
             narrow ? 12 : 20,
-            16,
+            technical ? 8 : 16,
             narrow ? 12 : 20,
-            4,
+            technical ? 2 : 4,
           ),
           // SliverToBoxAdapter gives its child a loose cross-axis constraint.
           // Keep the stacked phone header full width so the status light can
@@ -20976,7 +22632,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     valueListenable: _inventoryScrollOffset,
     child: _withFloatingActionBarGlow(
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_designRadius(context, 18)),
         child: _ScrollAwareBackdropFilter(
           filterKey: const Key('floating-header-blur'),
           scrolling: _inventoryIsScrolling,
@@ -21020,7 +22676,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         final content = compactSearch
             ? _withFloatingActionBarGlow(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(
+                    _designRadius(context, 18),
+                  ),
                   child: _ScrollAwareBackdropFilter(
                     filterKey: const Key('floating-header-compact-blur'),
                     scrolling: _inventoryIsScrolling,
@@ -21117,7 +22775,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                   controller: inventorySearchController,
                   focusNode: floatingSearchFocusNode,
                   compact: true,
-                  enabled: searchGlowEnabled,
+                  enabled: searchGlowEnabled && !_isInventoryCraft(context),
                   onChanged: _handleInventorySearchChanged,
                   hintText: 'Search…',
                 ),
@@ -21144,7 +22802,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 controller: inventorySearchController,
                 focusNode: floatingSearchFocusNode,
                 compact: true,
-                enabled: searchGlowEnabled,
+                enabled: searchGlowEnabled && !_isInventoryCraft(context),
                 onChanged: _handleInventorySearchChanged,
                 hintText: 'Search inventory…',
               ),
@@ -21159,51 +22817,64 @@ class _InventoryHomeState extends State<InventoryHome> {
     },
   );
 
-  BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) =>
-      BoxDecoration(
-        color: () {
-          final theme = Theme.of(context);
-          final palette =
-              theme.extension<InventorinatorColors>() ??
-              InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-          if (theme.brightness != Brightness.light) {
-            return theme.colorScheme.surface.withValues(alpha: .42);
-          }
-          return Color.lerp(
-            palette.surface,
-            palette.canvas,
-            .22,
-          )!.withValues(alpha: .70);
-        }(),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: Theme.of(context).brightness == Brightness.light
-              ? Theme.of(context).colorScheme.outlineVariant
-                    .withValues(alpha: .86)
-              : Theme.of(context).colorScheme.primary.withValues(alpha: .55),
-        ),
-        boxShadow: reduceEffects
-            ? const []
-            : [
-                BoxShadow(
-                  color: Theme.of(context).colorScheme.primary
-                      .withValues(alpha: .18),
-                  blurRadius: 18,
-                  spreadRadius: 1,
-                ),
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha: Theme.of(context).brightness == Brightness.light
-                        ? .14
-                        : .46,
-                  ),
-                  blurRadius: 5,
-                  offset: Offset(0, 2),
-                ),
-              ],
+  BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) {
+    final technical = _isInventoryCraft(context);
+    if (technical) {
+      return BoxDecoration(
+        // The action rails sit over the InventoryCraft canvas. Keep their
+        // controls outlined, but do not put an opaque sheet behind the whole
+        // top or bottom bar.
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       );
+    }
+    return BoxDecoration(
+      color: () {
+        final theme = Theme.of(context);
+        final palette =
+            theme.extension<InventorinatorColors>() ??
+            InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+        if (theme.brightness != Brightness.light) {
+          return theme.colorScheme.surface.withValues(alpha: .42);
+        }
+        return Color.lerp(
+          palette.surface,
+          palette.canvas,
+          .22,
+        )!.withValues(alpha: .70);
+      }(),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(
+        color: Theme.of(context).brightness == Brightness.light
+            ? Theme.of(context).colorScheme.outlineVariant
+                  .withValues(alpha: .86)
+            : Theme.of(context).colorScheme.primary.withValues(alpha: .55),
+      ),
+      boxShadow: reduceEffects
+          ? const []
+          : [
+              BoxShadow(
+                color: Theme.of(context).colorScheme.primary
+                    .withValues(alpha: .18),
+                blurRadius: 18,
+                spreadRadius: 1,
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(
+                  alpha: Theme.of(context).brightness == Brightness.light
+                      ? .14
+                      : .46,
+                ),
+                blurRadius: 5,
+                offset: Offset(0, 2),
+              ),
+            ],
+    );
+  }
 
   Widget _withFloatingActionBarGlow({required Widget child}) {
+    if (_isInventoryCraft(context)) return child;
     final colors = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -21426,12 +23097,17 @@ class _InventoryHomeState extends State<InventoryHome> {
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
       final previewIndex = previewValue.round().clamp(0, _pageSizes.length - 1);
+      final technical = _isInventoryCraft(context);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
-          trackShape: _NotchedSliderTrackShape(palette),
+          trackShape: _NotchedSliderTrackShape(palette, technical: technical),
           trackHeight: 26,
-          thumbShape: _notchedSliderThumbShape,
-          thumbColor: Theme.of(context).colorScheme.onSurface,
+          thumbShape: technical
+              ? const _RulerSliderThumbShape()
+              : _notchedSliderThumbShape,
+          thumbColor: technical
+              ? palette.accent
+              : Theme.of(context).colorScheme.onSurface,
           activeTrackColor: palette.accent,
           overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
           overlayColor: palette.accent.withValues(alpha: .16),
@@ -21472,7 +23148,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _previewPageSize(double value) {
     _pageSizeSliderValue.value = value.roundToDouble();
     _pageSizeCommitTimer?.cancel();
-    _pageSizeCommitTimer = Timer(const Duration(seconds: 1), () {
+    _pageSizeCommitTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       final nextIndex = _pageSizeSliderValue.value.round();
       if (nextIndex == pageSizeIndex) return;
@@ -21480,6 +23156,10 @@ class _InventoryHomeState extends State<InventoryHome> {
         pageSizeIndex = nextIndex;
         currentPage = 0;
       });
+      widget.database?.saveStringPreference(
+        'inventory_page_size',
+        '${_pageSizes[nextIndex]}',
+      );
     });
   }
 
@@ -21544,12 +23224,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       final palette =
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      final technical = _isInventoryCraft(context);
       final slider = SliderTheme(
         data: SliderTheme.of(context).copyWith(
-          trackShape: _NotchedSliderTrackShape(palette),
+          trackShape: _NotchedSliderTrackShape(palette, technical: technical),
           trackHeight: 26,
-          thumbShape: _notchedSliderThumbShape,
-          thumbColor: Theme.of(context).colorScheme.onSurface,
+          thumbShape: technical
+              ? const _RulerSliderThumbShape()
+              : _notchedSliderThumbShape,
+          thumbColor: technical
+              ? palette.accent
+              : Theme.of(context).colorScheme.onSurface,
           activeTrackColor: palette.accent,
           overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
           overlayColor: palette.accent.withValues(alpha: .16),
@@ -21589,7 +23274,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _previewCardSize(double value) {
     _cardSizeSliderValue.value = value;
     _cardSizeCommitTimer?.cancel();
-    _cardSizeCommitTimer = Timer(const Duration(seconds: 1), () {
+    _cardSizeCommitTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       final nextValue = _cardSizeSliderValue.value;
       if (nextValue == cardSizePercent) return;
@@ -21723,7 +23408,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     bool iconOnly = false,
     Offset iconOffset = Offset.zero,
     double iconOnlyWidth = 48,
-    double iconOnlyHeight = 44,
+    double iconOnlyHeight = 48,
     Widget? iconWidget,
     bool tight = false,
     String? disabledMessage,
@@ -21761,7 +23446,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               padding: const WidgetStatePropertyAll(
                 EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               ),
-              minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+              minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             )
           : _quickActionStyle,
@@ -21770,9 +23455,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         children: [iconChild, const SizedBox(width: 10), Text(label)],
       ),
     );
+    // The full-label bottom rail does not have the icon rail's fixed bounds.
+    // Keep these controls on the same 48px rhythm as the header instead of
+    // letting a compact desktop layout collapse them to the text's height.
+    final fixedHeightButton = SizedBox(height: 48, child: button);
     return disabledMessage == null
-        ? button
-        : Tooltip(message: disabledMessage, child: button);
+        ? fixedHeightButton
+        : Tooltip(message: disabledMessage, child: fixedHeightButton);
   }
 
   Widget _scanButton({
@@ -22240,6 +23929,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(14),
                                   child: BackdropFilter(
+                                    enabled: visual_effect_preferences
+                                        .blurEffectsEnabled,
                                     filter: ui.ImageFilter.blur(
                                       sigmaX: 10,
                                       sigmaY: 10,
@@ -24808,9 +26499,11 @@ class _InventoryHomeState extends State<InventoryHome> {
                                           bottom: 0,
                                           child: ClipRRect(
                                             borderRadius: BorderRadius.circular(
-                                              14,
+                                              _designRadius(context, 14),
                                             ),
                                             child: BackdropFilter(
+                                              enabled: visual_effect_preferences
+                                                  .blurEffectsEnabled,
                                               filter: ui.ImageFilter.blur(
                                                 sigmaX: 10,
                                                 sigmaY: 10,
@@ -24823,7 +26516,14 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                   color: Theme.of(context)
                                                       .colorScheme
                                                       .surface
-                                                      .withValues(alpha: .12),
+                                                      .withValues(
+                                                        alpha:
+                                                            _isInventoryCraft(
+                                                              context,
+                                                            )
+                                                            ? .76
+                                                            : .12,
+                                                      ),
                                                   border: Border.all(
                                                     color: Theme.of(context)
                                                         .colorScheme
@@ -24831,7 +26531,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                         .withValues(alpha: .28),
                                                   ),
                                                   borderRadius:
-                                                      BorderRadius.circular(14),
+                                                      BorderRadius.circular(
+                                                        _designRadius(
+                                                          context,
+                                                          14,
+                                                        ),
+                                                      ),
                                                 ),
                                                 child: Align(
                                                   alignment:
@@ -25493,7 +27198,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                           controller: inventorySearchController,
                           focusNode: bottomSearchFocusNode,
                           compact: true,
-                          enabled: searchGlowEnabled,
+                          enabled:
+                              searchGlowEnabled && !_isInventoryCraft(context),
                           onChanged: _handleInventorySearchChanged,
                           hintText: 'Search inventory…',
                         ),
@@ -25512,11 +27218,16 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _bottomActionBar() {
+    final technical = _isInventoryCraft(context);
     return ValueListenableBuilder<bool>(
       valueListenable: _inventoryIsScrolling,
       child: _withFloatingActionBarGlow(
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
+          // InventoryCraft keeps the sharp, transparent action rail but still
+          // blurs whatever scrolls beneath it.
+          borderRadius: technical
+              ? BorderRadius.zero
+              : BorderRadius.circular(_designRadius(context, 18)),
           child: _ScrollAwareBackdropFilter(
             filterKey: const Key('bottom-action-blur'),
             scrolling: _inventoryIsScrolling,
@@ -25527,6 +27238,8 @@ class _InventoryHomeState extends State<InventoryHome> {
               child: AnimatedContainer(
                 key: const Key('bottom-action-surface'),
                 duration: Duration.zero,
+                // Match the top action rail: transparent blur plus the same
+                // thin technical frame.
                 decoration: _floatingActionBarDecoration(reduceEffects: false),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -25537,8 +27250,12 @@ class _InventoryHomeState extends State<InventoryHome> {
                         // Collapse before the longest labels can crowd or clip. The
                         // compact rail is intentionally used through medium desktop
                         // widths, not only at phone sizes.
+                        // Preserve the established roomy desktop actions. Only
+                        // compress labels when the rail genuinely runs short of
+                        // horizontal space.
                         final tightDesktop =
-                            Platform.isLinux || Platform.isWindows;
+                            (Platform.isLinux || Platform.isWindows) &&
+                            constraints.maxWidth < 1320;
                         final bottomActionsEnabled =
                             currentRole.canCreateInventory;
                         final disabledActionMessage = bottomActionsEnabled
@@ -25604,12 +27321,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                             disabledMessage: disabledActionMessage,
                           );
                           return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 7,
-                            ),
+                            padding: EdgeInsets.fromLTRB(14, 7, 14, 7),
                             child: SizedBox(
-                              height: 44,
+                              height: 48,
                               child: Row(
                                 key: const Key('compact-bottom-action-group'),
                                 children: [
@@ -25668,10 +27382,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                           );
                         }
                         return Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 8,
-                          ),
+                          padding: EdgeInsets.fromLTRB(14, 8, 14, 8),
                           child: Row(
                             children: [
                               _catalogButton(
@@ -25787,11 +27498,18 @@ class _InventoryHomeState extends State<InventoryHome> {
     overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     side: const WidgetStatePropertyAll(BorderSide.none),
     shape: WidgetStatePropertyAll(
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(_designRadius(context, 10)),
+      ),
     ),
     iconSize: const WidgetStatePropertyAll(24),
-    textStyle: const WidgetStatePropertyAll(
-      TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+    textStyle: WidgetStatePropertyAll(
+      TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+        fontFamily: _isInventoryCraft(context) ? 'monospace' : null,
+        letterSpacing: _isInventoryCraft(context) ? .2 : null,
+      ),
     ),
   );
 
@@ -25830,7 +27548,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           key: const Key('config-action-group'),
           color: Theme.of(context).colorScheme.surface,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(11),
+            borderRadius: BorderRadius.circular(_designRadius(context, 11)),
             side: BorderSide(
               color: Theme.of(context).colorScheme.outlineVariant,
             ),
@@ -26363,7 +28081,9 @@ class _InventoryHomeState extends State<InventoryHome> {
           return BorderSide.none;
         }),
         shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_designRadius(context, 10)),
+          ),
         ),
         padding: const WidgetStatePropertyAll(
           EdgeInsets.symmetric(horizontal: 4, vertical: 0),
@@ -26474,7 +28194,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                   side: const WidgetStatePropertyAll(BorderSide.none),
                   shape: WidgetStatePropertyAll(
                     RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(
+                        _designRadius(context, 10),
+                      ),
                     ),
                   ),
                 ),
@@ -26540,16 +28262,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (filamentPurposeTagFilter != null) {
       return 'Tag · ${filamentPurposeTagFilter!}';
     }
-    if (itemColorFilter != null) {
-      if (itemColorFilter == _unspecifiedItemColorKey) {
-        return 'Color · Unspecified color';
-      }
-      final selected = availableItemColorFilters
-          .where((color) => color.value == itemColorFilter)
-          .firstOrNull;
-      if (selected != null) return 'Color · ${selected.label}';
-      return 'Color filter';
-    }
     if (customTypeFilterId case final id?) {
       return customItemTypes
               .where((candidate) => candidate.id == id)
@@ -26600,7 +28312,216 @@ class _InventoryHomeState extends State<InventoryHome> {
     return const Icon(Icons.category_outlined, size: 20);
   }
 
-  Widget _metricsPanel() {
+  Future<void> _openInventoryUtilityView(Widget child) async {
+    var fullscreen = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) {
+          _inventoryUtilityDialogContext = dialogContext;
+          final screenSize = MediaQuery.sizeOf(context);
+          final compact = screenSize.width < 600;
+          final dialogFullscreen = fullscreen || compact;
+          return Dialog(
+            insetPadding: dialogFullscreen
+                ? EdgeInsets.zero
+                : const EdgeInsets.all(20),
+            child: SizedBox(
+              width: dialogFullscreen ? screenSize.width : null,
+              height: dialogFullscreen ? screenSize.height : null,
+              child: ConstrainedBox(
+                constraints: dialogFullscreen
+                    ? BoxConstraints.tight(screenSize)
+                    : const BoxConstraints(maxWidth: 840, maxHeight: 760),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    SingleChildScrollView(child: child),
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (!compact)
+                            IconButton(
+                              key: const Key(
+                                'toggle-inventory-utility-fullscreen',
+                              ),
+                              tooltip: fullscreen
+                                  ? 'Exit full screen'
+                                  : 'Full screen',
+                              onPressed: () =>
+                                  refresh(() => fullscreen = !fullscreen),
+                              icon: _FullscreenIcon(expanded: fullscreen),
+                            ),
+                          IconButton(
+                            key: const Key('close-inventory-utility'),
+                            tooltip: 'Close',
+                            onPressed: () => Navigator.pop(dialogContext),
+                            style: _destructiveIconButtonStyle(context),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    _inventoryUtilityDialogContext = null;
+  }
+
+  void _dismissInventoryUtilityView() {
+    final dialogContext = _inventoryUtilityDialogContext;
+    _inventoryUtilityDialogContext = null;
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+  }
+
+  Widget _inventoryUtilityLauncher({
+    required IconData icon,
+    required String title,
+    required String summary,
+    required VoidCallback onPressed,
+  }) {
+    final technical = _isInventoryCraft(context);
+    return OutlinedButton(
+      onPressed: onPressed,
+      // Material adds a generous default inset to every outlined button. The
+      // technical launcher cards supply their own tighter edge spacing.
+      style: technical
+          ? const ButtonStyle(
+              padding: WidgetStatePropertyAll(EdgeInsets.zero),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            )
+          : null,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: technical ? 8 : 10,
+          vertical: 8,
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 20),
+            SizedBox(width: technical ? 8 : 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _inventoryControlSummaryStyle(context, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _inventoryUtilityLaunchers({Widget? leadingSearch}) {
+    final metrics = _inventoryMetrics;
+    final orphanedItemCount = _unresolvedLocationGroups().fold<int>(
+      0,
+      (total, group) => total + group.items.length,
+    );
+    final selectedColor = availableItemColorFilters
+        .where((color) => color.value == itemColorFilter)
+        .firstOrNull;
+    final launchers = [
+      _inventoryUtilityLauncher(
+        icon: Icons.category_outlined,
+        title: 'Types',
+        summary: _activeTypeFilterLabel,
+        onPressed: () =>
+            _openInventoryUtilityView(_typeFilterPanel(forceExpanded: true)),
+      ),
+      _inventoryUtilityLauncher(
+        icon: Icons.palette_outlined,
+        title: 'Colors',
+        summary: selectedColor == null
+            ? 'All colors'
+            : '${selectedColor.label} · ${selectedColor.hex}',
+        onPressed: () =>
+            _openInventoryUtilityView(_colorFilterPanel(forceExpanded: true)),
+      ),
+      _inventoryUtilityLauncher(
+        icon: Icons.query_stats_rounded,
+        title: 'Metrics',
+        summary:
+            '${_formatBomQuantity(metrics.filamentSpools)} filament spools · ${metrics.itemRecords} item records',
+        onPressed: () =>
+            _openInventoryUtilityView(_metricsPanel(forceExpanded: true)),
+      ),
+      _inventoryUtilityLauncher(
+        icon: Icons.location_off_outlined,
+        title: 'Orphaned Items',
+        summary:
+            '$orphanedItemCount orphaned item${orphanedItemCount == 1 ? '' : 's'}',
+        onPressed: _openUnresolvedLocationView,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 640) {
+          final width = (constraints.maxWidth - 8) / 2;
+          return Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final launcher in launchers)
+                SizedBox(width: width, child: launcher),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            if (leadingSearch != null) ...[
+              SizedBox(
+                width: math.min(320.0, constraints.maxWidth * .28),
+                child: leadingSearch,
+              ),
+              const SizedBox(width: 12),
+            ],
+            for (var index = 0; index < launchers.length; index++) ...[
+              Expanded(child: launchers[index]),
+              if (index < launchers.length - 1) const SizedBox(width: 8),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _metricsPanel({bool forceExpanded = false}) {
+    if (!forceExpanded) return _buildMetricsPanel();
+    // Dialog routes are outside this State's build subtree. Keep the metrics
+    // copy in that route in sync with its controls instead of waiting for the
+    // dialog to be closed and reopened.
+    return ValueListenableBuilder<int>(
+      valueListenable: _metricsDialogRevision,
+      builder: (_, _, _) => _buildMetricsPanel(forceExpanded: true),
+    );
+  }
+
+  Widget _buildMetricsPanel({bool forceExpanded = false}) {
     final palette =
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
@@ -26650,7 +28571,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_designRadius(context, 18)),
         side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
@@ -26658,8 +28579,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: const Key('metrics-panel'),
-          controller: metricsExpansionController,
-          initiallyExpanded: metricsPanelExpanded,
+          controller: forceExpanded ? null : metricsExpansionController,
+          initiallyExpanded: forceExpanded || metricsPanelExpanded,
+          showTrailingIcon: !forceExpanded,
           onExpansionChanged: (expanded) {
             setState(() => metricsPanelExpanded = expanded);
             widget.database?.saveBoolPreference(
@@ -26681,7 +28603,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
-            if (metricsPanelExpanded) ...[
+            if (forceExpanded || metricsPanelExpanded) ...[
               _metricsTypeTracker(palette),
               const SizedBox(height: 12),
               Wrap(
@@ -26806,7 +28728,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   }) => _JewelPanel(
     title: title,
     palette: palette,
-    trailing: Icon(icon, size: 18, color: const Color(0xff9da5b7)),
+    trailing: Icon(
+      icon,
+      size: 18,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    ),
     child: Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -26815,7 +28741,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(_designRadius(context, 12)),
               onTap: () => onTap(entry),
               child: Container(
                 width: 176,
@@ -26824,7 +28750,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                   color: selected == entry.filterValue
                       ? palette.surface
                       : palette.input,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(
+                    _designRadius(context, 12),
+                  ),
                   border: Border.all(
                     color: selected == entry.filterValue
                         ? palette.accent.withValues(alpha: .75)
@@ -26905,48 +28833,28 @@ class _InventoryHomeState extends State<InventoryHome> {
           children: [
             Padding(
               padding: const EdgeInsets.only(right: 4),
-              child: _GlassFilterChip(
+              child: _metricsTrackingChip(
+                key: const Key('metrics-track-all'),
+                label: 'All types',
                 selected: metricsUntrackedTypeKeys.isEmpty,
-                child: FilterChip(
-                  key: const Key('metrics-track-all'),
-                  label: const Text('All types'),
-                  selected: metricsUntrackedTypeKeys.isEmpty,
-                  onSelected: (_) => _setMetricsUntrackedTypeKeys(const {}),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 8,
-                  ),
-                  backgroundColor: Colors.transparent,
-                  selectedColor: Colors.transparent,
-                  side: BorderSide.none,
-                ),
+                onTap: () => _setMetricsUntrackedTypeKeys(const {}),
               ),
             ),
             for (final type in types)
-              _GlassFilterChip(
+              _metricsTrackingChip(
+                key: Key('metrics-track-${type.key}'),
+                label: type.label,
+                icon: type.icon,
                 selected: !metricsUntrackedTypeKeys.contains(type.key),
-                child: FilterChip(
-                  key: Key('metrics-track-${type.key}'),
-                  avatar: Icon(type.icon, size: 18),
-                  label: Text(type.label),
-                  selected: !metricsUntrackedTypeKeys.contains(type.key),
-                  onSelected: (selected) {
-                    final updated = {...metricsUntrackedTypeKeys};
-                    if (selected) {
-                      updated.remove(type.key);
-                    } else {
-                      updated.add(type.key);
-                    }
-                    _setMetricsUntrackedTypeKeys(updated);
-                  },
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 8,
-                  ),
-                  backgroundColor: Colors.transparent,
-                  selectedColor: Colors.transparent,
-                  side: BorderSide.none,
-                ),
+                onTap: () {
+                  final updated = {...metricsUntrackedTypeKeys};
+                  if (updated.contains(type.key)) {
+                    updated.remove(type.key);
+                  } else {
+                    updated.add(type.key);
+                  }
+                  _setMetricsUntrackedTypeKeys(updated);
+                },
               ),
           ],
         ),
@@ -26954,13 +28862,46 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
+  Widget _metricsTrackingChip({
+    required Key key,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    IconData? icon,
+  }) => _GlassFilterChip(
+    selected: selected,
+    child: Semantics(
+      button: true,
+      selected: selected,
+      label: '$label ${selected ? 'tracked' : 'not tracked'}',
+      child: InkWell(
+        key: key,
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18),
+                const SizedBox(width: 7),
+              ],
+              Text(label),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
   Widget _metricStatTile(_MetricStat stat, InventorinatorColors palette) =>
       Container(
         width: 150,
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(_isInventoryCraft(context) ? 10 : 12),
         decoration: BoxDecoration(
           color: palette.panel,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(_designRadius(context, 14)),
           border: Border.all(color: palette.outlineVariant),
         ),
         child: Column(
@@ -26990,6 +28931,13 @@ class _InventoryHomeState extends State<InventoryHome> {
   void _setMetricsChartDimension(String key) {
     setState(() => metricsChartDimension = key);
     widget.database?.saveStringPreference('metrics_chart_dimension', key);
+    _metricsDialogRevision.value++;
+  }
+
+  void _setMetricsUnifiedGrowth(bool value) {
+    setState(() => metricsUnifiedGrowth = value);
+    widget.database?.saveBoolPreference('metrics_unified_growth', value);
+    _metricsDialogRevision.value++;
   }
 
   List<({String label, Color color, List<double> values})> _metricsChartSeries(
@@ -27010,13 +28958,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         key: const Key('metrics-unified-toggle'),
         label: const Text('Unified'),
         selected: metricsUnifiedGrowth,
-        onSelected: (selected) {
-          setState(() => metricsUnifiedGrowth = selected);
-          widget.database?.saveBoolPreference(
-            'metrics_unified_growth',
-            selected,
-          );
-        },
+        onSelected: _setMetricsUnifiedGrowth,
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         backgroundColor: Colors.transparent,
         selectedColor: Colors.transparent,
@@ -27068,12 +29010,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _typeFilterPanel({bool compact = false}) => KeyedSubtree(
-    key: _tourTypeFilterKey,
+  Widget _typeFilterPanel({
+    bool compact = false,
+    bool forceExpanded = false,
+  }) => KeyedSubtree(
+    key: forceExpanded ? null : _tourTypeFilterKey,
     child: Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_designRadius(context, 18)),
         side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
@@ -27081,8 +29026,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: const Key('type-filter-panel'),
-          controller: typeFilterExpansionController,
-          initiallyExpanded: typePanelExpanded,
+          controller: forceExpanded ? null : typeFilterExpansionController,
+          initiallyExpanded: forceExpanded || typePanelExpanded,
+          showTrailingIcon: !forceExpanded,
           onExpansionChanged: (expanded) =>
               setState(() => typePanelExpanded = expanded),
           tilePadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16),
@@ -27175,6 +29121,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                                 currentPage = 0;
                               });
                               _saveInventoryTypeFilter();
+                              _dismissInventoryUtilityView();
                               _scrollToFilteredResults();
                             },
                             padding: const EdgeInsets.symmetric(
@@ -27342,6 +29289,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       currentPage = 0;
     });
     _saveInventoryTypeFilter();
+    _dismissInventoryUtilityView();
     _scrollToFilteredResults();
   }
 
@@ -27361,6 +29309,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       currentPage = 0;
     });
     _saveInventoryTypeFilter();
+    _dismissInventoryUtilityView();
     _scrollToFilteredResults();
   }
 
@@ -27381,6 +29330,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       currentPage = 0;
     });
     _saveInventoryTypeFilter();
+    _dismissInventoryUtilityView();
     _scrollToFilteredResults();
   }
 
@@ -27400,6 +29350,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       currentPage = 0;
     });
     _saveInventoryTypeFilter();
+    _dismissInventoryUtilityView();
     _scrollToFilteredResults();
   }
 
@@ -27441,6 +29392,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             currentPage = 0;
           });
           _saveInventoryTypeFilter();
+          _dismissInventoryUtilityView();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -27485,6 +29437,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             currentPage = 0;
           });
           _saveInventoryTypeFilter();
+          _dismissInventoryUtilityView();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -27527,6 +29480,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             currentPage = 0;
           });
           _saveInventoryTypeFilter();
+          _dismissInventoryUtilityView();
           _scrollToFilteredResults();
         },
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -27537,14 +29491,68 @@ class _InventoryHomeState extends State<InventoryHome> {
     ),
   );
 
-  Widget _colorFilterPanel({bool compact = false}) {
+  Widget _colorFilterPanel({bool compact = false, bool forceExpanded = false}) {
     final selected = availableItemColorFilters
         .where((color) => color.value == itemColorFilter)
         .firstOrNull;
+    final options = Align(
+      alignment: Alignment.centerLeft,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _GlassFilterChip(
+            selected: itemColorFilter == null,
+            child: FilterChip(
+              key: const Key('color-filter-all'),
+              label: const Text('All colors'),
+              selected: itemColorFilter == null,
+              onSelected: (_) => _setItemColorFilter(null),
+              backgroundColor: Colors.transparent,
+              selectedColor: Colors.transparent,
+              side: BorderSide.none,
+            ),
+          ),
+          for (final color in availableItemColorFilters)
+            _GlassFilterChip(
+              selected: itemColorFilter == color.value,
+              child: FilterChip(
+                key: Key('color-filter-${color.value}'),
+                avatar: CircleAvatar(
+                  backgroundColor:
+                      _itemColorSwatch(color.value) ?? const Color(0xff8c929f),
+                ),
+                label: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      color.label,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      color.hex,
+                      style: const TextStyle(
+                        color: Color(0xff9da5b7),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+                selected: itemColorFilter == color.value,
+                onSelected: (_) => _setItemColorFilter(color.value),
+                backgroundColor: Colors.transparent,
+                selectedColor: Colors.transparent,
+                side: BorderSide.none,
+              ),
+            ),
+        ],
+      ),
+    );
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_designRadius(context, 18)),
         side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
@@ -27552,8 +29560,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: const Key('color-filter-panel'),
-          controller: colorFilterExpansionController,
-          initiallyExpanded: colorPanelExpanded,
+          controller: forceExpanded ? null : colorFilterExpansionController,
+          initiallyExpanded: forceExpanded || colorPanelExpanded,
+          showTrailingIcon: !forceExpanded,
           onExpansionChanged: (expanded) =>
               setState(() => colorPanelExpanded = expanded),
           tilePadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16),
@@ -27598,74 +29607,20 @@ class _InventoryHomeState extends State<InventoryHome> {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 320),
-              child: SingleChildScrollView(
-                key: const Key('color-filter-scroll'),
-                primary: false,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _GlassFilterChip(
-                        selected: itemColorFilter == null,
-                        child: FilterChip(
-                          key: const Key('color-filter-all'),
-                          label: const Text('All colors'),
-                          selected: itemColorFilter == null,
-                          onSelected: (_) {
-                            _setItemColorFilter(null);
-                          },
-                          backgroundColor: Colors.transparent,
-                          selectedColor: Colors.transparent,
-                          side: BorderSide.none,
-                        ),
-                      ),
-                      for (final color in availableItemColorFilters)
-                        _GlassFilterChip(
-                          selected: itemColorFilter == color.value,
-                          child: FilterChip(
-                            key: Key('color-filter-${color.value}'),
-                            avatar: CircleAvatar(
-                              backgroundColor:
-                                  _itemColorSwatch(color.value) ??
-                                  const Color(0xff8c929f),
-                            ),
-                            label: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  color.label,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                Text(
-                                  color.hex,
-                                  style: const TextStyle(
-                                    color: Color(0xff9da5b7),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            selected: itemColorFilter == color.value,
-                            onSelected: (_) {
-                              _setItemColorFilter(color.value);
-                            },
-                            backgroundColor: Colors.transparent,
-                            selectedColor: Colors.transparent,
-                            side: BorderSide.none,
-                          ),
-                        ),
-                    ],
-                  ),
+            if (forceExpanded)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: options,
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: SingleChildScrollView(
+                  key: const Key('color-filter-scroll'),
+                  primary: false,
+                  child: options,
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -27673,6 +29628,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _catalogRecordCard(Object record, {bool list = false}) {
+    final technical = _isInventoryCraft(context);
     late final IconData icon;
     late final Color accent;
     late final String category;
@@ -27750,7 +29706,16 @@ class _InventoryHomeState extends State<InventoryHome> {
           : machine.address;
       recordImage = machine.imageBytes;
     }
-    final content = !list && recordImage != null
+    final content = !list && technical
+        ? _InventoryCraftCatalogRecordContent(
+            category: category,
+            title: title,
+            subtitle: subtitle,
+            detail: detail,
+            accent: accent,
+            icon: icon,
+          )
+        : !list && recordImage != null
         ? _PhotoCatalogCardContent(
             key: Key(
               'photo-catalog-card-${switch (record) {
@@ -27852,7 +29817,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       ),
       margin: record is MachineRecord ? EdgeInsets.zero : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: _isInventoryCraft(context)
+            ? BorderRadius.zero
+            : BorderRadius.circular(18),
         side: BorderSide(
           color: selected
               ? Theme.of(context).colorScheme.primary
@@ -27860,7 +29827,8 @@ class _InventoryHomeState extends State<InventoryHome> {
           width: selected ? 2 : 1,
         ),
       ),
-      clipBehavior: Clip.antiAlias,
+      // InventoryCraft pins deliberately straddle the sharp card corner.
+      clipBehavior: technical ? Clip.none : Clip.antiAlias,
       child: Stack(
         children: [
           InkWell(
@@ -27884,7 +29852,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                 display: _timerDisplayFor(machine),
               ),
             ),
-          if (record case final KitRecord kit)
+          if (record case final KitRecord kit when !technical)
             Positioned(
               top: 4,
               right: 4,
@@ -27898,54 +29866,115 @@ class _InventoryHomeState extends State<InventoryHome> {
                   _pinnedKitIds.contains(kit.id)
                       ? Icons.push_pin
                       : Icons.push_pin_outlined,
+                  size: null,
                 ),
+                style: null,
               ),
             ),
         ],
       ),
     );
-    if (record is! MachineRecord) return card;
+    // Grid children clip outside their allotted tile. Reserve the pin's outer
+    // half inside technical kit tiles so its center can sit on the card corner
+    // without being chopped off.
+    if (record is! MachineRecord) {
+      if (!technical || record is! KitRecord) return card;
+      final kit = record;
+      return Padding(
+        padding: const EdgeInsets.only(top: 14, right: 14),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            card,
+            Positioned(
+              top: -14,
+              right: -14,
+              child: IconButton.filledTonal(
+                key: Key('pin-kit-drop-target-${kit.id}'),
+                tooltip: _pinnedKitIds.contains(kit.id)
+                    ? 'Pinned for dragging'
+                    : 'Pin as drag destination',
+                onPressed: () => _togglePinnedDragKit(kit.id),
+                icon: Icon(
+                  _pinnedKitIds.contains(kit.id)
+                      ? Icons.push_pin
+                      : Icons.push_pin_outlined,
+                  size: 15,
+                ),
+                style: const ButtonStyle(
+                  minimumSize: WidgetStatePropertyAll(Size.square(28)),
+                  maximumSize: WidgetStatePropertyAll(Size.square(28)),
+                  padding: WidgetStatePropertyAll(EdgeInsets.all(4)),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final machine = record;
     return Padding(
-      padding: const EdgeInsets.all(4),
+      padding: technical
+          ? const EdgeInsets.only(top: 14, right: 14)
+          : const EdgeInsets.all(4),
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           card,
           Positioned(
-            top: 0,
-            right: 0,
-            child: Tooltip(
-              message: _pinnedMachineIds.contains(machine.id)
-                  ? 'Pinned for dragging'
-                  : 'Pin as drag destination',
-              child: GestureDetector(
-                key: Key('pin-machine-drop-target-${machine.id}'),
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _togglePinnedDragMachine(machine.id),
-                child: SizedBox.square(
-                  dimension: 56,
-                  child: Align(
-                    alignment: Alignment.topRight,
-                    child: Transform.translate(
-                      // Keep most of the visible glyph inside the card's hit
-                      // region; Flutter cannot receive taps outside a grid
-                      // tile even when a child paints there.
-                      offset: const Offset(6, -6),
-                      child: Icon(
-                        _pinnedMachineIds.contains(machine.id)
-                            ? Icons.push_pin
-                            : Icons.push_pin_outlined,
-                        size: 24,
-                        color: _pinnedMachineIds.contains(machine.id)
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
+            top: technical ? -14 : 0,
+            right: technical ? -14 : 0,
+            child: technical
+                ? IconButton.filledTonal(
+                    key: Key('pin-machine-drop-target-${machine.id}'),
+                    tooltip: _pinnedMachineIds.contains(machine.id)
+                        ? 'Pinned for dragging'
+                        : 'Pin as drag destination',
+                    onPressed: () => _togglePinnedDragMachine(machine.id),
+                    icon: Icon(
+                      _pinnedMachineIds.contains(machine.id)
+                          ? Icons.push_pin
+                          : Icons.push_pin_outlined,
+                      size: 15,
+                    ),
+                    style: const ButtonStyle(
+                      minimumSize: WidgetStatePropertyAll(Size.square(28)),
+                      maximumSize: WidgetStatePropertyAll(Size.square(28)),
+                      padding: WidgetStatePropertyAll(EdgeInsets.all(4)),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  )
+                : Tooltip(
+                    message: _pinnedMachineIds.contains(machine.id)
+                        ? 'Pinned for dragging'
+                        : 'Pin as drag destination',
+                    child: GestureDetector(
+                      key: Key('pin-machine-drop-target-${machine.id}'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _togglePinnedDragMachine(machine.id),
+                      child: SizedBox.square(
+                        dimension: 56,
+                        child: Align(
+                          alignment: Alignment.topRight,
+                          child: Transform.translate(
+                            offset: const Offset(6, -6),
+                            child: Icon(
+                              _pinnedMachineIds.contains(machine.id)
+                                  ? Icons.push_pin
+                                  : Icons.push_pin_outlined,
+                              size: 24,
+                              color: _pinnedMachineIds.contains(machine.id)
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-            ),
           ),
         ],
       ),
@@ -27958,7 +29987,9 @@ class _InventoryHomeState extends State<InventoryHome> {
     Color accent,
     double size,
   ) => ClipRRect(
-    borderRadius: BorderRadius.circular(size * .25),
+    borderRadius: _isInventoryCraft(context)
+        ? BorderRadius.zero
+        : BorderRadius.circular(size * .25),
     child: SizedBox.square(
       dimension: size,
       child: imageBytes == null
@@ -28621,7 +30652,9 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
                             ? 'kit-detail-line-${line.productId}-$index'
                             : 'kit-detail-line-${line.productId}',
                       ),
-                      color: missing ? colors.errorContainer : null,
+                      color: missing
+                          ? Color.lerp(colors.errorContainer, Colors.black, .15)
+                          : null,
                       clipBehavior: Clip.antiAlias,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
@@ -29402,7 +31435,6 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.onMachineUpdated,
     required this.onKitAdded,
     required this.onKitUpdated,
-    this.onImportKitPackage,
     this.initialKitId,
     this.initialKitBom,
   });
@@ -29455,7 +31487,6 @@ class CatalogManagerDialog extends StatefulWidget {
   final ValueChanged<MachineRecord> onMachineUpdated;
   final ValueChanged<KitRecord> onKitAdded;
   final ValueChanged<KitRecord> onKitUpdated;
-  final Future<bool> Function()? onImportKitPackage;
   final String? initialKitId;
   final List<KitBomEntry>? initialKitBom;
 
@@ -30283,25 +32314,6 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     ],
                   ),
                 ),
-                if (!kitOnly &&
-                    (Platform.isLinux ||
-                        Platform.isWindows ||
-                        Platform.isMacOS)) ...[
-                  OutlinedButton.icon(
-                    key: const Key('import-kit-package'),
-                    onPressed: widget.onImportKitPackage == null
-                        ? null
-                        : () async {
-                            final imported = await widget.onImportKitPackage!();
-                            if (imported && context.mounted) {
-                              Navigator.pop(context);
-                            }
-                          },
-                    icon: const Icon(Icons.file_upload_outlined),
-                    label: const Text('Import kit'),
-                  ),
-                  const SizedBox(width: 8),
-                ],
                 IconButton(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close_rounded),
@@ -33474,11 +35486,19 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.animationDurationPercent,
     required this.animationRecurrenceSeconds,
     required this.photoCardsEnabled,
+    required this.wallpapers,
+    required this.activeWallpaperIndex,
+    required this.wallpaperAutoRotateEnabled,
+    required this.backgroundGridEnabled,
+    required this.backgroundDotMatrixEnabled,
+    required this.backgroundGridUsesAccent,
+    required this.backgroundDotMatrixUsesAccent,
     required this.mainScrollbarWidth,
     required this.inventoryDragGripSize,
     required this.customIconAnimationMode,
     required this.colorTheme,
     required this.brightnessMode,
+    required this.designTheme,
     required this.customThemeColor,
     required this.alertSoundsEnabled,
     required this.lowStockAlertsEnabled,
@@ -33493,9 +35513,11 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.lowStockEffectsEnabled,
     required this.moistureEffectsEnabled,
     required this.remoteSyncEffectsEnabled,
+    required this.blurEffectsEnabled,
     required this.onSettingsChanged,
     required this.onColorThemeChanged,
     required this.onBrightnessModeChanged,
+    required this.onDesignThemeChanged,
     required this.onCustomThemeColorChanged,
     required this.onAlertSoundsChanged,
     required this.onLowStockAlertsChanged,
@@ -33511,6 +35533,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onLowStockEffectsChanged,
     required this.onMoistureEffectsChanged,
     required this.onRemoteSyncEffectsChanged,
+    required this.onBlurEffectsChanged,
     required this.searchGlowEnabled,
     required this.newItemGlowEnabled,
     required this.machineTimerDisplay,
@@ -33520,6 +35543,13 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onMachineTimerDisplayChanged,
     required this.onMachineTypeTimerDisplayChanged,
     required this.onPhotoCardsChanged,
+    required this.onWallpaperSlotChanged,
+    required this.onActiveWallpaperChanged,
+    required this.onWallpaperAutoRotateChanged,
+    required this.onBackgroundGridChanged,
+    required this.onBackgroundDotMatrixChanged,
+    required this.onBackgroundGridUsesAccentChanged,
+    required this.onBackgroundDotMatrixUsesAccentChanged,
     required this.onMainScrollbarWidthChanged,
     required this.onInventoryDragGripSizeChanged,
     required this.onCustomIconAnimationModeChanged,
@@ -33527,11 +35557,19 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
   final bool photoCardsEnabled;
+  final List<Uint8List?> wallpapers;
+  final int activeWallpaperIndex;
+  final bool wallpaperAutoRotateEnabled;
+  final bool backgroundGridEnabled;
+  final bool backgroundDotMatrixEnabled;
+  final bool backgroundGridUsesAccent;
+  final bool backgroundDotMatrixUsesAccent;
   final double mainScrollbarWidth;
   final double inventoryDragGripSize;
   final CustomIconAnimationMode customIconAnimationMode;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
+  final AppDesignTheme designTheme;
   final Color customThemeColor;
   final bool alertSoundsEnabled;
   final bool lowStockAlertsEnabled;
@@ -33546,10 +35584,12 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final bool lowStockEffectsEnabled;
   final bool moistureEffectsEnabled;
   final bool remoteSyncEffectsEnabled;
+  final bool blurEffectsEnabled;
   final void Function(int durationPercent, int recurrenceSeconds)
   onSettingsChanged;
   final ValueChanged<AppColorTheme> onColorThemeChanged;
   final ValueChanged<AppBrightnessMode> onBrightnessModeChanged;
+  final ValueChanged<AppDesignTheme> onDesignThemeChanged;
   final ValueChanged<Color> onCustomThemeColorChanged;
   final ValueChanged<bool> onAlertSoundsChanged;
   final ValueChanged<bool> onLowStockAlertsChanged;
@@ -33565,6 +35605,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<bool> onLowStockEffectsChanged;
   final ValueChanged<bool> onMoistureEffectsChanged;
   final ValueChanged<bool> onRemoteSyncEffectsChanged;
+  final ValueChanged<bool> onBlurEffectsChanged;
   final bool searchGlowEnabled;
   final bool newItemGlowEnabled;
   final MachineTimerDisplay machineTimerDisplay;
@@ -33574,6 +35615,13 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<MachineTimerDisplay> onMachineTimerDisplayChanged;
   final ValueChanged<MachineTypeRecord> onMachineTypeTimerDisplayChanged;
   final ValueChanged<bool> onPhotoCardsChanged;
+  final void Function(int index, Uint8List? bytes) onWallpaperSlotChanged;
+  final ValueChanged<int> onActiveWallpaperChanged;
+  final ValueChanged<bool> onWallpaperAutoRotateChanged;
+  final ValueChanged<bool> onBackgroundGridChanged;
+  final ValueChanged<bool> onBackgroundDotMatrixChanged;
+  final ValueChanged<bool> onBackgroundGridUsesAccentChanged;
+  final ValueChanged<bool> onBackgroundDotMatrixUsesAccentChanged;
   final ValueChanged<double> onMainScrollbarWidthChanged;
   final ValueChanged<double> onInventoryDragGripSizeChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
@@ -33589,12 +35637,21 @@ class _PersonalizationSettingsDialogState
   late int durationPercent = widget.animationDurationPercent;
   late int recurrenceSeconds = widget.animationRecurrenceSeconds;
   late bool photoCardsEnabled = widget.photoCardsEnabled;
+  late List<Uint8List?> wallpapers = List<Uint8List?>.from(widget.wallpapers);
+  late int activeWallpaperIndex = widget.activeWallpaperIndex;
+  late bool wallpaperAutoRotateEnabled = widget.wallpaperAutoRotateEnabled;
+  late bool backgroundGridEnabled = widget.backgroundGridEnabled;
+  late bool backgroundDotMatrixEnabled = widget.backgroundDotMatrixEnabled;
+  late bool backgroundGridUsesAccent = widget.backgroundGridUsesAccent;
+  late bool backgroundDotMatrixUsesAccent =
+      widget.backgroundDotMatrixUsesAccent;
   late double mainScrollbarWidth = widget.mainScrollbarWidth;
   late double inventoryDragGripSize = widget.inventoryDragGripSize;
   late CustomIconAnimationMode customIconAnimationMode =
       widget.customIconAnimationMode;
   late AppColorTheme colorTheme = widget.colorTheme;
   late AppBrightnessMode brightnessMode = widget.brightnessMode;
+  late AppDesignTheme designTheme = widget.designTheme;
   late Color customThemeColor = widget.customThemeColor;
   late bool alertSoundsEnabled = widget.alertSoundsEnabled;
   late bool lowStockAlertsEnabled = widget.lowStockAlertsEnabled;
@@ -33609,6 +35666,7 @@ class _PersonalizationSettingsDialogState
   late bool lowStockEffectsEnabled = widget.lowStockEffectsEnabled;
   late bool moistureEffectsEnabled = widget.moistureEffectsEnabled;
   late bool remoteSyncEffectsEnabled = widget.remoteSyncEffectsEnabled;
+  late bool blurEffectsEnabled = widget.blurEffectsEnabled;
   late bool searchGlowEnabled = widget.searchGlowEnabled;
   late bool newItemGlowEnabled = widget.newItemGlowEnabled;
   late MachineTimerDisplay machineTimerDisplay = widget.machineTimerDisplay;
@@ -33708,6 +35766,67 @@ class _PersonalizationSettingsDialogState
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 10),
+            const Text(
+              'Interface theme',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            for (final option in AppDesignTheme.values)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: OutlinedButton(
+                  key: Key('design-theme-${option.name}'),
+                  onPressed: () {
+                    setState(() => designTheme = option);
+                    widget.onDesignThemeChanged(option);
+                  },
+                  style: ButtonStyle(
+                    alignment: Alignment.centerLeft,
+                    padding: const WidgetStatePropertyAll(
+                      EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                    side: WidgetStatePropertyAll(
+                      BorderSide(
+                        color: designTheme == option
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.outlineVariant,
+                        width: designTheme == option ? 2 : 1,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        option == AppDesignTheme.inventoryCraft
+                            ? Icons.grid_view_rounded
+                            : Icons.bubble_chart_outlined,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              option.label,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              option.description,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (designTheme == option)
+                        const Icon(Icons.check_rounded),
+                    ],
+                  ),
+                ),
+              ),
+            const Divider(height: 28),
             SegmentedButton<AppBrightnessMode>(
               key: const Key('appearance-mode'),
               segments: const [
@@ -33767,6 +35886,7 @@ class _PersonalizationSettingsDialogState
                                         option,
                                         customColor: customThemeColor,
                                         brightness: brightnessMode,
+                                        designTheme: designTheme,
                                       ).accent
                                     : Colors.transparent,
                                 width: colorTheme == option ? 2 : 1,
@@ -33784,6 +35904,7 @@ class _PersonalizationSettingsDialogState
                                       : InventorinatorColors.forTheme(
                                           option,
                                           brightness: brightnessMode,
+                                          designTheme: designTheme,
                                         ).base,
                                   shape: BoxShape.circle,
                                   border: Border.all(
@@ -33791,6 +35912,7 @@ class _PersonalizationSettingsDialogState
                                       option,
                                       customColor: customThemeColor,
                                       brightness: brightnessMode,
+                                      designTheme: designTheme,
                                     ).accent,
                                   ),
                                 ),
@@ -33827,6 +35949,133 @@ class _PersonalizationSettingsDialogState
                 setState(() => photoCardsEnabled = value);
                 widget.onPhotoCardsChanged(value);
               },
+            ),
+            const Divider(height: 28),
+            const Text(
+              'Wallpapers',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Keep up to five backgrounds on this device. Select one to use it.',
+              style: TextStyle(color: Color(0xff929aac)),
+            ),
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final width = (constraints.maxWidth - 16) / 3;
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (var index = 0; index < wallpapers.length; index++)
+                      _WallpaperSlotTile(
+                        key: Key('wallpaper-slot-$index'),
+                        index: index,
+                        width: width,
+                        bytes: wallpapers[index],
+                        selected: activeWallpaperIndex == index,
+                        onSelect: wallpapers[index] == null
+                            ? null
+                            : () {
+                                setState(() => activeWallpaperIndex = index);
+                                widget.onActiveWallpaperChanged(index);
+                              },
+                        onChoose: () async {
+                          final picked = await _pickImageBytes();
+                          if (!mounted || picked == null) return;
+                          final prepared = _prepareWallpaperBytes(picked);
+                          setState(() {
+                            wallpapers[index] = prepared;
+                            activeWallpaperIndex = index;
+                          });
+                          widget.onWallpaperSlotChanged(index, prepared);
+                        },
+                        onRemove: wallpapers[index] == null
+                            ? null
+                            : () {
+                                setState(() {
+                                  wallpapers[index] = null;
+                                  if (activeWallpaperIndex == index) {
+                                    activeWallpaperIndex = wallpapers
+                                        .indexWhere((image) => image != null);
+                                  }
+                                });
+                                widget.onWallpaperSlotChanged(index, null);
+                              },
+                      ),
+                  ],
+                );
+              },
+            ),
+            SwitchListTile(
+              key: const Key('wallpaper-auto-rotate-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Auto-rotate wallpapers'),
+              subtitle: const Text(
+                'Switch between saved wallpapers every 15 minutes.',
+              ),
+              value: wallpaperAutoRotateEnabled,
+              onChanged: wallpapers.whereType<Uint8List>().length < 2
+                  ? null
+                  : (value) {
+                      setState(() => wallpaperAutoRotateEnabled = value);
+                      widget.onWallpaperAutoRotateChanged(value);
+                    },
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Background overlays',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Both layers render over your wallpaper.',
+              style: TextStyle(color: Color(0xff929aac)),
+            ),
+            SwitchListTile(
+              key: const Key('background-grid-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Grid'),
+              value: backgroundGridEnabled,
+              onChanged: (value) {
+                setState(() => backgroundGridEnabled = value);
+                widget.onBackgroundGridChanged(value);
+              },
+            ),
+            SwitchListTile(
+              key: const Key('background-grid-accent-toggle'),
+              contentPadding: const EdgeInsets.only(left: 16),
+              title: const Text('Use accent color'),
+              value: backgroundGridUsesAccent,
+              onChanged: backgroundGridEnabled
+                  ? (value) {
+                      setState(() => backgroundGridUsesAccent = value);
+                      widget.onBackgroundGridUsesAccentChanged(value);
+                    }
+                  : null,
+            ),
+            SwitchListTile(
+              key: const Key('background-dot-matrix-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Dot matrix'),
+              value: backgroundDotMatrixEnabled,
+              onChanged: (value) {
+                setState(() => backgroundDotMatrixEnabled = value);
+                widget.onBackgroundDotMatrixChanged(value);
+              },
+            ),
+            SwitchListTile(
+              key: const Key('background-dot-matrix-accent-toggle'),
+              contentPadding: const EdgeInsets.only(left: 16),
+              title: const Text('Use accent color'),
+              value: backgroundDotMatrixUsesAccent,
+              onChanged: backgroundDotMatrixEnabled
+                  ? (value) {
+                      setState(() => backgroundDotMatrixUsesAccent = value);
+                      widget.onBackgroundDotMatrixUsesAccentChanged(value);
+                    }
+                  : null,
             ),
             const Divider(height: 28),
             const Text(
@@ -34032,23 +36281,6 @@ class _PersonalizationSettingsDialogState
                     widget.onAlertSoundsChanged(value);
                   },
                 ),
-                if (!alertSoundsEnabled)
-                  Container(
-                    key: const Key('all-alert-sounds-muted'),
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 9,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: .1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text(
-                      'All alert sounds are muted. Your individual choices are preserved.',
-                    ),
-                  ),
                 SwitchListTile(
                   key: const Key('sync-chime-personalization'),
                   dense: true,
@@ -34208,6 +36440,19 @@ class _PersonalizationSettingsDialogState
                   onChanged: (value) {
                     setState(() => remoteSyncEffectsEnabled = value);
                     widget.onRemoteSyncEffectsChanged(value);
+                  },
+                ),
+                SwitchListTile(
+                  key: const Key('blur-effects-toggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Blur effects'),
+                  subtitle: const Text(
+                    'Turn off translucent background blur to reduce GPU use.',
+                  ),
+                  value: blurEffectsEnabled,
+                  onChanged: (value) {
+                    setState(() => blurEffectsEnabled = value);
+                    widget.onBlurEffectsChanged(value);
                   },
                 ),
                 SwitchListTile(
@@ -34650,6 +36895,117 @@ String _kitPackageStableId(String prefix, String packageId, [String? itemId]) {
   return '$prefix-PKG-${clean(packageId)}$suffix';
 }
 
+class _WallpaperSlotTile extends StatelessWidget {
+  const _WallpaperSlotTile({
+    super.key,
+    required this.index,
+    required this.width,
+    required this.bytes,
+    required this.selected,
+    required this.onSelect,
+    required this.onChoose,
+    required this.onRemove,
+  });
+
+  final int index;
+  final double width;
+  final Uint8List? bytes;
+  final bool selected;
+  final VoidCallback? onSelect;
+  final VoidCallback onChoose;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: width,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onSelect ?? onChoose,
+          borderRadius: BorderRadius.circular(8),
+          child: Ink(
+            height: 104,
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest.withValues(alpha: .45),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (bytes != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(7),
+                    child: Image.memory(bytes!, fit: BoxFit.cover),
+                  )
+                else
+                  const Center(child: Icon(Icons.add_photo_alternate_outlined)),
+                Positioned(
+                  left: 6,
+                  bottom: 5,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: .58),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        bytes == null
+                            ? 'Add ${index + 1}'
+                            : 'Wallpaper ${index + 1}',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (bytes != null)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Replace wallpaper ${index + 1}',
+                          onPressed: onChoose,
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                        ),
+                        IconButton(
+                          tooltip: 'Remove wallpaper ${index + 1}',
+                          onPressed: onRemove,
+                          icon: const Icon(Icons.close_rounded, size: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (selected)
+                  const Positioned(
+                    top: 7,
+                    left: 7,
+                    child: Icon(Icons.check_circle, size: 18),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ImagePickerButton extends StatelessWidget {
   const _ImagePickerButton({
     super.key,
@@ -34719,6 +37075,35 @@ class _LogoAvatar extends StatelessWidget {
 }
 
 Future<Uint8List?> _pickImageBytes() async {
+  final result = await FilePicker.pickFile(
+    type: FileType.custom,
+    allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+    dialogTitle: 'Choose image',
+    linuxOptions: await _parentedLinuxFilePickerOptions(),
+    windowsOptions: const WindowsOptions(lockParentWindow: true),
+  );
+  return result?.readAsBytes();
+}
+
+/// Wallpaper data lives in the local preferences database, so resize it once
+/// on import instead of storing five original camera files.
+Uint8List _prepareWallpaperBytes(Uint8List source) {
+  final decoded = img.decodeImage(source);
+  if (decoded == null) return source;
+  const maximumDimension = 1920;
+  final longest = math.max(decoded.width, decoded.height);
+  final resized = longest <= maximumDimension
+      ? decoded
+      : img.copyResize(
+          decoded,
+          width: (decoded.width * maximumDimension / longest).round(),
+          height: (decoded.height * maximumDimension / longest).round(),
+          interpolation: img.Interpolation.average,
+        );
+  return Uint8List.fromList(img.encodeJpg(resized, quality: 86));
+}
+
+Future<FilePickerLinuxOptions> _parentedLinuxFilePickerOptions() async {
   String? parentWindow;
   if (Platform.isLinux) {
     try {
@@ -34738,17 +37123,10 @@ Future<Uint8List?> _pickImageBytes() async {
       // The portal still receives a modal request when xdotool is absent.
     }
   }
-  final result = await FilePicker.pickFile(
-    type: FileType.custom,
-    allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif'],
-    dialogTitle: 'Choose image',
-    linuxOptions: FilePickerLinuxOptions(
-      lockParentWindow: true,
-      parentWindow: parentWindow,
-    ),
-    windowsOptions: const WindowsOptions(lockParentWindow: true),
+  return FilePickerLinuxOptions(
+    lockParentWindow: true,
+    parentWindow: parentWindow,
   );
-  return result?.readAsBytes();
 }
 
 Map<String, dynamic>? _findProductJson(Object? value) {
@@ -40058,13 +42436,16 @@ class ItemDetailsPanel extends StatefulWidget {
     this.onWidthChanged,
     this.fullscreen = false,
     this.onFullscreenChanged,
+    this.windowed = false,
+    this.windowWidth,
     this.canEdit = true,
     this.requireManualDryingTimes = false,
     this.canArchive = true,
     this.canMarkDepleted = true,
     this.showStatus = true,
     this.storageLocation,
-    this.onStorageLocationTap,
+    this.locations = const [],
+    this.locationPath,
     this.onFindSimilar,
   });
   final InventoryItem item;
@@ -40090,13 +42471,16 @@ class ItemDetailsPanel extends StatefulWidget {
   final ValueChanged<double>? onWidthChanged;
   final bool fullscreen;
   final ValueChanged<bool>? onFullscreenChanged;
+  final bool windowed;
+  final double? windowWidth;
   final bool canEdit;
   final bool requireManualDryingTimes;
   final bool canArchive;
   final bool canMarkDepleted;
   final bool showStatus;
   final StockLocationRecord? storageLocation;
-  final Future<void> Function()? onStorageLocationTap;
+  final List<StockLocationRecord> locations;
+  final String Function(String id)? locationPath;
   final Future<void> Function(InventoryItem item)? onFindSimilar;
 
   @override
@@ -40570,11 +42954,21 @@ enum _FilamentSidebarTab { instructions, spool, brand }
 
 enum _SpoolUsageAction { edit, delete }
 
+enum _InventoryBulkContextAction {
+  createKit,
+  archive,
+  changeType,
+  changeLocation,
+  changeStatus,
+  delete,
+}
+
 class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
   bool useFahrenheit = false;
   _FilamentSidebarTab filamentSidebarTab = _FilamentSidebarTab.instructions;
   late InventoryItem item;
   late double panelWidth;
+  double productImageHeight = 300;
 
   Future<void> _closeThen(
     Future<void> Function(InventoryItem item) action,
@@ -40582,14 +42976,6 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     Navigator.of(context).pop();
     await Future<void>.delayed(const Duration(milliseconds: 220));
     await action(item);
-  }
-
-  Future<void> _openStorageLocation() async {
-    final openLocation = widget.onStorageLocationTap;
-    if (openLocation == null) return;
-    Navigator.of(context).pop();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    await openLocation();
   }
 
   @override
@@ -40672,6 +43058,12 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
       _itemCoextrudedColors(item) != null ||
       item.materialName.trim().isNotEmpty;
 
+  bool get _hasSidebarColor =>
+      item.itemColorName.trim().isNotEmpty ||
+      item.itemColorLabel.trim().isNotEmpty ||
+      _itemGradientColors(item) != null ||
+      _itemCoextrudedColors(item) != null;
+
   Widget _sidebarColorCard({required bool overlay}) {
     final colorScheme = Theme.of(context).colorScheme;
     final swatch = _itemColorSwatch(item.itemColorName);
@@ -40720,6 +43112,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     final card = ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: BackdropFilter(
+        enabled: visual_effect_preferences.blurEffectsEnabled,
         filter: ui.ImageFilter.blur(
           sigmaX: overlay ? 12 : 0,
           sigmaY: overlay ? 12 : 0,
@@ -40743,7 +43136,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                     ? Tooltip(message: coextrudedName, child: colorChicklet)
                     : colorChicklet,
                 const SizedBox(width: 11),
-                Flexible(
+                Expanded(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -40771,7 +43164,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                 ),
               ],
               if (item.materialName.trim().isNotEmpty) ...[
-                if (overlay)
+                if (!hasColor && overlay)
                   const Spacer()
                 else if (hasColor)
                   const SizedBox(width: 11),
@@ -40802,6 +43195,7 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
       key: const Key('sidebar-item-title-overlay'),
       borderRadius: BorderRadius.circular(14),
       child: BackdropFilter(
+        enabled: visual_effect_preferences.blurEffectsEnabled,
         filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -41488,6 +43882,85 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     setState(() {});
   }
 
+  Widget _sidebarStorageLocationSelector() {
+    if (!(item.type == InventoryType.filament ||
+        item.storageLocationId.isNotEmpty ||
+        item.storageLocation.isNotEmpty)) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 14, bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Storage location',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String?>(
+            key: const Key('sidebar-storage-location'),
+            isExpanded: true,
+            initialValue:
+                widget.locations.any(
+                  (location) => location.id == item.storageLocationId,
+                )
+                ? item.storageLocationId
+                : null,
+            decoration: InputDecoration(
+              prefixIcon: Padding(
+                padding: const EdgeInsets.all(10),
+                child: _LocationIcon(
+                  location: widget.locations
+                      .where(
+                        (location) => location.id == item.storageLocationId,
+                      )
+                      .firstOrNull,
+                  key: const Key('sidebar-location-pin'),
+                ),
+              ),
+            ),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('No location'),
+              ),
+              for (final location
+                  in ([...widget.locations]..sort(
+                    (a, b) => (widget.locationPath?.call(a.id) ?? a.name)
+                        .compareTo(widget.locationPath?.call(b.id) ?? b.name),
+                  )))
+                DropdownMenuItem<String?>(
+                  value: location.id,
+                  child: Text(
+                    widget.locationPath?.call(location.id) ?? location.name,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: !widget.canEdit
+                ? null
+                : (locationId) {
+                    final location = widget.locations
+                        .where((candidate) => candidate.id == locationId)
+                        .firstOrNull;
+                    final locationPath = location == null
+                        ? ''
+                        : widget.locationPath?.call(location.id) ??
+                              location.name;
+                    final updated = item.copyWith(
+                      storageLocationId: locationId ?? '',
+                      storageLocation: locationPath,
+                    );
+                    setState(() => item = updated);
+                    widget.onChanged(updated);
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final effectivePrinting = _effectivePrintingInstructions(item);
@@ -41498,8 +43971,10 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
       item,
       requireManual: widget.requireManualDryingTimes,
     );
-    final desktopResizable = Platform.isLinux || Platform.isWindows;
-    final availableWidth = MediaQuery.sizeOf(context).width;
+    final desktopResizable =
+        (Platform.isLinux || Platform.isWindows) && !widget.windowed;
+    final availableWidth =
+        widget.windowWidth ?? MediaQuery.sizeOf(context).width;
     final minimumWidth = math.min(380.0, availableWidth);
     final maximumWidth = desktopResizable
         ? math.max(minimumWidth, availableWidth - 48)
@@ -41522,10 +43997,12 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
             ],
           ),
           border: Border(
-            left: BorderSide(
-              color: Theme.of(context).colorScheme.primary
-                  .withValues(alpha: .55),
-            ),
+            left: widget.windowed
+                ? BorderSide.none
+                : BorderSide(
+                    color: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: .55),
+                  ),
           ),
           boxShadow: [
             BoxShadow(
@@ -41536,515 +44013,578 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
             ),
           ],
         ),
-        child: SafeArea(
-          child: SizedBox(
-            width: effectivePanelWidth,
-            height: double.infinity,
-            child: Stack(
-              children: [
-                SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(
-                    desktopResizable ? 34 : 28,
-                    28,
-                    28,
-                    28,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sidebarTypeHeader(),
-                      const SizedBox(height: 14),
-                      if (item.imageBytes != null)
-                        Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(20),
+        child: widget.windowed
+            ? _itemDetailsBody(
+                effectivePanelWidth: effectivePanelWidth,
+                desktopResizable: desktopResizable,
+                minimumWidth: minimumWidth,
+                maximumWidth: maximumWidth,
+                effectivePrinting: effectivePrinting,
+                effectiveDrying: effectiveDrying,
+                effectiveStorage: effectiveStorage,
+                dryingSettings: dryingSettings,
+                dryingDuration: dryingDuration,
+              )
+            : SafeArea(
+                child: _itemDetailsBody(
+                  effectivePanelWidth: effectivePanelWidth,
+                  desktopResizable: desktopResizable,
+                  minimumWidth: minimumWidth,
+                  maximumWidth: maximumWidth,
+                  effectivePrinting: effectivePrinting,
+                  effectiveDrying: effectiveDrying,
+                  effectiveStorage: effectiveStorage,
+                  dryingSettings: dryingSettings,
+                  dryingDuration: dryingDuration,
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _itemDetailsBody({
+    required double effectivePanelWidth,
+    required bool desktopResizable,
+    required double minimumWidth,
+    required double maximumWidth,
+    required String effectivePrinting,
+    required String effectiveDrying,
+    required String effectiveStorage,
+    required DryingSettings dryingSettings,
+    required int? dryingDuration,
+  }) => SizedBox(
+    width: effectivePanelWidth,
+    height: double.infinity,
+    child: Stack(
+      children: [
+        SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(desktopResizable ? 34 : 28, 28, 28, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _sidebarTypeHeader(),
+              const SizedBox(height: 14),
+              if (item.imageBytes != null)
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final photo = Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: ColoredBox(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainer,
+                            child: SizedBox(
+                              height: productImageHeight,
                               child: Image.memory(
                                 item.imageBytes!,
                                 key: const Key('sidebar-product-image'),
                                 width: double.infinity,
-                                fit: BoxFit.fitWidth,
+                                fit: BoxFit.contain,
                                 filterQuality: FilterQuality.high,
                               ),
                             ),
-                            if (_hasSidebarColorOrMaterial)
-                              Positioned(
-                                left: 12,
-                                right: 12,
-                                bottom: 12,
-                                child: _sidebarColorCard(overlay: true),
+                          ),
+                        ),
+                        if (_hasSidebarColor)
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            bottom: 12,
+                            child: _sidebarColorCard(overlay: true),
+                          ),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          right: widget.showStatus && item.quantity > 0
+                              ? 82
+                              : 12,
+                          child: _sidebarImageTitleCard(),
+                        ),
+                        if (widget.showStatus && item.quantity > 0)
+                          Positioned(
+                            top: 12,
+                            right: 12,
+                            child: Container(
+                              key: const Key('sidebar-photo-status'),
+                              padding: const EdgeInsets.all(5),
+                              decoration: BoxDecoration(
+                                color: _themeCanvas(context)
+                                    .withValues(alpha: .8),
+                                shape: BoxShape.circle,
                               ),
-                            Positioned(
-                              top: 12,
-                              left: 12,
-                              right: widget.showStatus && item.quantity > 0
-                                  ? 82
-                                  : 12,
-                              child: _sidebarImageTitleCard(),
+                              child: CountdownRing(
+                                key: Key('sidebar-photo-timer-${item.id}'),
+                                item: item,
+                              ),
                             ),
-                            if (widget.showStatus && item.quantity > 0)
-                              Positioned(
-                                top: 12,
-                                right: 12,
+                          ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.resizeUpDown,
+                            child: GestureDetector(
+                              key: const Key('resize-product-image'),
+                              behavior: HitTestBehavior.opaque,
+                              onVerticalDragUpdate: (details) => setState(() {
+                                productImageHeight =
+                                    (productImageHeight + details.delta.dy)
+                                        .clamp(180.0, 500.0)
+                                        .toDouble();
+                              }),
+                              child: Center(
                                 child: Container(
-                                  key: const Key('sidebar-photo-status'),
-                                  padding: const EdgeInsets.all(5),
+                                  width: 36,
+                                  height: 5,
+                                  margin: const EdgeInsets.only(bottom: 5),
                                   decoration: BoxDecoration(
-                                    color: _themeCanvas(context)
-                                        .withValues(alpha: .8),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: CountdownRing(
-                                    key: Key('sidebar-photo-timer-${item.id}'),
-                                    item: item,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withValues(alpha: .72),
+                                    borderRadius: BorderRadius.circular(99),
                                   ),
                                 ),
                               ),
-                          ],
-                        ),
-                      SizedBox(height: item.imageBytes == null ? 10 : 24),
-                      if (widget.onFindSimilar != null) ...[
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            key: const Key('find-similar-items'),
-                            onPressed: () => _closeThen(widget.onFindSimilar!),
-                            icon: const Icon(Icons.manage_search_rounded),
-                            label: const Text('Find similar'),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                      ],
-                      if (widget.showStatus || _isLowStock(item))
-                        _sidebarStatusSelector(),
-                      if (item.imageBytes == null) ...[
-                        const SizedBox(height: 22),
-                        Row(
-                          key: const Key('sidebar-item-heading'),
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                item.name,
-                                key: const Key('sidebar-item-name'),
-                                style: const TextStyle(
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-                            KeyedSubtree(
-                              key: const Key('sidebar-item-quantity'),
-                              child: _QuantityBadge(item: item),
-                            ),
-                          ],
-                        ),
-                      ],
-                      SizedBox(height: item.imageBytes == null ? 8 : 14),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '\$${item.cost.toStringAsFixed(2)}',
-                            key: const Key('sidebar-item-cost'),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          if (item.type == InventoryType.filament &&
-                              (item.filamentStatus == FilamentStatus.ready ||
-                                  item.filamentStatus ==
-                                      FilamentStatus.deployed)) ...[
-                            const Spacer(),
-                            Column(
-                              key: const Key('sidebar-item-dried'),
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                const Text(
-                                  'Dried',
-                                  style: TextStyle(
-                                    color: Color(0xff929aac),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  _timeSinceDried(item.lastDriedAt),
-                                  style: const TextStyle(
-                                    color: Color(0xffd6d2df),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                        ),
+                      ],
+                    );
+                    final photoColumn = Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        photo,
+                        if (!_hasSidebarColor &&
+                            item.materialName.trim().isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          _sidebarColorCard(overlay: false),
                         ],
-                      ),
-                      const SizedBox(height: 8),
-                      if (_itemDisplayTags(item).isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Wrap(
-                          key: const Key('item-tags'),
-                          spacing: 7,
-                          runSpacing: 7,
-                          children: _itemDisplayTags(item)
-                              .map((tag) => _PurposeTagPill(label: tag))
-                              .toList(),
-                        ),
                       ],
-                      if (item.compatibleMachineIds.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Compatible machines',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: widget.machines
-                              .where(
-                                (machine) => item.compatibleMachineIds.contains(
-                                  machine.id,
-                                ),
-                              )
-                              .map((machine) {
-                                final type = widget.machineTypes
-                                    .where(
-                                      (value) => value.id == machine.typeId,
-                                    )
-                                    .firstOrNull;
-                                return Chip(
-                                  avatar: const Icon(
-                                    Icons.memory_rounded,
-                                    size: 18,
-                                  ),
-                                  label: Text(
-                                    type == null
-                                        ? machine.name
-                                        : '${machine.name} · ${type.name}',
-                                  ),
-                                );
-                              })
-                              .toList(),
-                        ),
+                    );
+                    final qr = _sidebarQrBlock();
+                    if (constraints.maxWidth < 660) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [photoColumn, const SizedBox(height: 16), qr],
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: photoColumn),
+                        const SizedBox(width: 16),
+                        SizedBox(width: 216, child: qr),
                       ],
-                      const SizedBox(height: 24),
-                      Container(
-                        key: const Key('sidebar-qr-code'),
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: QrImageView(
-                          data: 'inventorinator:item:${item.id}',
-                          version: QrVersions.auto,
-                          size: 180,
-                          backgroundColor: Colors.white,
-                          eyeStyle: const QrEyeStyle(
-                            eyeShape: QrEyeShape.square,
-                            color: Colors.black,
-                          ),
-                          dataModuleStyle: const QrDataModuleStyle(
-                            dataModuleShape: QrDataModuleShape.square,
-                            color: Colors.black,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SelectableText(
-                        item.id,
-                        style: const TextStyle(
-                          color: Color(0xff929aac),
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      FilledButton.icon(
-                        key: const Key('download-qr'),
-                        onPressed: () => _downloadQr(context, item),
-                        icon: const Icon(Icons.download_rounded),
-                        label: const Text('Download labeled QR'),
-                      ),
-                      if (_hasSidebarColorOrMaterial &&
-                          item.imageBytes == null) ...[
-                        const SizedBox(height: 22),
-                        _sidebarColorCard(overlay: false),
-                      ],
-                      const SizedBox(height: 28),
-                      _checkoutSection(),
-                      if (item.quantityAlertThreshold != null)
-                        _DetailSection(
-                          icon: Icons.notification_important_outlined,
-                          title: 'Low-stock alert threshold',
-                          text: _formatBomQuantity(
-                            item.quantityAlertThreshold!,
-                          ),
-                        ),
-                      if (item.barcode.isNotEmpty)
-                        _DetailSection(
-                          icon: Icons.barcode_reader,
-                          title: 'Product barcode',
-                          text: item.barcode,
-                        ),
-                      if (item.labelImageBytes != null) ...[
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.document_scanner_outlined,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(width: 12),
-                            const Text(
-                              'Label',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(14),
-                          child: Image.memory(
-                            item.labelImageBytes!,
-                            key: const Key('sidebar-label-image'),
-                            width: double.infinity,
-                            fit: BoxFit.fitWidth,
-                            filterQuality: FilterQuality.high,
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                      ],
-                      if (item.type == InventoryType.filament ||
-                          item.storageLocationId.isNotEmpty ||
-                          item.storageLocation.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 20),
-                          child: Card(
-                            margin: EdgeInsets.zero,
-                            clipBehavior: Clip.antiAlias,
-                            child: ListTile(
-                              key: const Key('sidebar-storage-location'),
-                              onTap: widget.onStorageLocationTap == null
-                                  ? null
-                                  : _openStorageLocation,
-                              leading: _LocationIcon(
-                                location: widget.storageLocation,
-                                key: Key('sidebar-location-pin'),
-                              ),
-                              title: const Text('Storage location'),
-                              subtitle: Text(
-                                item.storageLocation.isEmpty
-                                    ? 'Not configured'
-                                    : item.storageLocation,
-                              ),
-                              trailing: widget.onStorageLocationTap == null
-                                  ? null
-                                  : const Icon(
-                                      Icons.arrow_forward_rounded,
-                                      semanticLabel: 'Open Stockroom location',
-                                    ),
-                            ),
-                          ),
-                        ),
-                      if (item.locationHistory.isNotEmpty)
-                        _DetailSection(
-                          icon: Icons.history_rounded,
-                          title: 'Recent storage locations',
-                          text: item.locationHistory.take(5).join('\n'),
-                        ),
-                      if (item.type == InventoryType.filament) ...[
-                        const Divider(height: 40),
-                        Column(
-                          key: const Key('filament-moisture-tracking'),
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Moisture tracking',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 16),
-                            _DetailSection(
-                              icon: Icons.hourglass_bottom_rounded,
-                              title: 'Moisture lifespan',
-                              text: item.moistureLifespanMinutes == null
-                                  ? 'Not configured — edit this filament to start the countdown'
-                                  : _moistureLifespanLabel(item),
-                            ),
-                            if (item.filamentStatus == FilamentStatus.ready ||
-                                item.filamentStatus == FilamentStatus.deployed)
-                              _DetailSection(
-                                icon: Icons.water_drop_outlined,
-                                title: 'Moisture life remaining',
-                                text: _moistureRemainingLabel(item),
-                              ),
-                          ],
-                        ),
-                      ],
-                      if (item.type == InventoryType.filament)
-                        _filamentDetailsTabs(
-                          printingInstructions: effectivePrinting,
-                          dryingInstructions: effectiveDrying,
-                          storageInstructions: effectiveStorage,
-                          dryingSettings: dryingSettings,
-                          dryingDuration: dryingDuration,
-                        ),
-                      if (item.type != InventoryType.filament)
-                        _DetailSection(
-                          icon: Icons.storefront_outlined,
-                          title: 'Vendor',
-                          text: item.vendor,
-                        ),
-                      if (item.type == InventoryType.filament &&
-                          item.filamentStatus == FilamentStatus.deployed)
-                        _DetailSection(
-                          icon: Icons.precision_manufacturing_outlined,
-                          title: 'Deployment location',
-                          text: item.deploymentLocation,
-                        ),
-                      if (item.type == InventoryType.filament &&
-                          item.filamentStatus == FilamentStatus.drying)
-                        _DetailSection(
-                          icon: Icons.timer_outlined,
-                          title: 'Drying time remaining',
-                          text: '${dryingMinutesRemaining(item)} minutes',
-                        ),
-                      if (item.type != InventoryType.filament &&
-                          item.type.supportsPrinting)
-                        _DetailSection(
-                          icon: Icons.print_outlined,
-                          title: 'Printing instructions',
-                          text: item.printingInstructions,
-                        ),
-                      if (item.type == InventoryType.custom)
-                        for (final field in item.customFieldValues.entries)
-                          _DetailSection(
-                            icon: Icons.tune_rounded,
-                            title: field.key,
-                            text: field.value.isEmpty
-                                ? 'Not configured'
-                                : field.value,
-                          ),
-                      if (item.type != InventoryType.filament)
-                        _DetailSection(
-                          icon: Icons.inventory_2_outlined,
-                          title: 'Storage',
-                          text: item.storageInstructions,
-                        ),
-                      if (item.productUrl.isNotEmpty)
-                        _ProductSourceSection(url: item.productUrl),
-                      const SizedBox(height: 24),
-                      _DetailSection(
-                        key: const Key('sidebar-added-to-inventory'),
-                        icon: Icons.schedule_rounded,
-                        title: 'Added to inventory',
-                        text: _age(item.added),
-                      ),
-                      if (widget.canArchive) ...[
-                        const Divider(height: 40),
-                        const Text(
-                          'Inventory lifecycle',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Retired items remain in Archived so their QR code, history, and salvage potential are preserved.',
-                          style: const TextStyle(
-                            color: Color(0xff929aac),
-                            height: 1.4,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        if (item.archived) ...[
-                          _ArchiveBadge(item: item),
-                          const SizedBox(height: 12),
-                          FilledButton.icon(
-                            key: const Key('restore-item'),
-                            onPressed: () => _setArchiveDisposition(null),
-                            icon: const Icon(Icons.unarchive_outlined),
-                            label: const Text('Restore to inventory'),
-                          ),
-                        ] else
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              if (widget.canMarkDepleted)
-                                OutlinedButton.icon(
-                                  key: const Key('mark-depleted'),
-                                  onPressed: () => _setArchiveDisposition(
-                                    ArchiveDisposition.depleted,
-                                  ),
-                                  icon: const Icon(
-                                    Icons.hourglass_empty_rounded,
-                                  ),
-                                  label: const Text('Mark depleted'),
-                                ),
-                              OutlinedButton.icon(
-                                key: const Key('mark-destroyed'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xffff6b6b),
-                                ),
-                                onPressed: () => _setArchiveDisposition(
-                                  ArchiveDisposition.destroyed,
-                                ),
-                                icon: const Icon(Icons.broken_image_outlined),
-                                label: const Text('Mark destroyed'),
-                              ),
-                            ],
-                          ),
-                        const SizedBox(height: 12),
-                      ],
-                    ],
+                    );
+                  },
+                ),
+              SizedBox(height: item.imageBytes == null ? 10 : 24),
+              if (widget.onFindSimilar != null) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const Key('find-similar-items'),
+                    onPressed: () => _closeThen(widget.onFindSimilar!),
+                    icon: const Icon(Icons.manage_search_rounded),
+                    label: const Text('Find similar'),
                   ),
                 ),
-                if (desktopResizable)
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeLeftRight,
-                      child: GestureDetector(
-                        key: const Key('item-details-resize-handle'),
-                        behavior: HitTestBehavior.opaque,
-                        onHorizontalDragUpdate: (details) {
-                          final nextWidth = (panelWidth - details.delta.dx)
-                              .clamp(minimumWidth, maximumWidth)
-                              .toDouble();
-                          setState(() => panelWidth = nextWidth);
-                          widget.onWidthChanged?.call(nextWidth);
-                        },
-                        child: SizedBox(
-                          width: 16,
-                          child: Center(
-                            child: Container(
-                              width: 4,
-                              height: 54,
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary
-                                    .withValues(alpha: .7),
-                                borderRadius: BorderRadius.circular(99),
-                              ),
-                            ),
-                          ),
+                const SizedBox(height: 14),
+              ],
+              if (widget.showStatus || _isLowStock(item))
+                _sidebarStatusSelector(),
+              _sidebarStorageLocationSelector(),
+              if (item.imageBytes == null) ...[
+                const SizedBox(height: 22),
+                Row(
+                  key: const Key('sidebar-item-heading'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.name,
+                        key: const Key('sidebar-item-name'),
+                        style: const TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 14),
+                    KeyedSubtree(
+                      key: const Key('sidebar-item-quantity'),
+                      child: _QuantityBadge(item: item),
+                    ),
+                  ],
+                ),
               ],
+              SizedBox(height: item.imageBytes == null ? 8 : 14),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '\$${item.cost.toStringAsFixed(2)}',
+                    key: const Key('sidebar-item-cost'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (item.type == InventoryType.filament &&
+                      (item.filamentStatus == FilamentStatus.ready ||
+                          item.filamentStatus == FilamentStatus.deployed)) ...[
+                    const Spacer(),
+                    Column(
+                      key: const Key('sidebar-item-dried'),
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Text(
+                          'Dried',
+                          style: TextStyle(
+                            color: Color(0xff929aac),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _timeSinceDried(item.lastDriedAt),
+                          style: const TextStyle(
+                            color: Color(0xffd6d2df),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (_itemDisplayTags(item).isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  key: const Key('item-tags'),
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: _itemDisplayTags(item)
+                      .map((tag) => _PurposeTagPill(label: tag))
+                      .toList(),
+                ),
+              ],
+              if (item.compatibleMachineIds.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Compatible machines',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: widget.machines
+                      .where(
+                        (machine) =>
+                            item.compatibleMachineIds.contains(machine.id),
+                      )
+                      .map((machine) {
+                        final type = widget.machineTypes
+                            .where((value) => value.id == machine.typeId)
+                            .firstOrNull;
+                        return Chip(
+                          avatar: const Icon(Icons.memory_rounded, size: 18),
+                          label: Text(
+                            type == null
+                                ? machine.name
+                                : '${machine.name} · ${type.name}',
+                          ),
+                        );
+                      })
+                      .toList(),
+                ),
+              ],
+              if (item.imageBytes == null) ...[
+                const SizedBox(height: 24),
+                _sidebarQrBlock(),
+              ],
+              if (_hasSidebarColorOrMaterial && item.imageBytes == null) ...[
+                const SizedBox(height: 22),
+                _sidebarColorCard(overlay: false),
+              ],
+              const SizedBox(height: 28),
+              _checkoutSection(),
+              if (item.quantityAlertThreshold != null)
+                _DetailSection(
+                  icon: Icons.notification_important_outlined,
+                  title: 'Low-stock alert threshold',
+                  text: _formatBomQuantity(item.quantityAlertThreshold!),
+                ),
+              if (item.barcode.isNotEmpty)
+                _DetailSection(
+                  icon: Icons.barcode_reader,
+                  title: 'Product barcode',
+                  text: item.barcode,
+                ),
+              if (item.labelImageBytes != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.document_scanner_outlined,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Label',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.memory(
+                    item.labelImageBytes!,
+                    key: const Key('sidebar-label-image'),
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    filterQuality: FilterQuality.high,
+                  ),
+                ),
+                const SizedBox(height: 18),
+              ],
+              if (item.locationHistory.isNotEmpty)
+                _DetailSection(
+                  icon: Icons.history_rounded,
+                  title: 'Recent storage locations',
+                  text: item.locationHistory.take(5).join('\n'),
+                ),
+              if (item.type == InventoryType.filament) ...[
+                const Divider(height: 40),
+                Column(
+                  key: const Key('filament-moisture-tracking'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Moisture tracking',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 16),
+                    _DetailSection(
+                      icon: Icons.hourglass_bottom_rounded,
+                      title: 'Moisture lifespan',
+                      text: item.moistureLifespanMinutes == null
+                          ? 'Not configured — edit this filament to start the countdown'
+                          : _moistureLifespanLabel(item),
+                    ),
+                    if (item.filamentStatus == FilamentStatus.ready ||
+                        item.filamentStatus == FilamentStatus.deployed)
+                      _DetailSection(
+                        icon: Icons.water_drop_outlined,
+                        title: 'Moisture life remaining',
+                        text: _moistureRemainingLabel(item),
+                      ),
+                  ],
+                ),
+              ],
+              if (item.type == InventoryType.filament)
+                _filamentDetailsTabs(
+                  printingInstructions: effectivePrinting,
+                  dryingInstructions: effectiveDrying,
+                  storageInstructions: effectiveStorage,
+                  dryingSettings: dryingSettings,
+                  dryingDuration: dryingDuration,
+                ),
+              if (item.type != InventoryType.filament)
+                _DetailSection(
+                  icon: Icons.storefront_outlined,
+                  title: 'Vendor',
+                  text: item.vendor,
+                ),
+              if (item.type == InventoryType.filament &&
+                  item.filamentStatus == FilamentStatus.deployed)
+                _DetailSection(
+                  icon: Icons.precision_manufacturing_outlined,
+                  title: 'Deployment location',
+                  text: item.deploymentLocation,
+                ),
+              if (item.type == InventoryType.filament &&
+                  item.filamentStatus == FilamentStatus.drying)
+                _DetailSection(
+                  icon: Icons.timer_outlined,
+                  title: 'Drying time remaining',
+                  text: '${dryingMinutesRemaining(item)} minutes',
+                ),
+              if (item.type != InventoryType.filament &&
+                  item.type.supportsPrinting)
+                _DetailSection(
+                  icon: Icons.print_outlined,
+                  title: 'Printing instructions',
+                  text: item.printingInstructions,
+                ),
+              if (item.type == InventoryType.custom)
+                for (final field in item.customFieldValues.entries)
+                  _DetailSection(
+                    icon: Icons.tune_rounded,
+                    title: field.key,
+                    text: field.value.isEmpty ? 'Not configured' : field.value,
+                  ),
+              if (item.type != InventoryType.filament)
+                _DetailSection(
+                  icon: Icons.inventory_2_outlined,
+                  title: 'Storage',
+                  text: item.storageInstructions,
+                ),
+              if (item.productUrl.isNotEmpty)
+                _ProductSourceSection(url: item.productUrl),
+              const SizedBox(height: 24),
+              _DetailSection(
+                key: const Key('sidebar-added-to-inventory'),
+                icon: Icons.schedule_rounded,
+                title: 'Added to inventory',
+                text: _age(item.added),
+              ),
+              if (widget.canArchive) ...[
+                const Divider(height: 40),
+                const Text(
+                  'Inventory lifecycle',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Retired items remain in Archived so their QR code, history, and salvage potential are preserved.',
+                  style: const TextStyle(color: Color(0xff929aac), height: 1.4),
+                ),
+                const SizedBox(height: 14),
+                if (item.archived) ...[
+                  _ArchiveBadge(item: item),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    key: const Key('restore-item'),
+                    onPressed: () => _setArchiveDisposition(null),
+                    icon: const Icon(Icons.unarchive_outlined),
+                    label: const Text('Restore to inventory'),
+                  ),
+                ] else
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      if (widget.canMarkDepleted)
+                        OutlinedButton.icon(
+                          key: const Key('mark-depleted'),
+                          onPressed: () => _setArchiveDisposition(
+                            ArchiveDisposition.depleted,
+                          ),
+                          icon: const Icon(Icons.hourglass_empty_rounded),
+                          label: const Text('Mark depleted'),
+                        ),
+                      OutlinedButton.icon(
+                        key: const Key('mark-destroyed'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xffff6b6b),
+                        ),
+                        onPressed: () => _setArchiveDisposition(
+                          ArchiveDisposition.destroyed,
+                        ),
+                        icon: const Icon(Icons.broken_image_outlined),
+                        label: const Text('Mark destroyed'),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
+        if (desktopResizable)
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeLeftRight,
+              child: GestureDetector(
+                key: const Key('item-details-resize-handle'),
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragUpdate: (details) {
+                  final nextWidth = (panelWidth - details.delta.dx)
+                      .clamp(minimumWidth, maximumWidth)
+                      .toDouble();
+                  setState(() => panelWidth = nextWidth);
+                  widget.onWidthChanged?.call(nextWidth);
+                },
+                child: SizedBox(
+                  width: 16,
+                  child: Center(
+                    child: Container(
+                      width: 4,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary
+                            .withValues(alpha: .7),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  Widget _sidebarQrBlock() => Column(
+    key: const Key('sidebar-qr-block'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Container(
+        key: const Key('sidebar-qr-code'),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Center(
+          child: QrImageView(
+            data: 'inventorinator:item:${item.id}',
+            version: QrVersions.auto,
+            size: 180,
+            backgroundColor: Colors.white,
+            eyeStyle: const QrEyeStyle(
+              eyeShape: QrEyeShape.square,
+              color: Colors.black,
+            ),
+            dataModuleStyle: const QrDataModuleStyle(
+              dataModuleShape: QrDataModuleShape.square,
+              color: Colors.black,
             ),
           ),
         ),
       ),
-    );
-  }
+      const SizedBox(height: 10),
+      SelectableText(
+        item.id,
+        style: const TextStyle(
+          color: Color(0xff929aac),
+          fontFamily: 'monospace',
+        ),
+      ),
+      const SizedBox(height: 10),
+      FilledButton.icon(
+        key: const Key('download-qr'),
+        onPressed: () => _downloadQr(context, item),
+        icon: const Icon(Icons.download_rounded),
+        label: const Text('Download QR'),
+      ),
+    ],
+  );
 
   void _setDeployed(bool selected) {
     _commit(
@@ -42747,6 +45287,7 @@ class ItemContextRegion extends StatelessWidget {
     this.canArchive = true,
     this.canDelete = true,
     this.onSelect,
+    this.onBulkContextMenu,
     required this.child,
   });
   final InventoryItem item;
@@ -42757,13 +45298,20 @@ class ItemContextRegion extends StatelessWidget {
   final bool canArchive;
   final bool canDelete;
   final VoidCallback? onSelect;
+  final Future<void> Function(Offset position)? onBulkContextMenu;
   final Widget child;
 
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.translucent,
-    onSecondaryTapDown: (details) =>
-        _showActions(context, details.globalPosition),
+    onSecondaryTapDown: (details) {
+      final bulkContextMenu = onBulkContextMenu;
+      if (bulkContextMenu != null) {
+        unawaited(bulkContextMenu(details.globalPosition));
+      } else {
+        unawaited(_showActions(context, details.globalPosition));
+      }
+    },
     onLongPressStart: (details) {
       final touchPlatform =
           defaultTargetPlatform == TargetPlatform.android ||
@@ -42773,19 +45321,29 @@ class ItemContextRegion extends StatelessWidget {
         onSelect!();
         return;
       }
-      _showActions(context, details.globalPosition);
+      final bulkContextMenu = onBulkContextMenu;
+      if (bulkContextMenu != null) {
+        unawaited(bulkContextMenu(details.globalPosition));
+      } else {
+        unawaited(_showActions(context, details.globalPosition));
+      }
     },
     child: child,
   );
 
   Future<void> _showActions(BuildContext context, Offset position) async {
+    final menuRows =
+        (item.type == InventoryType.printedPart ? 1 : 0) +
+        (canEdit ? 2 : 0) +
+        (canCreate ? 1 : 0) +
+        (canArchive ? 1 : 0) +
+        (canDelete ? 1 : 0);
     final action = await showMenu<ItemAction>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx,
-        position.dy,
+      position: _cursorMenuPosition(
+        context,
+        position,
+        estimatedHeight: 16.0 + (menuRows * 52) + (canDelete ? 12 : 0),
       ),
       constraints: const BoxConstraints(minWidth: 230, maxWidth: 300),
       items: [
@@ -43011,6 +45569,7 @@ class _QuantityBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final technical = _isInventoryCraft(context);
     final lowStock = _isLowStock(item);
     final accent = lowStock ? const Color(0xffffa552) : _itemCardChromeColor;
     final light = Theme.of(context).brightness == Brightness.light;
@@ -43031,7 +45590,7 @@ class _QuantityBadge extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(12),
         border: Border.all(
           color: lowStock
               ? accent.withValues(alpha: .72)
@@ -43060,6 +45619,7 @@ class _QuantityBadge extends StatelessWidget {
               color: Colors.white,
               fontSize: compact ? 15 : 18,
               fontWeight: FontWeight.w900,
+              fontFamily: technical ? 'monospace' : null,
             ),
           ),
           if (lowStock && !compact) ...[
@@ -43233,20 +45793,31 @@ class _QuantityStepButtonState extends State<_QuantityStepButton> {
 }
 
 class _MaterialBadge extends StatelessWidget {
-  const _MaterialBadge({required this.item});
+  const _MaterialBadge({required this.item, this.compact = false});
 
   final InventoryItem item;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final inventoryCraft = _isInventoryCraft(context);
     return Container(
       key: Key('item-material-${item.id}'),
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 7 : 11,
+        vertical: compact ? 3 : 6,
+      ),
       decoration: BoxDecoration(
-        color: colors.primary.withValues(alpha: .12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colors.primary.withValues(alpha: .65)),
+        color: inventoryCraft
+            ? colors.tertiaryContainer.withValues(alpha: .48)
+            : colors.primary.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(_designRadius(context, 12)),
+        border: Border.all(
+          color: inventoryCraft
+              ? colors.tertiary.withValues(alpha: .72)
+              : colors.primary.withValues(alpha: .65),
+        ),
       ),
       child: Text(
         item.materialName,
@@ -43254,8 +45825,15 @@ class _MaterialBadge extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: colors.onSurface,
-          fontSize: 14,
-          fontWeight: FontWeight.w900,
+          // Material names are glanced at constantly. Keep the technical
+          // treatment in the frame, not in a cramped monospace label.
+          fontSize: compact
+              ? 10
+              : inventoryCraft
+              ? 13
+              : 14,
+          fontWeight: FontWeight.w800,
+          letterSpacing: inventoryCraft ? .1 : null,
         ),
       ),
     );
@@ -43322,6 +45900,16 @@ bool _hasMoistureVisualAlert(InventoryItem item, {DateTime? now}) {
   return item.moistureAlertEnabled &&
       item.moistureAlertThresholdMinutes != null &&
       remaining <= Duration(minutes: item.moistureAlertThresholdMinutes!);
+}
+
+@visibleForTesting
+Duration staggeredEffectDelay(String itemId, int intervalSeconds, int salt) {
+  if (intervalSeconds <= 0) return Duration.zero;
+  var hash = salt;
+  for (final codeUnit in itemId.codeUnits) {
+    hash = 0x1fffffff & (hash * 31 + codeUnit);
+  }
+  return Duration(milliseconds: hash % (intervalSeconds * 1000));
 }
 
 class RemoteQuantityChangeEffect extends StatefulWidget {
@@ -43473,6 +46061,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
     duration: _scaledAnimationDuration(1740, widget.durationPercent),
   );
   Timer? recurrenceTimer;
+  Timer? recurrenceStartTimer;
   ValueNotifier<bool>? scrollingNotifier;
   bool wasVisible = false;
 
@@ -43516,15 +46105,26 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
 
   void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
+    recurrenceStartTimer?.cancel();
     // Mounting a recycled sliver child is not a new alert. Starting an effect
     // here made every low-stock card animate as it entered the viewport.
     wasVisible = widget.active && !widget.playWhenFirstVisible;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
     if (widget.recurrenceSeconds > 0) {
-      recurrenceTimer = Timer.periodic(
-        Duration(seconds: widget.recurrenceSeconds),
-        (_) => _playIfVisible(),
+      // Starting every active card's timer together creates a brief but
+      // expensive full-grid redraw every recurrence interval. Spread those
+      // pulses across the interval, deterministically per item.
+      recurrenceStartTimer = Timer(
+        staggeredEffectDelay(widget.itemId, widget.recurrenceSeconds, 0x4c5350),
+        () {
+          if (!mounted || !widget.active) return;
+          _playIfVisible();
+          recurrenceTimer = Timer.periodic(
+            Duration(seconds: widget.recurrenceSeconds),
+            (_) => _playIfVisible(),
+          );
+        },
       );
     }
   }
@@ -43555,6 +46155,7 @@ class _LowStockPulseEffectState extends State<LowStockPulseEffect>
   @override
   void dispose() {
     scrollingNotifier?.removeListener(_handleScrollingChanged);
+    recurrenceStartTimer?.cancel();
     recurrenceTimer?.cancel();
     controller.dispose();
     super.dispose();
@@ -43653,6 +46254,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
     duration: _scaledAnimationDuration(2760, widget.durationPercent),
   );
   Timer? recurrenceTimer;
+  Timer? recurrenceStartTimer;
   ValueNotifier<bool>? scrollingNotifier;
   bool wasVisible = false;
 
@@ -43696,14 +46298,22 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
 
   void _restartVisibilityTracking() {
     recurrenceTimer?.cancel();
+    recurrenceStartTimer?.cancel();
     // Do not replay an old moisture alert just because scrolling remounted it.
     wasVisible = widget.active && !widget.playWhenFirstVisible;
     if (!widget.active) return;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkVisibility());
     if (widget.recurrenceSeconds > 0) {
-      recurrenceTimer = Timer.periodic(
-        Duration(seconds: widget.recurrenceSeconds),
-        (_) => _playIfVisible(),
+      recurrenceStartTimer = Timer(
+        staggeredEffectDelay(widget.itemId, widget.recurrenceSeconds, 0x4d4457),
+        () {
+          if (!mounted || !widget.active) return;
+          _playIfVisible();
+          recurrenceTimer = Timer.periodic(
+            Duration(seconds: widget.recurrenceSeconds),
+            (_) => _playIfVisible(),
+          );
+        },
       );
     }
   }
@@ -43734,6 +46344,7 @@ class _MoistureDropletWaveEffectState extends State<MoistureDropletWaveEffect>
   @override
   void dispose() {
     scrollingNotifier?.removeListener(_handleScrollingChanged);
+    recurrenceStartTimer?.cancel();
     recurrenceTimer?.cancel();
     controller.dispose();
     super.dispose();
@@ -44051,6 +46662,7 @@ class _PhotoInventoryCardContent extends StatelessWidget {
         .join('  •  ');
     return LayoutBuilder(
       builder: (context, constraints) {
+        final inventoryCraft = _isInventoryCraft(context);
         final compact =
             constraints.maxWidth < 220 || constraints.maxHeight < 250;
         return Stack(
@@ -44062,21 +46674,30 @@ class _PhotoInventoryCardContent extends StatelessWidget {
               imageKey: Key('photo-card-background-${item.id}'),
               scrolling: scrolling,
             ),
-            const DecoratedBox(
+            DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0x66080a10),
-                    Color(0x22080a10),
-                    Color(0xe60a0d14),
-                  ],
-                  stops: [0, .42, 1],
+                  colors: inventoryCraft
+                      ? const [
+                          Color(0x14080a10),
+                          Color(0x0a080a10),
+                          Color(0xbb0a0d14),
+                        ]
+                      : const [
+                          Color(0x66080a10),
+                          Color(0x22080a10),
+                          Color(0xe60a0d14),
+                        ],
+                  stops: const [0, .42, 1],
                 ),
               ),
             ),
             Padding(
+              // Theme selection must not alter the established photo-card
+              // composition. Keep the quantity, status, title, and material
+              // tag aligned exactly as they are in JellyStock.
               padding: EdgeInsets.all(compact ? 10 : 14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -44116,9 +46737,13 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                     padding: EdgeInsets.all(compact ? 9 : 12),
                     decoration: BoxDecoration(
                       color: colors.surface.withValues(alpha: .92),
-                      borderRadius: BorderRadius.circular(15),
+                      borderRadius: BorderRadius.circular(
+                        _designRadius(context, 15),
+                      ),
                       border: Border.all(
-                        color: colors.outlineVariant.withValues(alpha: .8),
+                        color: colors.outlineVariant.withValues(
+                          alpha: inventoryCraft ? .88 : .8,
+                        ),
                       ),
                     ),
                     child: Column(
@@ -44133,6 +46758,16 @@ class _PhotoInventoryCardContent extends StatelessWidget {
                           overlay: true,
                           compact: compact,
                         ),
+                        if (compact && item.materialName.isNotEmpty) ...[
+                          const SizedBox(height: 5),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 110),
+                              child: _MaterialBadge(item: item, compact: true),
+                            ),
+                          ),
+                        ],
                         if (!compact &&
                             (metadata.isNotEmpty ||
                                 _itemDisplayTags(item).isNotEmpty)) ...[
@@ -44285,6 +46920,107 @@ class _CardPhotoBackground extends StatelessWidget {
   }
 }
 
+/// Flat editorial record card for InventoryCraft's Build, Kit, and Machine
+/// entries. These are work records, not consumer product cards, so they use
+/// a divided information block rather than a product-photo composition.
+class _InventoryCraftCatalogRecordContent extends StatelessWidget {
+  const _InventoryCraftCatalogRecordContent({
+    required this.category,
+    required this.title,
+    required this.subtitle,
+    required this.detail,
+    required this.accent,
+    required this.icon,
+  });
+
+  final String category;
+  final String title;
+  final String subtitle;
+  final String detail;
+  final Color accent;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact = constraints.maxWidth < 220 || constraints.maxHeight < 250;
+      return DecoratedBox(
+        decoration: BoxDecoration(color: Theme.of(context).colorScheme.surface),
+        child: Padding(
+          padding: EdgeInsets.all(compact ? 12 : 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    category,
+                    style: TextStyle(
+                      color: accent,
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .9,
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(icon, size: compact ? 16 : 18, color: accent),
+                ],
+              ),
+              const SizedBox(height: 9),
+              Divider(color: Theme.of(context).colorScheme.outlineVariant),
+              const SizedBox(height: 9),
+              Text(
+                title,
+                maxLines: compact ? 2 : 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: compact ? 15 : 17,
+                  height: 1.1,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                subtitle,
+                maxLines: compact ? 2 : 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                  fontSize: compact ? 10 : 11,
+                  height: 1.25,
+                ),
+              ),
+              if (!compact && detail.isNotEmpty) ...[
+                const SizedBox(height: 7),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    letterSpacing: .25,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 9),
+              SizedBox(
+                width: compact ? 28 : 42,
+                height: 2,
+                child: ColoredBox(color: accent),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
 class _PhotoCatalogCardContent extends StatelessWidget {
   const _PhotoCatalogCardContent({
     super.key,
@@ -44338,7 +47074,9 @@ class _PhotoCatalogCardContent extends StatelessWidget {
                   padding: EdgeInsets.all(compact ? 9 : 12),
                   decoration: BoxDecoration(
                     color: const Color(0xe60a0d14),
-                    borderRadius: BorderRadius.circular(15),
+                    borderRadius: _isInventoryCraft(context)
+                        ? BorderRadius.zero
+                        : BorderRadius.circular(15),
                     border: Border.all(
                       color: Colors.white.withValues(alpha: .18),
                     ),
@@ -44423,7 +47161,7 @@ class _ScrollingInventoryCard extends StatelessWidget {
         : null,
     shape: selected
         ? RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(_designRadius(context, 22)),
             side: BorderSide(
               color: Theme.of(context).colorScheme.primary,
               width: 2,
@@ -44462,6 +47200,7 @@ class InventoryCard extends StatelessWidget {
     this.onQuantityChanged,
     this.onStatusPressed,
     this.onSelect,
+    this.onBulkContextMenu,
     this.selected = false,
     this.typeLabel,
     this.typeIcon,
@@ -44491,6 +47230,7 @@ class InventoryCard extends StatelessWidget {
   final ValueChanged<double>? onQuantityChanged;
   final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
+  final Future<void> Function(Offset position)? onBulkContextMenu;
   final bool selected;
   final String? typeLabel;
   final IconData? typeIcon;
@@ -44523,6 +47263,7 @@ class InventoryCard extends StatelessWidget {
     canArchive: canArchive,
     canDelete: canDelete,
     onSelect: onSelect,
+    onBulkContextMenu: onBulkContextMenu,
     child: _ScrollingInventoryCard(
       itemId: item.id,
       selected: selected,
@@ -44571,6 +47312,10 @@ class InventoryCard extends StatelessWidget {
                     : LayoutBuilder(
                         builder: (context, constraints) {
                           final compact = constraints.maxWidth < 220;
+                          final hasCardVisual =
+                              item.thumbnailBytes != null ||
+                              item.imageBytes != null ||
+                              _itemHasColorIndicator(item);
                           return Padding(
                             padding: EdgeInsets.all(compact ? 12 : 18),
                             child: Column(
@@ -44618,17 +47363,20 @@ class InventoryCard extends StatelessWidget {
                                   width: double.infinity,
                                   child: Row(
                                     children: [
-                                      _ItemVisual(
-                                        item: item,
-                                        size: compact ? 32 : 38,
-                                        typeIcon: typeIcon,
-                                        typeIconImageBytes: typeIconImageBytes,
-                                      ),
+                                      if (hasCardVisual)
+                                        _ItemVisual(
+                                          item: item,
+                                          size: compact ? 32 : 38,
+                                          typeIcon: typeIcon,
+                                          typeIconImageBytes:
+                                              typeIconImageBytes,
+                                        ),
                                       // A gradient has one name, shown inline just
                                       // like a regular color name. Coextruded has
                                       // one name per strand, so those only surface
                                       // on hover (see _ItemVisual's tooltip).
-                                      if (!compact &&
+                                      if (hasCardVisual &&
+                                          !compact &&
                                           _itemCoextrudedColors(item) == null &&
                                           (item.itemColorLabel.isNotEmpty ||
                                               _itemGradientName(item)
@@ -44748,29 +47496,20 @@ class _CardNameAndType extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 3),
-      Row(
+      Align(
         key: Key('item-type-row-${item.id}'),
-        children: [
-          _TypeBadgeIcon(
-            icon: typeIcon,
-            imageBytes: typeIconImageBytes,
-            size: 14,
+        alignment: Alignment.centerLeft,
+        child: Text(
+          typeLabel.toUpperCase(),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: _itemCardChromeColor,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
           ),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              typeLabel.toUpperCase(),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: _itemCardChromeColor,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.1,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     ],
   );
@@ -44833,6 +47572,7 @@ class InventoryRow extends StatelessWidget {
     this.onQuantityChanged,
     this.onStatusPressed,
     this.onSelect,
+    this.onBulkContextMenu,
     this.selected = false,
     this.typeLabel,
     this.typeIcon,
@@ -44860,6 +47600,7 @@ class InventoryRow extends StatelessWidget {
   final ValueChanged<double>? onQuantityChanged;
   final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
+  final Future<void> Function(Offset position)? onBulkContextMenu;
   final bool selected;
   final String? typeLabel;
   final IconData? typeIcon;
@@ -45073,6 +47814,7 @@ class InventoryRow extends StatelessWidget {
     canArchive: canArchive,
     canDelete: canDelete,
     onSelect: onSelect,
+    onBulkContextMenu: onBulkContextMenu,
     child: Card(
       key: Key('inventory-row-${item.id}'),
       color: selected
@@ -45080,7 +47822,7 @@ class InventoryRow extends StatelessWidget {
           : null,
       shape: selected
           ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(_designRadius(context, 22)),
               side: BorderSide(
                 color: Theme.of(context).colorScheme.primary,
                 width: 2,
@@ -45088,7 +47830,7 @@ class InventoryRow extends StatelessWidget {
             )
           : null,
       child: InkWell(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(_designRadius(context, 22)),
         onTap: onOpen,
         hoverColor: Theme.of(context).colorScheme.primary
             .withValues(alpha: .28),
@@ -45513,7 +48255,30 @@ class CountdownRing extends StatelessWidget {
       excludeSemantics: true,
       child: Tooltip(
         message: statusLabel,
-        child: display == MachineTimerDisplay.pill
+        child: _isInventoryCraft(context)
+            ? _InventoryCraftStatusTile(
+                color: statusColor,
+                icon: active
+                    ? Icons.local_fire_department_rounded
+                    : queued
+                    ? Icons.water_drop_rounded
+                    : deployed
+                    ? Icons.lock_outline_rounded
+                    : lowStock
+                    ? Icons.warning_amber_rounded
+                    : Icons.check_rounded,
+                label: active
+                    ? '${remaining}M'
+                    : queued
+                    ? 'WET'
+                    : deployed
+                    ? 'LOCK'
+                    : lowStock
+                    ? 'LOW'
+                    : 'READY',
+                compact: compact,
+              )
+            : display == MachineTimerDisplay.pill
             ? _InventoryTimerPill(
                 color: statusColor,
                 icon: active
@@ -45627,6 +48392,70 @@ class CountdownRing extends StatelessWidget {
   }
 }
 
+/// A compact editorial status tile for InventoryCraft. It keeps the familiar
+/// icon/label information but uses the same sharp framed language as the
+/// ArtCraft launcher instead of a glowing circular badge.
+class _InventoryCraftStatusTile extends StatelessWidget {
+  const _InventoryCraftStatusTile({
+    required this.color,
+    required this.icon,
+    required this.label,
+    required this.compact,
+  });
+
+  final Color color;
+  final IconData icon;
+  final String label;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    // Keep the technical status marker present without letting it compete with
+    // the item image and quantity controls. This is 70% of the prior tile.
+    final size = compact ? 31.0 : 41.0;
+    return SizedBox.square(
+      dimension: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: .92),
+          border: Border.all(color: color.withValues(alpha: .78)),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              right: 0,
+              child: ColoredBox(color: color, child: SizedBox(height: 1.4)),
+            ),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: color, size: compact ? 11 : 13),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: TextStyle(
+                      color: color,
+                      fontFamily: 'monospace',
+                      fontSize: compact ? 5 : 6,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _InventoryTimerPill extends StatelessWidget {
   const _InventoryTimerPill({
     required this.color,
@@ -45639,34 +48468,40 @@ class _InventoryTimerPill extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: _themeCanvas(context).withValues(alpha: .92),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: color.withValues(alpha: .86)),
-      boxShadow: [
-        BoxShadow(color: color.withValues(alpha: .24), blurRadius: 10),
-      ],
-    ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 15),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
+  Widget build(BuildContext context) {
+    final technical = _isInventoryCraft(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: technical
+            ? Theme.of(context).colorScheme.surface.withValues(alpha: .96)
+            : _themeCanvas(context).withValues(alpha: .92),
+        borderRadius: BorderRadius.circular(technical ? 2 : 999),
+        border: Border.all(color: color.withValues(alpha: .86)),
+        boxShadow: technical
+            ? const []
+            : [BoxShadow(color: color.withValues(alpha: .24), blurRadius: 10)],
       ),
-    ),
-  );
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 15),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                fontFamily: technical ? 'monospace' : null,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _StatusRingPainter extends CustomPainter {

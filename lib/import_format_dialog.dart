@@ -47,10 +47,23 @@ String inventoryImportFieldHelp(
     'true or false (yes/no and 1/0 also work). Blank: false.',
 };
 
-class ImportFormatDialog extends StatelessWidget {
+class ImportFileChoice {
+  const ImportFileChoice({required this.importAsKit});
+
+  final bool importAsKit;
+}
+
+class ImportFormatDialog extends StatefulWidget {
   const ImportFormatDialog({super.key, this.chooseFile = false});
 
   final bool chooseFile;
+
+  @override
+  State<ImportFormatDialog> createState() => _ImportFormatDialogState();
+}
+
+class _ImportFormatDialogState extends State<ImportFormatDialog> {
+  var _importAsKit = false;
 
   Widget _example(BuildContext context, String label, String example) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -93,51 +106,103 @@ class ImportFormatDialog extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Only Name is required. All other fields are optional. Files must be 10 MB or smaller. You can review and correct items before importing.',
-          ),
-          const SizedBox(height: 16),
-          for (final field in [
-            InventorySpreadsheetField.name,
-            InventorySpreadsheetField.type,
-            InventorySpreadsheetField.quantity,
-            InventorySpreadsheetField.cost,
-          ])
-            _field(field),
-          const Text(
-            'CSV / XLSX',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          const Text(
-            'Start with a header row, then one item per row. Columns can be in any order; you will match them before importing. XLSX uses the first worksheet. For CSV, quote values containing commas, quotes or line breaks; double any quotes inside a quoted value.',
-          ),
-          _example(context, 'CSV', inventoryImportCsvExample),
-          const Text('JSON', style: TextStyle(fontWeight: FontWeight.bold)),
-          const Text(
-            'Use a list of items as shown below, or an object with an "items" list. Use the field keys shown in this guide. Extra fields are ignored.',
-          ),
-          _example(context, 'JSON', inventoryImportJsonExample),
-          ExpansionTile(
-            title: const Text('All supported columns'),
-            tilePadding: EdgeInsets.zero,
-            children: [
-              for (final field in InventorySpreadsheetField.values)
-                Align(alignment: Alignment.centerLeft, child: _field(field)),
-            ],
+          if (widget.chooseFile)
+            SwitchListTile.adaptive(
+              key: const Key('import-as-kit-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Import as kit'),
+              value: _importAsKit,
+              onChanged: (value) => setState(() => _importAsKit = value),
+            ),
+          Container(
+            margin: EdgeInsets.only(top: widget.chooseFile ? 8 : 0),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline
+                    .withValues(alpha: .45),
+              ),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: ExpansionTile(
+              key: const Key('import-instructions'),
+              title: Text(
+                _importAsKit
+                    ? 'Kit package instructions'
+                    : 'Import instructions',
+              ),
+              subtitle: Text(
+                _importAsKit
+                    ? 'Kit BOM and stock behavior'
+                    : 'File formats and fields',
+              ),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              children: [
+                if (_importAsKit)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Choose a .json Inventorinator kit package. You will review its BOM and inventory matches before anything is added. New inventory records begin at zero.',
+                    ),
+                  )
+                else ...[
+                  const Text(
+                    'Only Name is required. All other fields are optional. Files must be 10 MB or smaller. You can review and correct items before importing.',
+                  ),
+                  const SizedBox(height: 16),
+                  for (final field in [
+                    InventorySpreadsheetField.name,
+                    InventorySpreadsheetField.type,
+                    InventorySpreadsheetField.quantity,
+                    InventorySpreadsheetField.cost,
+                  ])
+                    _field(field),
+                  const Text(
+                    'CSV / XLSX',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const Text(
+                    'Start with a header row, then one item per row. Columns can be in any order; you will match them before importing. XLSX uses the first worksheet. For CSV, quote values containing commas, quotes or line breaks; double any quotes inside a quoted value.',
+                  ),
+                  _example(context, 'CSV', inventoryImportCsvExample),
+                  const Text(
+                    'JSON',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const Text(
+                    'Use a list of items as shown below, or an object with an "items" list. Use the field keys shown in this guide. Extra fields are ignored.',
+                  ),
+                  _example(context, 'JSON', inventoryImportJsonExample),
+                  ExpansionTile(
+                    title: const Text('All supported columns'),
+                    tilePadding: EdgeInsets.zero,
+                    children: [
+                      for (final field in InventorySpreadsheetField.values)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: _field(field),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ),
     ),
     actions: [
       TextButton(
-        onPressed: () => Navigator.pop(context, false),
-        child: Text(chooseFile ? 'Cancel' : 'Close'),
+        onPressed: () => Navigator.pop(context),
+        child: Text(widget.chooseFile ? 'Cancel' : 'Close'),
       ),
-      if (chooseFile)
+      if (widget.chooseFile)
         FilledButton.icon(
-          onPressed: () => Navigator.pop(context, true),
+          onPressed: () => Navigator.pop(
+            context,
+            ImportFileChoice(importAsKit: _importAsKit),
+          ),
           icon: const Icon(Icons.folder_open_outlined),
-          label: const Text('Choose file…'),
+          label: Text(_importAsKit ? 'Choose kit file…' : 'Choose file…'),
         ),
     ],
   );

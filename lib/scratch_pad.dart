@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:markdown_editor_live/markdown_editor_live.dart';
 
+import 'visual_effect_preferences.dart';
+
 const scratchPadNotesPreferenceKey = 'scratch_pad_notes_v1';
 
 Map<String, int> decodeScratchPadOwnerRevisions(String raw) {
@@ -1107,6 +1109,7 @@ class _ScratchPadHoverActionStrip extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(15),
         child: BackdropFilter(
+          enabled: blurEffectsEnabled,
           filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
           child: DecoratedBox(
             decoration: BoxDecoration(

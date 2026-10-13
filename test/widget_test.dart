@@ -338,7 +338,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNWidgets(2));
     expect(
-      requestedPaths.any((path) => path.endsWith('register_inventorinator_device')),
+      requestedPaths.any(
+        (path) => path.endsWith('register_inventorinator_device'),
+      ),
       isFalse,
     );
     expect(
@@ -2873,7 +2875,6 @@ Bed Temperature: 80°C
       ),
     );
     await tester.pumpAndSettle();
-
     await tester.drag(
       find.byKey(const Key('card-size-slider')),
       const Offset(-500, 0),
@@ -3459,7 +3460,7 @@ Bed Temperature: 80°C
       database.loadBoolPreference('alert_sounds_enabled', fallback: true),
       isFalse,
     );
-    expect(find.byKey(const Key('all-alert-sounds-muted')), findsOneWidget);
+    expect(find.byKey(const Key('all-alert-sounds-muted')), findsNothing);
 
     for (final key in const [
       'sync-chime-personalization',
@@ -4123,6 +4124,33 @@ Bed Temperature: 80°C
     },
   );
 
+  test('card alert recurrence is stable and staggered by item', () {
+    const interval = 5;
+    final delays = [
+      staggeredEffectDelay('CARD-EFFECT-A', interval, 0x4c5350),
+      staggeredEffectDelay('CARD-EFFECT-B', interval, 0x4c5350),
+      staggeredEffectDelay('CARD-EFFECT-C', interval, 0x4c5350),
+    ];
+
+    expect(
+      staggeredEffectDelay('CARD-EFFECT-A', interval, 0x4c5350),
+      delays.first,
+      reason: 'A card must keep its phase across rebuilds.',
+    );
+    expect(
+      delays.map((delay) => delay.inMilliseconds).toSet(),
+      hasLength(3),
+      reason: 'Active cards must not redraw together on the recurrence beat.',
+    );
+    expect(
+      delays.every(
+        (delay) =>
+            delay >= Duration.zero && delay < const Duration(seconds: interval),
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('visible low-stock alerts recur on their configured timer', (
     tester,
   ) async {
@@ -4378,7 +4406,10 @@ Bed Temperature: 80°C
     );
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
 
-    final search = find.byKey(const Key('inventory-search'));
+    final search = find.byKey(
+      const Key('inventory-search'),
+      skipOffstage: false,
+    );
     await tester.enterText(search, 'Atomic Filament');
     await tester.pump();
     expect(find.text('Purple filament'), findsOneWidget);
@@ -5472,19 +5503,19 @@ Bed Temperature: 80°C
       );
 
       expect(find.byKey(const Key('type-filter-scroll')), findsNothing);
-      final panel = find.byKey(const Key('type-filter-panel'));
-      expect(panel, findsOneWidget);
+      final launcher = find.text('Types');
+      expect(launcher, findsOneWidget);
       expect(find.byKey(const Key('active-type-indicator')), findsNothing);
       expect(
         tester.getTopLeft(search).dy,
-        lessThan(tester.getTopLeft(panel).dy),
+        lessThan(tester.getTopLeft(launcher).dy),
       );
       final viewToggle = find.byKey(const Key('inventory-view-toggle'));
       expect(viewToggle, findsOneWidget);
       final finalType = find.widgetWithText(FilterChip, 'Silicone sock');
       expect(finalType.hitTestable(), findsNothing);
 
-      await tester.tap(find.text('Types'));
+      await tester.tap(launcher);
       await tester.pumpAndSettle();
       final everythingChip = find.byKey(const Key('type-filter-everything'));
       final typeGlass = tester
@@ -6317,6 +6348,43 @@ Bed Temperature: 80°C
     expect(position.pixels, closeTo(120, 1));
   });
 
+  testWidgets('collapsed desktop search stops its hidden glow painter', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
+
+    final search = find.byKey(const Key('inventory-search'));
+    CustomPaint edgePaint() => tester
+        .widgetList<CustomPaint>(
+          find.ancestor(of: search, matching: find.byType(CustomPaint)),
+        )
+        .first;
+    expect(edgePaint().foregroundPainter, isNotNull);
+
+    final view = find.byKey(const Key('inventory-scroll-view'));
+    final scrollable = find.descendant(
+      of: view,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
+    );
+    tester.state<ScrollableState>(scrollable).position.jumpTo(220);
+    await tester.pump();
+
+    expect(
+      edgePaint().foregroundPainter,
+      isNull,
+      reason:
+          'The collapsed main search must not keep repainting behind the '
+          'floating search.',
+    );
+  });
+
   testWidgets('desktop primary drag pans the inventory', (tester) async {
     tester.view.physicalSize = const Size(1200, 700);
     tester.view.devicePixelRatio = 1;
@@ -6578,6 +6646,76 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('bulk-delete')), findsOneWidget);
     expect(find.byKey(const Key('bulk-change-type')), findsOneWidget);
     debugDefaultTargetPlatformOverride = null;
+  });
+  testWidgets('bulk selector assigns every selected item to a saved location', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final state = encodeWorkshopState(
+      inventory: [
+        sampleInventory.first,
+        sampleInventory.firstWhere((item) => item.id == 'INV-NOZ-0001'),
+      ],
+      vendors: const [],
+      brands: const [],
+      products: const [],
+      locations: const [
+        StockLocationRecord(id: 'LOC-BENCH', name: 'Print bench'),
+      ],
+    );
+    await tester.pumpWidget(InventorinatorApp(persistedState: state));
+    await tester.pumpAndSettle();
+    Future<void> selectCard(String id) async {
+      final card = find.byKey(Key('inventory-card-$id'));
+      await tester.ensureVisible(card);
+      // The persistent action rail intentionally overlays the lower card edge.
+      // The selection result below verifies the gesture reached the card.
+      await tester.tap(card, warnIfMissed: false);
+    }
+
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, -150),
+    );
+    await tester.pumpAndSettle();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await selectCard('INV-FIL-0001');
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await selectCard('INV-NOZ-0001');
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('bulk-change-location')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('bulk-change-location-dialog')),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const Key('bulk-location-search')),
+      'print bench',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('bulk-location-LOC-BENCH')));
+    await tester.pumpAndSettle();
+
+    for (final id in const ['INV-FIL-0001', 'INV-NOZ-0001']) {
+      expect(
+        tester
+            .widget<InventoryCard>(
+              find.ancestor(
+                of: find.byKey(Key('inventory-card-$id')),
+                matching: find.byType(InventoryCard),
+              ),
+            )
+            .item
+            .storageLocationId,
+        'LOC-BENCH',
+      );
+    }
+    expect(find.byKey(const Key('bulk-edit-toolbar')), findsNothing);
   });
   testWidgets('bulk archive and delete apply to every selected item', (
     tester,
@@ -8208,9 +8346,7 @@ Bed Temperature: 80°C
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
 
-    final status = find.byKey(
-      const Key('inventory-card-timer-INV-FIL-0001'),
-    );
+    final status = find.byKey(const Key('inventory-card-timer-INV-FIL-0001'));
     await tester.ensureVisible(status);
     final statusButton = find.byKey(
       const Key('inventory-card-status-target-INV-FIL-0001'),
@@ -8222,7 +8358,10 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('card-status-ready')), findsOneWidget);
     expect(find.byKey(const Key('card-status-deployed')), findsOneWidget);
     expect(find.byKey(const Key('card-status-drying')), findsOneWidget);
-    expect(find.byKey(const Key('card-status-queuedForDrying')), findsOneWidget);
+    expect(
+      find.byKey(const Key('card-status-queuedForDrying')),
+      findsOneWidget,
+    );
   });
   testWidgets('status ring does not replay when remounted by scrolling', (
     tester,
@@ -8650,7 +8789,7 @@ Bed Temperature: 80°C
     expect(find.text('Edit item'), findsOneWidget);
     expect(find.byKey(const Key('save-item')), findsOneWidget);
   });
-  testWidgets('sidebar storage location opens its Stockroom location', (
+  testWidgets('sidebar storage location changes its saved Stockroom location', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 900);
@@ -8684,10 +8823,6 @@ Bed Temperature: 80°C
     final storageLocation = find.byKey(const Key('sidebar-storage-location'));
     await tester.ensureVisible(storageLocation);
     expect(
-      find.ancestor(of: storageLocation, matching: find.byType(Card)),
-      findsOneWidget,
-    );
-    expect(
       find.descendant(
         of: storageLocation,
         matching: find.byKey(const Key('sidebar-location-pin')),
@@ -8696,12 +8831,11 @@ Bed Temperature: 80°C
     );
     await tester.tap(storageLocation);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Workshop').last);
+    await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('location-details-LOC-DRY-BOX')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('location-item-INV-FIL-0001')), findsOneWidget);
+    expect(find.text('Workshop'), findsWidgets);
+    expect(find.text('Workshop / Dry box 1'), findsNothing);
   });
 
   testWidgets('Stockroom only lists opted-in child locations', (tester) async {
@@ -8738,7 +8872,10 @@ Bed Temperature: 80°C
 
     expect(find.byKey(const Key('location-LOC-RACK')), findsOneWidget);
     expect(find.byKey(const Key('location-LOC-HIDDEN-SHELF')), findsNothing);
-    expect(find.byKey(const Key('location-LOC-DISPLAYED-SHELF')), findsOneWidget);
+    expect(
+      find.byKey(const Key('location-LOC-DISPLAYED-SHELF')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('legacy location paths do not become duplicate root locations', (
@@ -10529,7 +10666,7 @@ Bed Temperature: 80°C
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('type-filter-panel')));
+    await tester.tap(find.text('Types'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(FilterChip, 'Assemblies'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilterChip, 'Assemblies'));

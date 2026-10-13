@@ -52,14 +52,14 @@ void main() {
           null,
         ),
       );
-      bool? result;
+      ImportFileChoice? result;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: Builder(
               builder: (context) => TextButton(
                 onPressed: () async {
-                  result = await showDialog<bool>(
+                  result = await showDialog<ImportFileChoice>(
                     context: context,
                     builder: (_) => const ImportFormatDialog(chooseFile: true),
                   );
@@ -72,6 +72,9 @@ void main() {
       );
       await tester.tap(find.text('Open guide'));
       await tester.pumpAndSettle();
+      expect(find.text(inventoryImportCsvExample), findsNothing);
+      await tester.tap(find.byKey(const Key('import-instructions')));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Copy CSV example'));
       await tester.tap(find.text('Copy CSV example'));
       await tester.pumpAndSettle();
@@ -83,7 +86,43 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.tap(find.text('Choose file…'));
       await tester.pumpAndSettle();
-      expect(result, isTrue);
+      expect(result?.importAsKit, isFalse);
     },
   );
+
+  testWidgets('choose-file prompt can switch to a kit import', (tester) async {
+    ImportFileChoice? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                result = await showDialog<ImportFileChoice>(
+                  context: context,
+                  builder: (_) => const ImportFormatDialog(chooseFile: true),
+                );
+              },
+              child: const Text('Open guide'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open guide'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('import-as-kit-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('import-instructions')));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose kit file…'), findsOneWidget);
+    expect(
+      find.textContaining('review its BOM and inventory matches'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Choose kit file…'));
+    await tester.pumpAndSettle();
+    expect(result?.importAsKit, isTrue);
+  });
 }

@@ -144,7 +144,8 @@ static NativeThemeColors native_theme_colors(const gchar* name) {
 }
 
 static void install_custom_frame_css(MyApplication* self,
-                                     const NativeThemeColors& colors) {
+                                     const NativeThemeColors& colors,
+                                     gboolean inventory_craft) {
   if (self->frame_css_provider != nullptr) {
     gtk_style_context_remove_provider_for_screen(
         gdk_screen_get_default(),
@@ -152,6 +153,14 @@ static void install_custom_frame_css(MyApplication* self,
     g_clear_object(&self->frame_css_provider);
   }
   self->frame_css_provider = gtk_css_provider_new();
+  const gchar* technical_overrides = inventory_craft
+      ? "#inventorinator-window-button, #inventorinator-close-button {"
+        " background-image: none; border-radius: 2px; box-shadow: none; }"
+        "#inventorinator-window-button:hover, #inventorinator-close-button:hover {"
+        " background-image: none; box-shadow: none; }"
+        "#inventorinator-window-button:active, #inventorinator-close-button:active {"
+        " background-image: none; box-shadow: none; }"
+      : "";
   g_autofree gchar* css = g_strdup_printf(
       "@define-color inventorinator_canvas %s;"
       "@define-color inventorinator_surface %s;"
@@ -198,10 +207,10 @@ static void install_custom_frame_css(MyApplication* self,
       " background-color: @inventorinator_container;"
       " background-image: linear-gradient(to bottom right, alpha(@inventorinator_container,0.78), alpha(@inventorinator_base,0.48));"
       " box-shadow: inset 0 2px 5px rgba(0,0,0,0.38);"
-      "}",
+      "}%s",
       colors.canvas, colors.surface, colors.base, colors.container,
       colors.flash, colors.flash_dark, colors.outline_variant, colors.rim,
-      colors.foreground, colors.foreground);
+      colors.foreground, colors.foreground, technical_overrides);
   gtk_css_provider_load_from_data(
       self->frame_css_provider, css, -1, nullptr);
   gtk_style_context_add_provider_for_screen(
@@ -240,11 +249,16 @@ static void theme_method_call_cb(FlMethodChannel* channel,
     return;
   }
   const gchar* theme_name = "darkPurple";
+  gboolean inventory_craft = FALSE;
   FlValue* args = fl_method_call_get_args(method_call);
   if (args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
     FlValue* theme = fl_value_lookup_string(args, "theme");
     if (theme != nullptr && fl_value_get_type(theme) == FL_VALUE_TYPE_STRING) {
       theme_name = fl_value_get_string(theme);
+    }
+    FlValue* design = fl_value_lookup_string(args, "design");
+    if (design != nullptr && fl_value_get_type(design) == FL_VALUE_TYPE_STRING) {
+      inventory_craft = g_strcmp0(fl_value_get_string(design), "inventoryCraft") == 0;
     }
   }
   NativeThemeColors colors = native_theme_colors(theme_name);
@@ -266,7 +280,7 @@ static void theme_method_call_cb(FlMethodChannel* channel,
     READ_THEME_COLOR("foreground", foreground);
 #undef READ_THEME_COLOR
   }
-  install_custom_frame_css(self, colors);
+  install_custom_frame_css(self, colors, inventory_craft);
   if (self->resize_outline != nullptr) {
     gtk_widget_queue_draw(self->resize_outline);
   }
@@ -736,7 +750,7 @@ static void my_application_activate(GApplication* application) {
 #endif
   if (use_custom_x11_frame) {
     gtk_window_set_decorated(window, FALSE);
-    install_custom_frame_css(self, native_theme_colors("darkPurple"));
+    install_custom_frame_css(self, native_theme_colors("darkPurple"), FALSE);
   } else if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));

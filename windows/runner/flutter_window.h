@@ -35,6 +35,8 @@ class FlutterWindow : public Win32Window {
       audio_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       xreal_r1_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      native_theme_channel_;
   std::unique_ptr<XrealR1Camera> xreal_r1_camera_;
 };
 

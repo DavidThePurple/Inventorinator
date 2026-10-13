@@ -5,6 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/kit_package.dart';
 
 void main() {
+  test('kit package documents are identifiable before generic import', () {
+    expect(
+      isInventorinatorKitPackageDocument(
+        jsonEncode({'format': inventorinatorKitPackageFormat}),
+      ),
+      isTrue,
+    );
+    expect(isInventorinatorKitPackageDocument('[{"name":"PLA"}]'), isFalse);
+  });
+
   test('example kit package validates and preserves its BOM structure', () {
     final source = File('examples/example.inventorinator-kit.json')
         .readAsStringSync();

@@ -3,6 +3,8 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include <algorithm>
+
 #include "resource.h"
 
 namespace {
@@ -25,6 +27,12 @@ constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 constexpr const wchar_t kGetPreferredBrightnessRegKey[] =
   L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme";
+constexpr int kTitleBarLogicalHeight = 40;
+constexpr int kTitleBarLogicalControlWidth = 40;
+constexpr int kTitleBarLogicalMargin = 4;
+constexpr int kTitleBarControlMinimize = 1;
+constexpr int kTitleBarControlMaximize = 2;
+constexpr int kTitleBarControlClose = 3;
 
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
@@ -135,7 +143,8 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(),
+      WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -179,6 +188,78 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_NCHITTEST: {
+      POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ScreenToClient(hwnd, &point);
+      RECT frame;
+      GetClientRect(hwnd, &frame);
+      const int border = ResizeBorderWidth();
+      if (!IsZoomed(hwnd)) {
+        const bool left = point.x < border;
+        const bool right = point.x >= frame.right - border;
+        const bool top = point.y < border;
+        const bool bottom = point.y >= frame.bottom - border;
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+      }
+      if (TitleBarControlAt(point) != 0) return HTCLIENT;
+      return point.y < TitleBarHeight() ? HTCAPTION : HTCLIENT;
+    }
+    case WM_LBUTTONUP: {
+      POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      switch (TitleBarControlAt(point)) {
+        case kTitleBarControlMinimize:
+          ShowWindow(hwnd, SW_MINIMIZE);
+          return 0;
+        case kTitleBarControlMaximize:
+          ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+          return 0;
+        case kTitleBarControlClose:
+          PostMessage(hwnd, WM_CLOSE, 0, 0);
+          return 0;
+      }
+      break;
+    }
+    case WM_LBUTTONDBLCLK: {
+      POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      if (point.y < TitleBarHeight() && TitleBarControlAt(point) == 0) {
+        ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        return 0;
+      }
+      break;
+    }
+    case WM_MOUSEMOVE: {
+      POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      const int control = TitleBarControlAt(point);
+      if (hovered_titlebar_control_ != control) {
+        hovered_titlebar_control_ = control;
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      TrackTitleBarMouse();
+      break;
+    }
+    case WM_MOUSELEAVE:
+      tracking_titlebar_mouse_ = false;
+      if (hovered_titlebar_control_ != 0) {
+        hovered_titlebar_control_ = 0;
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      break;
+    case WM_PAINT: {
+      PAINTSTRUCT paint;
+      HDC dc = BeginPaint(hwnd, &paint);
+      PaintCustomTitleBar(dc);
+      EndPaint(hwnd, &paint);
+      return 0;
+    }
+    case WM_ERASEBKGND:
+      return 1;
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
@@ -204,6 +285,7 @@ Win32Window::MessageHandler(HWND hwnd,
         MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
                    rect.bottom - rect.top, TRUE);
       }
+      InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     }
 
@@ -252,7 +334,118 @@ void Win32Window::SetChildContent(HWND content) {
 RECT Win32Window::GetClientArea() {
   RECT frame;
   GetClientRect(window_handle_, &frame);
+  frame.top = std::min(frame.bottom, TitleBarHeight());
   return frame;
+}
+
+void Win32Window::SetCustomFrameColors(COLORREF canvas, COLORREF surface,
+                                       COLORREF base, COLORREF container,
+                                       COLORREF outline, COLORREF rim,
+                                       COLORREF foreground,
+                                       bool inventory_craft) {
+  frame_canvas_ = canvas;
+  frame_surface_ = surface;
+  frame_base_ = base;
+  frame_container_ = container;
+  frame_outline_ = outline;
+  frame_rim_ = rim;
+  frame_foreground_ = foreground;
+  frame_inventory_craft_ = inventory_craft;
+  if (window_handle_ != nullptr) InvalidateRect(window_handle_, nullptr, FALSE);
+}
+
+int Win32Window::TitleBarHeight() const {
+  return MulDiv(kTitleBarLogicalHeight, GetDpiForWindow(window_handle_), 96);
+}
+
+int Win32Window::ResizeBorderWidth() const {
+  return std::max(6, MulDiv(6, GetDpiForWindow(window_handle_), 96));
+}
+
+int Win32Window::TitleBarControlAt(POINT point) const {
+  if (point.y < 0 || point.y >= TitleBarHeight()) return 0;
+  RECT frame;
+  GetClientRect(window_handle_, &frame);
+  const int width = MulDiv(kTitleBarLogicalControlWidth,
+                           GetDpiForWindow(window_handle_), 96);
+  const int margin = MulDiv(kTitleBarLogicalMargin,
+                            GetDpiForWindow(window_handle_), 96);
+  const int close_left = frame.right - margin - width;
+  if (point.x >= close_left && point.x < close_left + width) {
+    return kTitleBarControlClose;
+  }
+  if (point.x >= close_left - width && point.x < close_left) {
+    return kTitleBarControlMaximize;
+  }
+  if (point.x >= close_left - 2 * width && point.x < close_left - width) {
+    return kTitleBarControlMinimize;
+  }
+  return 0;
+}
+
+void Win32Window::TrackTitleBarMouse() {
+  if (tracking_titlebar_mouse_) return;
+  TRACKMOUSEEVENT event = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, window_handle_, 0};
+  if (TrackMouseEvent(&event)) tracking_titlebar_mouse_ = true;
+}
+
+void Win32Window::PaintCustomTitleBar(HDC dc) {
+  RECT frame;
+  GetClientRect(window_handle_, &frame);
+  const int height = TitleBarHeight();
+  RECT title = {0, 0, frame.right, height};
+  HBRUSH canvas = CreateSolidBrush(frame_canvas_);
+  FillRect(dc, &title, canvas);
+  DeleteObject(canvas);
+
+  const int width = MulDiv(kTitleBarLogicalControlWidth,
+                           GetDpiForWindow(window_handle_), 96);
+  const int margin = MulDiv(kTitleBarLogicalMargin,
+                            GetDpiForWindow(window_handle_), 96);
+  const int inset = MulDiv(5, GetDpiForWindow(window_handle_), 96);
+  const int close_left = frame.right - margin - width;
+  const int lefts[] = {close_left - 2 * width, close_left - width, close_left};
+  const int controls[] = {kTitleBarControlMinimize, kTitleBarControlMaximize,
+                          kTitleBarControlClose};
+  HPEN outline = CreatePen(PS_SOLID, 1, frame_outline_);
+  HPEN icon = CreatePen(PS_SOLID,
+                        std::max(1, MulDiv(2, GetDpiForWindow(window_handle_), 96)),
+                        frame_foreground_);
+  HGDIOBJ previous_pen = SelectObject(dc, outline);
+  HGDIOBJ previous_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+  for (int index = 0; index < 3; ++index) {
+    const bool hovered = controls[index] == hovered_titlebar_control_;
+    HBRUSH fill = CreateSolidBrush(hovered ? frame_base_ : frame_surface_);
+    HGDIOBJ previous_fill = SelectObject(dc, fill);
+    const int radius = MulDiv(frame_inventory_craft_ ? 2 : 10,
+                              GetDpiForWindow(window_handle_), 96);
+    RoundRect(dc, lefts[index] + inset / 2, inset,
+              lefts[index] + width - inset / 2, height - inset,
+              radius, radius);
+    SelectObject(dc, previous_fill);
+    DeleteObject(fill);
+    SelectObject(dc, icon);
+    const int center_x = lefts[index] + width / 2;
+    const int center_y = height / 2;
+    const int half = MulDiv(5, GetDpiForWindow(window_handle_), 96);
+    if (controls[index] == kTitleBarControlMinimize) {
+      MoveToEx(dc, center_x - half, center_y + half / 2, nullptr);
+      LineTo(dc, center_x + half, center_y + half / 2);
+    } else if (controls[index] == kTitleBarControlMaximize) {
+      Rectangle(dc, center_x - half, center_y - half, center_x + half,
+                center_y + half);
+    } else {
+      MoveToEx(dc, center_x - half, center_y - half, nullptr);
+      LineTo(dc, center_x + half, center_y + half);
+      MoveToEx(dc, center_x + half, center_y - half, nullptr);
+      LineTo(dc, center_x - half, center_y + half);
+    }
+    SelectObject(dc, outline);
+  }
+  SelectObject(dc, previous_brush);
+  SelectObject(dc, previous_pen);
+  DeleteObject(icon);
+  DeleteObject(outline);
 }
 
 HWND Win32Window::GetHandle() {

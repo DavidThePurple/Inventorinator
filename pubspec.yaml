@@ -95,6 +95,7 @@ flutter:
     - assets/audio/drying_complete.wav
     - assets/audio/moisture_alert.wav
     - assets/images/inventorinator-raygun-v2.png
+    - assets/images/supabase-logo.svg
     - assets/images/filamentcolors-logo.png
     - assets/images/digikey-logo.jpg
     - assets/images/digikey-logo-transparent.png

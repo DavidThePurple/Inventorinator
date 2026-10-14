@@ -797,8 +797,9 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   // JellyStock keeps its slower rim. InventoryCraft emits one short scan every
   // ten seconds instead of continuously animating the search field.
   static const _edgePaintInterval = Duration(milliseconds: 67);
+  static const _inventoryCraftScanFrameInterval = Duration(milliseconds: 16);
   static const _inventoryCraftScanInterval = Duration(seconds: 10);
-  static const _inventoryCraftScanDuration = Duration(milliseconds: 1200);
+  static const _inventoryCraftScanDuration = Duration(milliseconds: 1500);
   final ValueNotifier<double> _edgeProgress = ValueNotifier(0);
   final Stopwatch _edgeClock = Stopwatch();
   Timer? _edgeTimer;
@@ -855,25 +856,28 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
         ..reset()
         ..start();
       _edgeProgress.value = 0;
-      _edgeTimer = Timer.periodic(_edgePaintInterval, (_) {
-        if (_technical) {
-          final elapsed =
-              _edgeClock.elapsedMicroseconds %
-              _inventoryCraftScanInterval.inMicroseconds;
-          final visible = _isEffectWidgetVisible(context);
-          final nextProgress =
-              visible && elapsed < _inventoryCraftScanDuration.inMicroseconds
-              ? elapsed / _inventoryCraftScanDuration.inMicroseconds
-              : 1.0;
-          if (_edgeProgress.value != nextProgress) {
-            _edgeProgress.value = nextProgress;
+      _edgeTimer = Timer.periodic(
+        _technical ? _inventoryCraftScanFrameInterval : _edgePaintInterval,
+        (_) {
+          if (_technical) {
+            final elapsed =
+                _edgeClock.elapsedMicroseconds %
+                _inventoryCraftScanInterval.inMicroseconds;
+            final visible = _isEffectWidgetVisible(context);
+            final nextProgress =
+                visible && elapsed < _inventoryCraftScanDuration.inMicroseconds
+                ? elapsed / _inventoryCraftScanDuration.inMicroseconds
+                : 1.0;
+            if (_edgeProgress.value != nextProgress) {
+              _edgeProgress.value = nextProgress;
+            }
+            return;
           }
-          return;
-        }
-        const cycle = Duration(seconds: 11);
-        final elapsed = _edgeClock.elapsedMicroseconds % cycle.inMicroseconds;
-        _edgeProgress.value = elapsed / cycle.inMicroseconds;
-      });
+          const cycle = Duration(seconds: 11);
+          final elapsed = _edgeClock.elapsedMicroseconds % cycle.inMicroseconds;
+          _edgeProgress.value = elapsed / cycle.inMicroseconds;
+        },
+      );
     }
   }
 
@@ -1009,8 +1013,8 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   }
 }
 
-/// A low-cost ArtCraft-style scan: a crisp travelling segment, not a blurred
-/// neon halo. It only runs while the search is active.
+/// A restrained ArtCraft-style scan. It only runs while the search is idle,
+/// using a single anti-aliased accent stroke plus a small soft bloom.
 class _InventoryCraftSearchSweepPainter extends CustomPainter {
   const _InventoryCraftSearchSweepPainter({
     required this.progress,
@@ -1039,21 +1043,41 @@ class _InventoryCraftSearchSweepPainter extends CustomPainter {
     // popping at either edge. It loses intensity as it travels right.
     final center = (-.16 + progress * 1.32) * size.width;
     final fade = (1 - progress * .72).clamp(.18, 1.0).toDouble();
-    final scan = Paint()
-      ..strokeWidth = 1.5
+    final start = Offset(center - 27, size.height + 2);
+    final end = Offset(center + 27, -2);
+    final glow = Paint()
+      ..isAntiAlias = true
+      ..strokeWidth = 7
       ..strokeCap = StrokeCap.square
-      ..color = accent.withValues(alpha: .9 * fade);
+      ..color = accent.withValues(alpha: .42 * fade)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    final scan = Paint()
+      ..isAntiAlias = true
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.square
+      ..color = accent.withValues(alpha: .94 * fade);
     canvas.save();
     canvas.clipRect(rect);
-    for (var trail = 0; trail < 3; trail++) {
-      final offset = trail * 12.0;
-      scan.color = accent.withValues(alpha: (.9 * fade) / (trail + 1));
+    // A very light onion-skin tail gives the scanner a sense of motion without
+    // reverting to the old coarse, equally-weighted parallel streaks.
+    for (final ({double offset, double opacity}) layer in [
+      (offset: 7.0, opacity: .46),
+      (offset: 14.0, opacity: .24),
+      (offset: 21.0, opacity: .10),
+    ]) {
+      final tail = Paint()
+        ..isAntiAlias = true
+        ..strokeWidth = 1.15
+        ..strokeCap = StrokeCap.square
+        ..color = accent.withValues(alpha: layer.opacity * fade);
       canvas.drawLine(
-        Offset(center - 21 - offset, size.height - 1),
-        Offset(center + 21 - offset, 1),
-        scan,
+        Offset(start.dx - layer.offset, start.dy),
+        Offset(end.dx - layer.offset, end.dy),
+        tail,
       );
     }
+    canvas.drawLine(start, end, glow);
+    canvas.drawLine(start, end, scan);
     canvas.restore();
   }
 
@@ -7463,18 +7487,12 @@ class _RulerSliderThumbShape extends SliderComponentShape {
     );
     final accent = sliderTheme.activeTrackColor ?? const Color(0xff9f8aff);
     canvas.drawRect(
-      reader,
+      reader.inflate(2.5),
       Paint()
-        ..color = accent
-        ..strokeWidth = 2,
+        ..color = accent.withValues(alpha: .78)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
     );
-    canvas.drawRect(
-      reader.inflate(.5),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: .56),
-    );
+    canvas.drawRect(reader, Paint()..color = accent);
   }
 }
 
@@ -7565,6 +7583,9 @@ class _WallpaperBackdrop extends StatelessWidget {
 class _BackgroundOverlayPainter extends CustomPainter {
   const _BackgroundOverlayPainter({required this.overlay, required this.color});
 
+  static const _dotMatrixSpacing = 36.0;
+  static const _gridSpacing = _dotMatrixSpacing * 4;
+
   final BackgroundOverlay overlay;
   final Color color;
 
@@ -7577,18 +7598,16 @@ class _BackgroundOverlayPainter extends CustomPainter {
       case BackgroundOverlay.wallpaper:
         return;
       case BackgroundOverlay.grid:
-        const spacing = 36.0;
-        for (var x = 0.0; x <= size.width; x += spacing) {
+        for (var x = 0.0; x <= size.width; x += _gridSpacing) {
           canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
         }
-        for (var y = 0.0; y <= size.height; y += spacing) {
+        for (var y = 0.0; y <= size.height; y += _gridSpacing) {
           canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
         }
       case BackgroundOverlay.dotMatrix:
-        const spacing = 14.0;
         final dot = Paint()..color = color;
-        for (var x = 7.0; x <= size.width; x += spacing) {
-          for (var y = 7.0; y <= size.height; y += spacing) {
+        for (var x = 0.0; x <= size.width; x += _dotMatrixSpacing) {
+          for (var y = 0.0; y <= size.height; y += _dotMatrixSpacing) {
             canvas.drawCircle(Offset(x, y), 1, dot);
           }
         }
@@ -7619,7 +7638,9 @@ class _InventoryCraftScrollRuler extends StatelessWidget {
   void _scrollTo(double localY, double height) {
     if (!controller.hasClients || height <= 0) return;
     final position = controller.position;
-    if (position.maxScrollExtent <= 0) return;
+    if (!position.hasContentDimensions || position.maxScrollExtent <= 0) {
+      return;
+    }
     // The ruler is read bottom-to-top: pulling its marker down should move
     // toward the beginning of the inventory, matching the physical scale.
     final fraction = (1 - (localY / height)).clamp(0.0, 1.0);
@@ -7651,7 +7672,7 @@ class _InventoryCraftScrollRuler extends StatelessWidget {
                   end: Alignment.centerRight,
                   colors: [
                     palette.canvas.withValues(alpha: 0),
-                    palette.canvas.withValues(alpha: .58),
+                    palette.canvas.withValues(alpha: .46),
                     palette.surface.withValues(alpha: .90),
                   ],
                   stops: const [0, .28, 1],
@@ -7680,7 +7701,9 @@ class _InventoryCraftScrollRuler extends StatelessWidget {
                             ? controller.position
                             : null;
                         final fraction =
-                            position == null || position.maxScrollExtent <= 0
+                            position == null ||
+                                !position.hasContentDimensions ||
+                                position.maxScrollExtent <= 0
                             ? 0.0
                             : (position.pixels / position.maxScrollExtent)
                                   .clamp(0.0, 1.0);
@@ -7723,7 +7746,9 @@ class _InventoryCraftScrollRulerHitTarget extends StatelessWidget {
   void _scrollTo(double localY, double height) {
     if (!controller.hasClients || height <= 0) return;
     final position = controller.position;
-    if (position.maxScrollExtent <= 0) return;
+    if (!position.hasContentDimensions || position.maxScrollExtent <= 0) {
+      return;
+    }
     final fraction = (1 - (localY / height)).clamp(0.0, 1.0);
     position.jumpTo(fraction * position.maxScrollExtent);
   }
@@ -7854,9 +7879,19 @@ class _InventoryCraftScrollRulerPainter extends CustomPainter {
       }
     }
 
+    final readingLine = Offset(0, centerY);
+    final readingLineEnd = Offset(size.width, centerY);
     canvas.drawLine(
-      Offset(0, centerY),
-      Offset(size.width, centerY),
+      readingLine,
+      readingLineEnd,
+      Paint()
+        ..color = accent.withValues(alpha: .82)
+        ..strokeWidth = 4
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    canvas.drawLine(
+      readingLine,
+      readingLineEnd,
       Paint()
         ..color = accent
         ..strokeWidth = 2,
@@ -7892,6 +7927,101 @@ class _InventoryCraftScrollRulerPainter extends CustomPainter {
 }
 
 enum _GlassHoverPhase { rest, magenta, purple }
+
+/// A decorative pulse that is mounted in the root overlay, rather than the
+/// inventory tree. It cannot participate in layout, hit testing, or scrolling.
+class _IdleCursorLocator extends StatelessWidget {
+  const _IdleCursorLocator({required this.position, required this.scale});
+
+  final Offset position;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+    left: position.dx - 40,
+    top: position.dy - 40,
+    child: IgnorePointer(
+      child: Transform.scale(
+        scale: scale,
+        child: RepaintBoundary(
+          child: SizedBox.square(
+            dimension: 80,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 1250),
+              curve: Curves.easeOutCubic,
+              builder: (context, progress, _) => CustomPaint(
+                painter: _IdleCursorLocatorPainter(
+                  progress: progress,
+                  accent: Theme.of(context).colorScheme.primary,
+                  foreground: Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _IdleCursorLocatorPainter extends CustomPainter {
+  const _IdleCursorLocatorPainter({
+    required this.progress,
+    required this.accent,
+    required this.foreground,
+  });
+
+  final double progress;
+  final Color accent;
+  final Color foreground;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final pulsePaint = Paint()
+      ..color = accent.withValues(alpha: .72 * (1 - progress))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8;
+    final tickPaint = Paint()
+      ..color = accent.withValues(alpha: .9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2;
+    final glowPaint = Paint()
+      ..color = accent.withValues(alpha: .32)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    final radius = 20 + (17 * progress);
+    canvas.drawRect(
+      Rect.fromCenter(center: center, width: radius * 2, height: radius * 2),
+      pulsePaint,
+    );
+    const edge = 24.0;
+    const tick = 10.0;
+    for (final x in [-1.0, 1.0]) {
+      for (final y in [-1.0, 1.0]) {
+        final corner = Offset(center.dx + edge * x, center.dy + edge * y);
+        canvas.drawLine(
+          corner,
+          Offset(corner.dx - tick * x, corner.dy),
+          tickPaint,
+        );
+        canvas.drawLine(
+          corner,
+          Offset(corner.dx, corner.dy - tick * y),
+          tickPaint,
+        );
+      }
+    }
+    canvas.drawCircle(center, 4.2, glowPaint);
+    canvas.drawCircle(center, 2.1, Paint()..color = foreground);
+  }
+
+  @override
+  bool shouldRepaint(covariant _IdleCursorLocatorPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.accent != accent ||
+      oldDelegate.foreground != foreground;
+}
 
 /// Requests the host on-screen keyboard after a finger has focused an editor.
 ///
@@ -9037,6 +9167,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _mainSearchCollapseStartOffset = 120.0;
   static const _compactHeaderScrollThreshold = 220.0;
   Timer? _inventoryOverlayRestore;
+  Timer? _idleCursorTimer;
+  Offset? _lastIdleCursorPosition;
+  OverlayEntry? _idleCursorOverlay;
+  late double idleCursorScale;
   static const bool _profileScrollProbe = bool.fromEnvironment(
     'INVENTORINATOR_PROFILE_SCROLL_PROBE',
   );
@@ -9127,6 +9261,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_observeIdleCursor);
     _inventoryIsScrolling.addListener(_syncCountdownClockPause);
     if (kProfileMode && _profileScrollProbe) {
       WidgetsBinding.instance.addTimingsCallback(_recordProfileScrollTimings);
@@ -9435,6 +9570,17 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ) ??
                 _defaultInventoryDragGripSize)
             .clamp(_minimumInventoryDragGripSize, _maximumInventoryDragGripSize)
+            .toDouble();
+    idleCursorScale =
+        (double.tryParse(
+                  widget.database?.loadStringPreference(
+                        'idle_cursor_scale',
+                        fallback: '1.0',
+                      ) ??
+                      '1.0',
+                ) ??
+                1.0)
+            .clamp(1.0, 2.5)
             .toDouble();
     if (kProfileMode && _profileScrollProbe) {
       pageSizeIndex = _pageSizes.length - 1;
@@ -10036,6 +10182,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleInventoryShortcut);
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_observeIdleCursor);
+    _idleCursorTimer?.cancel();
+    _idleCursorOverlay?.remove();
     _wallpaperRotationTimer?.cancel();
     _syncDebounce?.cancel();
     _deferredAutoSync?.cancel();
@@ -12030,6 +12179,41 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
+  void _observeIdleCursor(PointerEvent event) {
+    if (!(Platform.isLinux || Platform.isWindows || Platform.isMacOS) ||
+        event.kind != PointerDeviceKind.mouse ||
+        (event is! PointerHoverEvent &&
+            event is! PointerMoveEvent &&
+            event is! PointerDownEvent &&
+            event is! PointerScrollEvent)) {
+      return;
+    }
+
+    _idleCursorTimer?.cancel();
+    _idleCursorOverlay?.remove();
+    _idleCursorOverlay = null;
+    _lastIdleCursorPosition = event.position;
+    _idleCursorTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (!mounted || _lastIdleCursorPosition == null) return;
+      final overlay = Overlay.of(context, rootOverlay: true);
+      final box = overlay.context.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) return;
+      final position = box.globalToLocal(_lastIdleCursorPosition!);
+      if (position.dx < 0 ||
+          position.dy < 0 ||
+          position.dx > box.size.width ||
+          position.dy > box.size.height) {
+        return;
+      }
+      final entry = OverlayEntry(
+        builder: (_) =>
+            _IdleCursorLocator(position: position, scale: idleCursorScale),
+      );
+      _idleCursorOverlay = entry;
+      overlay.insert(entry);
+    });
+  }
+
   void _handleInventoryPointerSignal(PointerSignalEvent event) {
     if (!Platform.isAndroid &&
         event is PointerScrollEvent &&
@@ -13836,8 +14020,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     _dismissGettingStartedReplayNudge();
     final overlay = Overlay.of(context, rootOverlay: true);
     final entry = OverlayEntry(
-      builder: (_) =>
-          OnboardingReplayNudge(onExpired: _dismissGettingStartedReplayNudge),
+      builder: (context) => OnboardingReplayNudge(
+        onExpired: _dismissGettingStartedReplayNudge,
+        inventoryCraft: _isInventoryCraft(context),
+      ),
     );
     _gettingStartedReplayNudge = entry;
     overlay.insert(entry);
@@ -18764,6 +18950,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       backgroundDotMatrixUsesAccent: backgroundDotMatrixUsesAccent,
       mainScrollbarWidth: mainScrollbarWidth,
       inventoryDragGripSize: inventoryDragGripSize,
+      idleCursorScale: idleCursorScale,
       customIconAnimationMode: customIconAnimationMode,
       colorTheme: widget.colorTheme,
       brightnessMode: widget.brightnessMode,
@@ -18920,6 +19107,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         widget.database?.saveStringPreference(
           'inventory_drag_grip_size',
           value.toStringAsFixed(1),
+        );
+      },
+      onIdleCursorScaleChanged: (value) {
+        setState(() => idleCursorScale = value);
+        widget.database?.saveStringPreference(
+          'idle_cursor_scale',
+          value.toStringAsFixed(2),
         );
       },
       onCustomIconAnimationModeChanged: (value) {
@@ -21095,6 +21289,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     var retryAfterRecovery = false;
     var syncSucceeded = false;
     var remoteSchemaNeedsMigration = false;
+    var remoteDatabaseReachable = false;
     // This revision belongs to the state at the start of this sync pass. Any
     // local edit after this point needs another pass, even if it lands while
     // we are waiting to apply or confirm remote changes.
@@ -21140,6 +21335,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         client: widget.supabaseHttpClient,
       );
       final installedSchema = await service.requireInventorySchema(session);
+      remoteDatabaseReachable = true;
       ServiceStatus.setSchemaVersion(statusKey, installedSchema);
       service.requireCurrentInventorySchema(installedSchema);
       try {
@@ -21562,7 +21758,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             ? ConnectionStateLed.limited
             : syncSucceeded
             ? ConnectionStateLed.connected
-            : ConnectionStateLed.failed,
+            : remoteDatabaseReachable
+            ? ConnectionStateLed.failed
+            : ConnectionStateLed.unchecked,
       );
       _syncing = false;
       final newerStateNeedsSync =
@@ -22503,8 +22701,12 @@ class _InventoryHomeState extends State<InventoryHome> {
         // search runs, so their lights sat grey; their status stays in
         // Remote Settings.
         final indicators = <Widget>[
-          if (config?.isConfigured == true)
-            ServiceStatusLed(name: 'Supabase', statusKey: 'Supabase:$scope'),
+          ServiceStatusLed(
+            name: 'Supabase',
+            statusKey: 'Supabase:$scope',
+            inventoryCraft: technical,
+            framed: !technical,
+          ),
         ];
         final horizontalPadding = narrow ? 12.0 : 20.0;
         // Keep the lights' right edge a gap clear of the scrollbar.
@@ -22521,7 +22723,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                 children: [
                   FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: _headerIdentity(compactLogo: technical),
+                    child: _headerIdentity(
+                      compactLogo: technical,
+                      framed: !technical,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   SizedBox(
@@ -22531,10 +22736,13 @@ class _InventoryHomeState extends State<InventoryHome> {
                     ),
                     child: Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Align(
                             alignment: Alignment.centerLeft,
-                            child: BuildCommitLabel(),
+                            child: BuildCommitLabel(
+                              inventoryCraft: technical,
+                              framed: !technical,
+                            ),
                           ),
                         ),
                         if (indicators.isNotEmpty)
@@ -22561,11 +22769,14 @@ class _InventoryHomeState extends State<InventoryHome> {
               )
             : Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Center(
                       child: FittedBox(
                         fit: BoxFit.scaleDown,
-                        child: BuildCommitLabel(),
+                        child: BuildCommitLabel(
+                          inventoryCraft: technical,
+                          framed: !technical,
+                        ),
                       ),
                     ),
                   ),
@@ -22580,7 +22791,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                     ),
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: _headerIdentity(compactLogo: technical),
+                      child: _headerIdentity(
+                        compactLogo: technical,
+                        framed: !technical,
+                      ),
                     ),
                   ),
                   Expanded(
@@ -22609,6 +22823,20 @@ class _InventoryHomeState extends State<InventoryHome> {
                   ),
                 ],
               );
+        final framedHeaderContent = technical
+            ? Container(
+                height: narrow ? null : 42,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface
+                      .withValues(alpha: .62),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                ),
+                child: headerContent,
+              )
+            : headerContent;
         return Padding(
           padding: EdgeInsets.fromLTRB(
             narrow ? 12 : 20,
@@ -22621,7 +22849,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           // remain against the right edge rather than following the logo width.
           child: SizedBox(
             width: math.max(0.0, constraints.maxWidth - 2 * horizontalPadding),
-            child: headerContent,
+            child: framedHeaderContent,
           ),
         );
       },
@@ -23286,54 +23514,85 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
-  Widget _headerIdentity({bool showText = true, bool compactLogo = false}) =>
-      Row(
-        key: const Key('app-title-block'),
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: compactLogo ? 58 : 75,
-            height: compactLogo ? 50 : 62,
-            child: Image.asset(
-              'assets/images/inventorinator-raygun-v2.png',
-              key: const Key('inventorinator-logo'),
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.high,
-            ),
+  Widget _headerIdentity({
+    bool showText = true,
+    bool compactLogo = false,
+    bool framed = true,
+  }) {
+    final technical = _isInventoryCraft(context);
+    final theme = Theme.of(context);
+    final content = Row(
+      key: const Key('app-title-block'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: technical
+              ? 40
+              : compactLogo
+              ? 58
+              : 75,
+          height: technical
+              ? 40
+              : compactLogo
+              ? 50
+              : 62,
+          child: Image.asset(
+            'assets/images/inventorinator-raygun-v2.png',
+            key: const Key('inventorinator-logo'),
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
           ),
-          if (showText) ...[
-            const SizedBox(width: 12),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'INVENTORINATOR',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.4,
-                    fontSize: 17,
-                  ),
+        ),
+        if (showText) ...[
+          SizedBox(width: technical ? 8 : 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'INVENTORINATOR',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: technical ? .7 : 1.4,
+                  fontSize: technical ? 15 : 17,
+                  fontFamily: technical ? 'monospace' : null,
                 ),
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(text: 'Take over '),
-                      TextSpan(
-                        text: 'the world',
-                        style: TextStyle(
-                          decoration: TextDecoration.lineThrough,
-                        ),
-                      ),
-                      TextSpan(text: ' the shop!'),
-                    ],
-                  ),
-                  style: TextStyle(color: Color(0xff8f96a7), fontSize: 12),
+              ),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(text: 'Take over '),
+                    TextSpan(
+                      text: 'the world',
+                      style: TextStyle(decoration: TextDecoration.lineThrough),
+                    ),
+                    TextSpan(text: ' the shop!'),
+                  ],
                 ),
-              ],
-            ),
-          ],
+                style: TextStyle(
+                  color: technical
+                      ? theme.colorScheme.onSurface.withValues(alpha: .66)
+                      : const Color(0xff8f96a7),
+                  fontSize: technical ? 11 : 12,
+                  fontFamily: technical ? 'monospace' : null,
+                  letterSpacing: technical ? .15 : null,
+                ),
+              ),
+            ],
+          ),
         ],
-      );
+      ],
+    );
+    if (!technical || !framed) return content;
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withValues(alpha: .62),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: content,
+    );
+  }
 
   Widget _compactHeaderActionStrip({required bool showOverflowHint}) =>
       LayoutBuilder(
@@ -27514,30 +27773,72 @@ class _InventoryHomeState extends State<InventoryHome> {
   );
 
   List<Widget> _centerHeaderActions() => [
-    SizedBox(
-      height: 48,
-      child: OutlinedButton.icon(
-        key: const Key('moisture-alerts'),
-        onPressed: _openMoistureAlerts,
-        icon: Badge.count(
-          count: _inventoryAlertCount,
-          isLabelVisible: _inventoryAlertCount > 0,
-          child: const Icon(Icons.notifications_outlined),
-        ),
-        label: const Text('Alerts'),
-      ),
-    ),
-    const SizedBox(width: 8),
-    SizedBox(
-      height: 48,
-      child: OutlinedButton.icon(
-        key: const Key('addition-history'),
-        onPressed: _openAdditionHistory,
-        icon: const Icon(Icons.new_releases_outlined),
-        label: const Text('New items'),
-      ),
-    ),
+    SizedBox(height: 48, child: _headerActionGroup()),
   ];
+
+  /// The labelled actions use the same joined surface as the icon toolbar,
+  /// rather than falling back to the default OutlinedButton treatment.
+  Widget _headerActionGroup() => Material(
+    color: Theme.of(context).colorScheme.surface,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(_designRadius(context, 11)),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _headerActionGroupButton(
+          key: const Key('moisture-alerts'),
+          onPressed: _openMoistureAlerts,
+          icon: Badge.count(
+            count: _inventoryAlertCount,
+            isLabelVisible: _inventoryAlertCount > 0,
+            child: const Icon(Icons.notifications_outlined, size: 18),
+          ),
+          label: 'Alerts',
+        ),
+        _configBlockDivider(),
+        _headerActionGroupButton(
+          key: const Key('addition-history'),
+          onPressed: _openAdditionHistory,
+          icon: const Icon(Icons.new_releases_outlined, size: 18),
+          label: 'New items',
+        ),
+      ],
+    ),
+  );
+
+  Widget _headerActionGroupButton({
+    required Key key,
+    required VoidCallback onPressed,
+    required Widget icon,
+    required String label,
+  }) {
+    Widget joinedGlassLayer(
+      BuildContext context,
+      Set<WidgetState> states,
+      Widget? child,
+    ) => _GlassButtonSurface(states: states, joined: true, child: child);
+
+    return TextButton.icon(
+      key: key,
+      onPressed: onPressed,
+      icon: icon,
+      label: Text(label),
+      style:
+          TextButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.onSurface,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            minimumSize: const Size(0, 48),
+            shape: const RoundedRectangleBorder(),
+          ).copyWith(
+            backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+            overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            backgroundBuilder: joinedGlassLayer,
+          ),
+    );
+  }
 
   List<Widget> _databaseHeaderActions() => [
     SizedBox(
@@ -28387,7 +28688,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _inventoryUtilityLauncher({
     required IconData icon,
     required String title,
-    required String summary,
+    String? summary,
     required VoidCallback onPressed,
   }) {
     final technical = _isInventoryCraft(context);
@@ -28421,12 +28722,16 @@ class _InventoryHomeState extends State<InventoryHome> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
-                  Text(
-                    summary,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _inventoryControlSummaryStyle(context, fontSize: 11),
-                  ),
+                  if (summary != null && summary.isNotEmpty)
+                    Text(
+                      summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _inventoryControlSummaryStyle(
+                        context,
+                        fontSize: 11,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -28437,7 +28742,6 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _inventoryUtilityLaunchers({Widget? leadingSearch}) {
-    final metrics = _inventoryMetrics;
     final orphanedItemCount = _unresolvedLocationGroups().fold<int>(
       0,
       (total, group) => total + group.items.length,
@@ -28465,8 +28769,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       _inventoryUtilityLauncher(
         icon: Icons.query_stats_rounded,
         title: 'Metrics',
-        summary:
-            '${_formatBomQuantity(metrics.filamentSpools)} filament spools · ${metrics.itemRecords} item records',
+        summary: '${_inventoryMetrics.itemRecords} item records',
         onPressed: () =>
             _openInventoryUtilityView(_metricsPanel(forceExpanded: true)),
       ),
@@ -28491,19 +28794,36 @@ class _InventoryHomeState extends State<InventoryHome> {
             ],
           );
         }
+        if (leadingSearch == null) {
+          return Row(
+            children: [
+              for (var index = 0; index < launchers.length; index++) ...[
+                Expanded(child: launchers[index]),
+                if (index < launchers.length - 1) const SizedBox(width: 8),
+              ],
+            ],
+          );
+        }
+        final searchWidth = constraints.maxWidth / 3;
+        // Preserve the existing, two-line launcher cards. Search gets the
+        // spare width; the cards have a readable, bounded desktop width.
+        final launcherWidth =
+            ((constraints.maxWidth - searchWidth - 12 - 24) / 4)
+                .clamp(176.0, 260.0)
+                .toDouble();
         return Row(
           children: [
-            if (leadingSearch != null) ...[
-              SizedBox(
-                width: math.min(320.0, constraints.maxWidth * .28),
-                child: leadingSearch,
+            SizedBox(width: searchWidth, child: leadingSearch),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  for (final launcher in launchers)
+                    SizedBox(width: launcherWidth, child: launcher),
+                ],
               ),
-              const SizedBox(width: 12),
-            ],
-            for (var index = 0; index < launchers.length; index++) ...[
-              Expanded(child: launchers[index]),
-              if (index < launchers.length - 1) const SizedBox(width: 8),
-            ],
+            ),
           ],
         );
       },
@@ -35495,6 +35815,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.backgroundDotMatrixUsesAccent,
     required this.mainScrollbarWidth,
     required this.inventoryDragGripSize,
+    required this.idleCursorScale,
     required this.customIconAnimationMode,
     required this.colorTheme,
     required this.brightnessMode,
@@ -35552,6 +35873,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onBackgroundDotMatrixUsesAccentChanged,
     required this.onMainScrollbarWidthChanged,
     required this.onInventoryDragGripSizeChanged,
+    required this.onIdleCursorScaleChanged,
     required this.onCustomIconAnimationModeChanged,
   });
   final int animationDurationPercent;
@@ -35566,6 +35888,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final bool backgroundDotMatrixUsesAccent;
   final double mainScrollbarWidth;
   final double inventoryDragGripSize;
+  final double idleCursorScale;
   final CustomIconAnimationMode customIconAnimationMode;
   final AppColorTheme colorTheme;
   final AppBrightnessMode brightnessMode;
@@ -35624,6 +35947,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<bool> onBackgroundDotMatrixUsesAccentChanged;
   final ValueChanged<double> onMainScrollbarWidthChanged;
   final ValueChanged<double> onInventoryDragGripSizeChanged;
+  final ValueChanged<double> onIdleCursorScaleChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
 
   final LocalDatabase? database;
@@ -35647,6 +35971,7 @@ class _PersonalizationSettingsDialogState
       widget.backgroundDotMatrixUsesAccent;
   late double mainScrollbarWidth = widget.mainScrollbarWidth;
   late double inventoryDragGripSize = widget.inventoryDragGripSize;
+  late double idleCursorScale = widget.idleCursorScale;
   late CustomIconAnimationMode customIconAnimationMode =
       widget.customIconAnimationMode;
   late AppColorTheme colorTheme = widget.colorTheme;
@@ -36477,6 +36802,23 @@ class _PersonalizationSettingsDialogState
                   onChanged: (value) {
                     setState(() => newItemGlowEnabled = value);
                     widget.onNewItemGlowChanged(value);
+                  },
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Idle cursor locator size · ${(idleCursorScale * 100).round()}%',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Slider(
+                  key: const Key('idle-cursor-scale'),
+                  value: idleCursorScale,
+                  min: 1,
+                  max: 2.5,
+                  divisions: 6,
+                  label: '${(idleCursorScale * 100).round()}%',
+                  onChanged: (value) {
+                    setState(() => idleCursorScale = value);
+                    widget.onIdleCursorScaleChanged(value);
                   },
                 ),
               ],
@@ -47727,6 +48069,7 @@ class InventoryRow extends StatelessWidget {
                     key: Key('inventory-row-timer-${item.id}'),
                     item: item,
                     compact: true,
+                    hamburgerView: true,
                   ),
                 ),
             ],
@@ -47795,6 +48138,7 @@ class InventoryRow extends StatelessWidget {
                     key: Key('inventory-row-timer-${item.id}'),
                     item: item,
                     compact: true,
+                    hamburgerView: true,
                   ),
                 ),
               ),
@@ -48164,9 +48508,15 @@ class _CardStatusButton extends StatelessWidget {
 }
 
 class CountdownRing extends StatelessWidget {
-  const CountdownRing({super.key, required this.item, this.compact = false});
+  const CountdownRing({
+    super.key,
+    required this.item,
+    this.compact = false,
+    this.hamburgerView = false,
+  });
   final InventoryItem item;
   final bool compact;
+  final bool hamburgerView;
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<DateTime>(
     valueListenable: countdownClock,
@@ -48277,6 +48627,7 @@ class CountdownRing extends StatelessWidget {
                     ? 'LOW'
                     : 'READY',
                 compact: compact,
+                hamburgerView: hamburgerView,
               )
             : display == MachineTimerDisplay.pill
             ? _InventoryTimerPill(
@@ -48401,18 +48752,24 @@ class _InventoryCraftStatusTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.compact,
+    required this.hamburgerView,
   });
 
   final Color color;
   final IconData icon;
   final String label;
   final bool compact;
+  final bool hamburgerView;
 
   @override
   Widget build(BuildContext context) {
-    // Keep the technical status marker present without letting it compete with
-    // the item image and quantity controls. This is 70% of the prior tile.
-    final size = compact ? 31.0 : 41.0;
+    // The list/hamburger layout has room beside the row controls, so make its
+    // status control deliberately more legible than the compact grid marker.
+    final size = hamburgerView
+        ? 46.5
+        : compact
+        ? 31.0
+        : 41.0;
     return SizedBox.square(
       dimension: size,
       child: DecoratedBox(
@@ -48432,7 +48789,15 @@ class _InventoryCraftStatusTile extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, color: color, size: compact ? 11 : 13),
+                  Icon(
+                    icon,
+                    color: color,
+                    size: hamburgerView
+                        ? 16
+                        : compact
+                        ? 11
+                        : 13,
+                  ),
                   const SizedBox(height: 2),
                   Text(
                     label,
@@ -48441,7 +48806,11 @@ class _InventoryCraftStatusTile extends StatelessWidget {
                     style: TextStyle(
                       color: color,
                       fontFamily: 'monospace',
-                      fontSize: compact ? 5 : 6,
+                      fontSize: hamburgerView
+                          ? 7
+                          : compact
+                          ? 5
+                          : 6,
                       fontWeight: FontWeight.w800,
                       letterSpacing: .35,
                     ),

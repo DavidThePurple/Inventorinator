@@ -18,9 +18,14 @@ class GettingStartedTourStep {
 }
 
 class OnboardingReplayNudge extends StatefulWidget {
-  const OnboardingReplayNudge({super.key, required this.onExpired});
+  const OnboardingReplayNudge({
+    super.key,
+    required this.onExpired,
+    this.inventoryCraft = false,
+  });
 
   final VoidCallback onExpired;
+  final bool inventoryCraft;
 
   @override
   State<OnboardingReplayNudge> createState() => _OnboardingReplayNudgeState();
@@ -36,7 +41,7 @@ class _OnboardingReplayNudgeState extends State<OnboardingReplayNudge> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => _visible = true);
     });
-    _dismissTimer = Timer(const Duration(seconds: 7), _dismiss);
+    _dismissTimer = Timer(const Duration(seconds: 12), _dismiss);
   }
 
   void _dismiss() {
@@ -54,8 +59,10 @@ class _OnboardingReplayNudgeState extends State<OnboardingReplayNudge> {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.sizeOf(context).height;
+    final theme = Theme.of(context);
+    final technical = widget.inventoryCraft;
     return Positioned(
-      right: 20,
+      right: technical ? 64 : 20,
       bottom: math.max(108, height * .30),
       child: AnimatedSlide(
         offset: _visible ? Offset.zero : const Offset(1.08, 0),
@@ -66,20 +73,25 @@ class _OnboardingReplayNudgeState extends State<OnboardingReplayNudge> {
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           child: Material(
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            color: technical
+                ? theme.colorScheme.surface.withValues(alpha: .94)
+                : theme.colorScheme.surfaceContainerHigh,
             elevation: 12,
-            shadowColor: Theme.of(context).colorScheme.primary
-                .withValues(alpha: .22),
+            shadowColor: theme.colorScheme.primary.withValues(
+              alpha: technical ? .12 : .22,
+            ),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(15),
+              borderRadius: BorderRadius.circular(technical ? 0 : 15),
               side: BorderSide(
-                color: Theme.of(context).colorScheme.outlineVariant,
+                color: technical
+                    ? theme.colorScheme.outline
+                    : theme.colorScheme.outlineVariant,
               ),
             ),
             clipBehavior: Clip.antiAlias,
             child: SizedBox(
-              width: 292,
-              height: 72,
+              width: technical ? 320 : 292,
+              height: technical ? 82 : 72,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 child: Row(
@@ -87,18 +99,44 @@ class _OnboardingReplayNudgeState extends State<OnboardingReplayNudge> {
                     Icon(
                       Icons.auto_awesome_outlined,
                       size: 19,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: theme.colorScheme.primary,
                     ),
                     const SizedBox(width: 10),
-                    const Expanded(
-                      child: Text(
-                        'You can restart the onboarding playthrough in the Personalization view.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          height: 1.22,
-                        ),
-                      ),
+                    Expanded(
+                      child: technical
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'GETTING STARTED',
+                                  style: TextStyle(
+                                    color: theme.colorScheme.primary,
+                                    fontFamily: 'monospace',
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                                const SizedBox(height: 5),
+                                const Text(
+                                  'Restart onboarding anytime in Personalization.',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.22,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : const Text(
+                              'You can restart the onboarding playthrough in the Personalization view.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                height: 1.22,
+                              ),
+                            ),
                     ),
                   ],
                 ),

@@ -53,56 +53,121 @@ class ServiceStatusLed extends StatelessWidget {
     super.key,
     required this.name,
     required this.statusKey,
+    this.inventoryCraft = false,
+    this.framed = true,
   });
   final String name, statusKey;
+  final bool inventoryCraft;
+  final bool framed;
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<int>(
     valueListenable: ServiceStatus.changes,
     builder: (context, _, child) {
       final state = ServiceStatus.read(statusKey);
       final (color, label) = switch (state) {
-        ConnectionStateLed.unchecked => (Colors.grey, 'Not checked'),
-        ConnectionStateLed.checking => (Colors.amber, 'Checking'),
+        ConnectionStateLed.unchecked => (
+          Colors.grey,
+          'Remote unavailable or not configured',
+        ),
+        ConnectionStateLed.checking => (Colors.grey, 'Checking Remote'),
         ConnectionStateLed.connected => (
           Colors.greenAccent,
-          'Last connection succeeded',
+          'Remote connected and syncing',
         ),
         ConnectionStateLed.limited => (
-          Colors.amber,
+          Colors.orange,
           ServiceStatus.compatibilityMessage(statusKey),
         ),
-        ConnectionStateLed.failed => (Colors.redAccent, 'Connection failed'),
+        ConnectionStateLed.failed => (
+          Colors.redAccent,
+          'Remote connection succeeded but sync failed',
+        ),
       };
+      final content = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 17,
+            height: 18,
+            child: CustomPaint(painter: _OfficialSupabaseMarkPainter(color)),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            name,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              fontFamily: inventoryCraft ? 'monospace' : null,
+              fontSize: inventoryCraft ? 12 : null,
+              letterSpacing: inventoryCraft ? .7 : null,
+            ),
+          ),
+        ],
+      );
+      final visual = inventoryCraft && framed
+          ? Container(
+              height: 40,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface
+                    .withValues(alpha: .62),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              child: content,
+            )
+          : content;
       return Tooltip(
         message: '$name: $label',
         child: Semantics(
           label: '$name: $label',
           excludeSemantics: true,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color,
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: .35),
-                      blurRadius: 5,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 7),
-              Text(name, style: Theme.of(context).textTheme.labelMedium),
-            ],
-          ),
+          child: visual,
         ),
       );
     },
   );
+}
+
+/// The exact official Supabase symbol, recolored only to communicate the
+/// connection state. The two paths are copied from the official SVG asset.
+class _OfficialSupabaseMarkPainter extends CustomPainter {
+  const _OfficialSupabaseMarkPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 109, size.height / 113);
+    final lower = Path()
+      ..moveTo(63.7076, 110.284)
+      ..cubicTo(60.8481, 113.885, 55.0502, 111.912, 54.9813, 107.314)
+      ..lineTo(53.9738, 40.0625)
+      ..lineTo(99.1935, 40.0625)
+      ..cubicTo(107.384, 40.0625, 111.952, 49.5226, 106.859, 55.9372)
+      ..lineTo(63.7076, 110.284)
+      ..close();
+    final upper = Path()
+      ..moveTo(45.317, 2.07103)
+      ..cubicTo(48.1765, -1.53037, 53.9745, 0.442937, 54.0434, 5.041)
+      ..lineTo(54.4849, 72.2922)
+      ..lineTo(9.83113, 72.2922)
+      ..cubicTo(1.64038, 72.2922, -2.92775, 62.8321, 2.1655, 56.4175)
+      ..lineTo(45.317, 2.07103)
+      ..close();
+    final glow = Paint()
+      ..color = color.withValues(alpha: .40)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+    canvas.drawPath(lower, glow);
+    canvas.drawPath(upper, glow);
+    canvas.drawPath(lower, Paint()..color = color);
+    canvas.drawPath(upper, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _OfficialSupabaseMarkPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class ServiceConnectionMessage extends StatelessWidget {

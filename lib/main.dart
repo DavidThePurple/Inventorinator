@@ -47657,7 +47657,8 @@ class InventoryCard extends StatelessWidget {
                           final hasCardVisual =
                               item.thumbnailBytes != null ||
                               item.imageBytes != null ||
-                              _itemHasColorIndicator(item);
+                              _itemHasColorIndicator(item) ||
+                              typeIconImageBytes != null;
                           return Padding(
                             padding: EdgeInsets.all(compact ? 12 : 18),
                             child: Column(

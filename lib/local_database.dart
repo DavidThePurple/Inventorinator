@@ -1302,10 +1302,13 @@ class LocalDatabase {
     if (!change.deleted && base['(importUndo)'] == true) base.clear();
     final previous =
         readEntityPayload(change.entityType, change.entityId) ?? {};
-    base.putIfAbsent(
-      '(remoteRevision)',
-      () => entityRemoteRevision(change.entityType, change.entityId),
+    final remoteRevision = entityRemoteRevision(
+      change.entityType,
+      change.entityId,
     );
+    if (remoteRevision != null) {
+      base.putIfAbsent('(remoteRevision)', () => remoteRevision);
+    }
     if (change.deleted) {
       // A tombstone supersedes every earlier queued local edit. Keep the
       // original remote values for future diagnostics rather than treating the
@@ -1683,10 +1686,10 @@ class LocalDatabase {
         // Queues created before Remote revisions were tracked still need a
         // baseline. The current stored revision is the last Remote state
         // this device had when it began resolving this outbox entry.
-        baseFields.putIfAbsent(
-          '(remoteRevision)',
-          () => entityRemoteRevision(entityType, entityId),
-        );
+        final remoteRevision = entityRemoteRevision(entityType, entityId);
+        if (remoteRevision != null) {
+          baseFields.putIfAbsent('(remoteRevision)', () => remoteRevision);
+        }
         return PendingWorkshopChange(
           outboxId: row['id'] as int,
           localRevision: row['local_revision'] as int,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -3552,7 +3553,9 @@ Bed Temperature: 80°C
       AppBrightnessMode.light.name,
     );
 
-    await tester.tap(find.byKey(const Key('color-theme-darkRed')));
+    final darkRedTheme = find.byKey(const Key('color-theme-darkRed'));
+    await tester.ensureVisible(darkRedTheme);
+    await tester.tap(darkRedTheme);
     await tester.pumpAndSettle();
 
     final lightRedApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
@@ -3573,7 +3576,9 @@ Bed Temperature: 80°C
       AppBrightnessMode.light.name,
     );
 
-    await tester.tap(find.byKey(const Key('appearance-dark')));
+    final darkAppearance = find.byKey(const Key('appearance-dark'));
+    await tester.ensureVisible(darkAppearance);
+    await tester.tap(darkAppearance);
     await tester.pumpAndSettle();
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
@@ -5675,7 +5680,7 @@ Bed Temperature: 80°C
       );
       final actionSize = tester.getSize(action);
       expect(actionSize.width, inInclusiveRange(40, 48));
-      expect(actionSize.height, 44);
+      expect(actionSize.height, 48);
       expect(tester.getTopLeft(action).dy, actionTop);
     }
     expect(
@@ -5892,12 +5897,7 @@ Bed Temperature: 80°C
       tester.getRect(stockroomLabel).left - tester.getRect(stockroomIcon).right,
       12,
     );
-    expect(
-      tester.getSize(find.byKey(const Key('open-scanner'))).height,
-      lessThanOrEqualTo(
-        tester.getSize(find.byKey(const Key('moisture-alerts'))).height,
-      ),
-    );
+    expect(tester.getSize(find.byKey(const Key('open-scanner'))).height, 48);
     expect(
       tester.getTopLeft(find.byKey(const Key('open-catalog'))).dx,
       lessThan(tester.getTopLeft(find.byKey(const Key('open-scanner'))).dx),
@@ -5948,7 +5948,7 @@ Bed Temperature: 80°C
       final actionRect = tester.getRect(find.byKey(Key(key)));
       expect(actionRect.width, greaterThan(48));
       expect(actionRect.width, lessThan(88));
-      expect(actionRect.height, 44);
+      expect(actionRect.height, 48);
       expect(surfaceRect.contains(actionRect.topLeft), isTrue);
       expect(surfaceRect.contains(actionRect.bottomRight), isTrue);
     }
@@ -8075,7 +8075,11 @@ Bed Temperature: 80°C
       tester
           .widget<Card>(find.byKey(const Key('kit-detail-line-PROD-BOLT')))
           .color,
-      ThemeData.dark(useMaterial3: true).colorScheme.errorContainer,
+      Color.lerp(
+        ThemeData.dark(useMaterial3: true).colorScheme.errorContainer,
+        Colors.black,
+        .15,
+      ),
     );
     expect(
       tester.widget<FilledButton>(find.byKey(const Key('build-kit'))).onPressed,
@@ -9124,10 +9128,7 @@ Bed Temperature: 80°C
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('sidebar-color-lower-third')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('sidebar-color-detail')), findsOneWidget);
       expect(find.byKey(const Key('sidebar-color-swatch')), findsNothing);
       expect(find.text('Color not specified'), findsNothing);
       expect(find.byKey(Key('item-material-${item.id}')), findsOneWidget);
@@ -9148,7 +9149,7 @@ Bed Temperature: 80°C
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('sidebar-color-lower-third')), findsNothing);
+      expect(find.byKey(const Key('sidebar-color-detail')), findsNothing);
     },
   );
 
@@ -9314,7 +9315,7 @@ Bed Temperature: 80°C
     expect(find.text('Nozzle clogged halfway through.'), findsOneWidget);
     await tester.tap(find.text('Close'));
   });
-  testWidgets('desktop item details panel can be resized and remembers width', (
+  testWidgets('desktop item details open as a view without a resize sidebar', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 900);
@@ -9325,27 +9326,9 @@ Bed Temperature: 80°C
     await tester.pumpAndSettle();
 
     final panel = find.byType(ItemDetailsPanel);
-    final initialWidth = tester.getSize(panel).width;
-    expect(find.byKey(const Key('item-details-resize-handle')), findsOneWidget);
-    await tester.drag(
-      find.byKey(const Key('item-details-resize-handle')),
-      const Offset(-120, 0),
-    );
-    await tester.pumpAndSettle();
-    final resizedWidth = tester.getSize(panel).width;
-    expect(resizedWidth, greaterThan(initialWidth + 100));
-
-    await tester.tap(find.byTooltip('Close'));
-    await tester.pumpAndSettle();
-    await tester.drag(
-      find.byKey(const Key('inventory-scroll-view')),
-      const Offset(0, -150),
-    );
-    await tester.pump();
-    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
-    await tester.tap(find.text('ObXidian 0.4 mm'));
-    await tester.pumpAndSettle();
-    expect(tester.getSize(find.byType(ItemDetailsPanel)).width, resizedWidth);
+    expect(panel, findsOneWidget);
+    expect(find.byKey(const Key('item-details-resize-handle')), findsNothing);
+    expect(tester.getSize(panel).width, greaterThan(700));
   });
   test('QR download filename includes the item name and stable ID', () {
     expect(
@@ -9383,40 +9366,51 @@ Bed Temperature: 80°C
       findsOneWidget,
     );
   });
-  testWidgets('right click exposes and runs item actions', (tester) async {
+  testWidgets('right click exposes the item bulk-action menu', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const InventorinatorApp());
-    await tester.drag(
-      find.byKey(const Key('inventory-scroll-view')),
-      const Offset(0, -150),
+    final item = InventoryItem(
+      id: 'INV-CONTEXT-NOZZLE',
+      name: 'Context nozzle',
+      type: InventoryType.nozzle,
+      compatibility: const [],
+      added: DateTime(2026),
+      cost: 0,
+      color: Colors.orange,
+      quantity: 1,
     );
-    await tester.pump();
-    await tester.ensureVisible(find.text('ObXidian 0.4 mm'));
-    await tester.tap(
-      find.text('ObXidian 0.4 mm'),
-      buttons: kSecondaryMouseButton,
+    await tester.pumpWidget(
+      InventorinatorApp(
+        persistedState: encodeWorkshopState(
+          inventory: [item],
+          vendors: const [],
+          brands: const [],
+          products: const [],
+        ),
+      ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Reset dry timer'), findsOneWidget);
-    expect(find.text('Edit'), findsOneWidget);
-    expect(find.text('Duplicate'), findsOneWidget);
+    final itemCard = find.byWidgetPredicate(
+      (widget) =>
+          widget is InventoryCard && widget.item.id == 'INV-CONTEXT-NOZZLE',
+    );
+    final dragGrip = find.byKey(
+      const Key('inventory-drag-grip-INV-CONTEXT-NOZZLE'),
+    );
+    expect(find.text('Create Kit'), findsNothing);
+    unawaited(
+      tester.widget<InventoryCard>(itemCard).onBulkContextMenu!(
+        tester.getTopLeft(dragGrip) + const Offset(10, 10),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Create Kit'), findsOneWidget);
     expect(find.text('Archive'), findsOneWidget);
+    expect(find.text('Change Type'), findsOneWidget);
+    expect(find.text('Change Location'), findsOneWidget);
     expect(find.text('Delete'), findsOneWidget);
-    expect(find.byKey(const Key('context-action-edit')), findsOneWidget);
-    expect(find.byKey(const Key('context-action-delete')), findsOneWidget);
-    final popupTheme = PopupMenuTheme.of(
-      tester.element(find.byKey(const Key('context-action-edit'))),
-    );
-    expect(popupTheme.color, const Color(0xff171220));
-    expect(popupTheme.surfaceTintColor, Colors.transparent);
-    final shape = popupTheme.shape! as RoundedRectangleBorder;
-    expect(shape.side.color, const Color(0xff463955));
-    expect(shape.borderRadius, BorderRadius.circular(18));
-    await tester.tap(find.text('Duplicate'));
-    await tester.pumpAndSettle();
-    expect(find.text('ObXidian 0.4 mm copy'), findsOneWidget);
+    expect(find.byKey(const Key('bulk-edit-toolbar')), findsNothing);
   });
 
   testWidgets('all item types can be saved with zero stock', (tester) async {
@@ -9577,7 +9571,7 @@ Bed Temperature: 80°C
     directory.deleteSync(recursive: true);
   });
 
-  testWidgets('printed part context menu finds compatible stocked filament', (
+  testWidgets('printed part right click uses the bulk-action menu', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 900);
@@ -9623,20 +9617,19 @@ Bed Temperature: 80°C
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.text('PETG fan duct'),
-      buttons: kSecondaryMouseButton,
+    final itemCard = find.byWidgetPredicate(
+      (widget) => widget is InventoryCard && widget.item.id == 'INV-PART',
+    );
+    expect(find.text('Create Kit'), findsNothing);
+    unawaited(
+      tester.widget<InventoryCard>(itemCard).onBulkContextMenu!(
+        tester.getTopLeft(itemCard) + const Offset(28, 28),
+      ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Show compatible filaments'), findsOneWidget);
-    await tester.tap(find.text('Show compatible filaments'));
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const Key('compatible-filament-INV-PETG')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('compatible-filament-INV-PLA')), findsNothing);
+    expect(find.text('Create Kit'), findsOneWidget);
+    expect(find.text('Change Location'), findsOneWidget);
+    expect(find.byKey(const Key('bulk-edit-toolbar')), findsNothing);
   });
 
   testWidgets('archived view can restore archived items', (tester) async {
@@ -9881,6 +9874,12 @@ Bed Temperature: 80°C
 
     await tester.pumpWidget(InventorinatorApp(persistedState: state));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is InventoryCard && widget.item.id == 'INV-CUSTOM-ICON',
+      ),
+    );
     expect(
       find.byKey(const Key('item-type-image-INV-CUSTOM-ICON')),
       findsOneWidget,

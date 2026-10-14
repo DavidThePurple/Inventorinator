@@ -244,7 +244,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(ServiceStatusLed), findsNothing);
+      // The compact header keeps the database LED available at every width.
+      expect(find.byType(ServiceStatusLed), findsOneWidget);
       const config = SupabaseConfig(
         url: 'https://example.invalid',
         publishableKey: 'fixture',

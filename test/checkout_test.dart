@@ -241,7 +241,7 @@ void main() {
       );
       expect(badge.isLabelVisible, isTrue);
       tester
-          .widget<OutlinedButton>(find.byKey(const Key('moisture-alerts')))
+          .widget<ButtonStyleButton>(find.byKey(const Key('moisture-alerts')))
           .onPressed!();
       await tester.pumpAndSettle();
       expect(find.text('OVERDUE RETURNS'), findsOneWidget);

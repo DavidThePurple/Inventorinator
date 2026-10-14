@@ -2,6 +2,7 @@
 
 #include <dwmapi.h>
 #include <flutter_windows.h>
+#include <windowsx.h>
 
 #include <algorithm>
 
@@ -334,7 +335,7 @@ void Win32Window::SetChildContent(HWND content) {
 RECT Win32Window::GetClientArea() {
   RECT frame;
   GetClientRect(window_handle_, &frame);
-  frame.top = std::min(frame.bottom, TitleBarHeight());
+  frame.top = std::min<LONG>(frame.bottom, TitleBarHeight());
   return frame;
 }
 

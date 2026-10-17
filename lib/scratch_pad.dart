@@ -23,6 +23,10 @@ String scratchPadRenderMarkdown(String source) => source;
 
 enum _ScratchPadViewMode { cover, twoColumn, oneColumn, horizontal }
 
+enum _ScratchPadTab { notes, flows }
+
+const _flowStages = <String>['Backlog', 'In progress', 'Done'];
+
 typedef ScratchPadButtonSurfaceBuilder = Widget Function({
   required Set<WidgetState> states,
   required Widget child,
@@ -56,6 +60,7 @@ class ScratchPadNote {
     this.subjectKind,
     this.subjectId,
     this.subjectLabel,
+    this.flowStage = 'Backlog',
   });
 
   final String id;
@@ -71,6 +76,7 @@ class ScratchPadNote {
   final String? subjectKind;
   final String? subjectId;
   final String? subjectLabel;
+  final String flowStage;
 
   ScratchPadSubject? get subject =>
       subjectKind == null || subjectId == null || subjectLabel == null
@@ -87,6 +93,7 @@ class ScratchPadNote {
     DateTime? updatedAt,
     bool? isShared,
     ScratchPadSubject? subject,
+    String? flowStage,
   }) => ScratchPadNote(
     id: id,
     title: title ?? this.title,
@@ -101,6 +108,7 @@ class ScratchPadNote {
     subjectKind: subject?.kind ?? subjectKind,
     subjectId: subject?.id ?? subjectId,
     subjectLabel: subject?.label ?? subjectLabel,
+    flowStage: flowStage ?? this.flowStage,
   );
 
   Map<String, dynamic> toJson() => {
@@ -117,6 +125,7 @@ class ScratchPadNote {
     if (subject != null) 'subjectKind': subject!.kind,
     if (subject != null) 'subjectId': subject!.id,
     if (subject != null) 'subjectLabel': subject!.label,
+    'flowStage': flowStage,
   };
 
   factory ScratchPadNote.fromJson(Map<String, dynamic> json) => ScratchPadNote(
@@ -135,6 +144,9 @@ class ScratchPadNote {
     subjectKind: json['subjectKind'] as String?,
     subjectId: json['subjectId'] as String?,
     subjectLabel: json['subjectLabel'] as String?,
+    flowStage: _flowStages.contains(json['flowStage'])
+        ? json['flowStage'] as String
+        : 'Backlog',
   );
 
   factory ScratchPadNote.fromRemoteJson(Map<String, dynamic> json) =>
@@ -154,6 +166,9 @@ class ScratchPadNote {
         subjectKind: json['subject_kind'] as String?,
         subjectId: json['subject_id'] as String?,
         subjectLabel: json['subject_label'] as String?,
+        flowStage: _flowStages.contains(json['flow_stage'])
+            ? json['flow_stage'] as String
+            : 'Backlog',
       );
 }
 
@@ -213,6 +228,7 @@ List<ScratchPadNote> mergeRecoveredScratchPadNotes(
         subjectKind: note.subjectKind,
         subjectId: note.subjectId,
         subjectLabel: note.subjectLabel,
+        flowStage: note.flowStage,
       );
       continue;
     }
@@ -239,6 +255,7 @@ List<ScratchPadNote> mergeRecoveredScratchPadNotes(
       subjectKind: note.subjectKind,
       subjectId: note.subjectId,
       subjectLabel: note.subjectLabel,
+      flowStage: note.flowStage,
     );
   }
   return result.values.toList();
@@ -284,6 +301,7 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
   final Set<ScratchPadNote> _restoredNotes = {};
   List<ScratchPadNote>? _managedNotes;
   var _viewMode = _ScratchPadViewMode.twoColumn;
+  var _activeTab = _ScratchPadTab.notes;
 
   @override
   void initState() {
@@ -294,6 +312,19 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
   void _persist() {
     notes.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     widget.onChanged(List<ScratchPadNote>.unmodifiable(notes));
+  }
+
+  void _setFlowStage(ScratchPadNote note, String stage) {
+    if (!_flowStages.contains(stage)) return;
+    setState(() {
+      final index = notes.indexWhere((candidate) => candidate.id == note.id);
+      if (index < 0) return;
+      notes[index] = notes[index].copyWith(
+        flowStage: stage,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      _persist();
+    });
   }
 
   Future<void> _edit([ScratchPadNote? note]) async {
@@ -506,7 +537,34 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
   Widget build(BuildContext context) => Dialog.fullscreen(
     child: Scaffold(
       extendBody: true,
-      appBar: AppBar(title: const Text('Scratch Pad')),
+      appBar: AppBar(
+        title: const Text('Scratch Pad'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: _ScratchPadPickleBar(
+              surfaceBuilder: widget.buttonSurfaceBuilder,
+              items: [
+                _ScratchPadPickleItem(
+                  icon: const Icon(Icons.note_alt_outlined),
+                  tooltip: 'Notes',
+                  selected: _activeTab == _ScratchPadTab.notes,
+                  onPressed: () =>
+                      setState(() => _activeTab = _ScratchPadTab.notes),
+                ),
+                _ScratchPadPickleItem(
+                  icon: const Icon(Icons.view_kanban_outlined),
+                  tooltip: 'Flows',
+                  selected: _activeTab == _ScratchPadTab.flows,
+                  onPressed: () =>
+                      setState(() => _activeTab = _ScratchPadTab.flows),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       bottomNavigationBar: _viewMode == _ScratchPadViewMode.horizontal
           ? null
           : _ScratchPadHoverActionStrip(
@@ -515,6 +573,9 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
             ),
       body: LayoutBuilder(
         builder: (context, constraints) {
+          if (_activeTab == _ScratchPadTab.flows) {
+            return _flowBoard(constraints);
+          }
           final availableWidth = (constraints.maxWidth - 32)
               .clamp(0.0, double.infinity)
               .toDouble();
@@ -659,6 +720,132 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
           _noteTile(source[index], editable: editable),
     );
   }
+
+  Widget _flowBoard(BoxConstraints constraints) {
+    final width = (constraints.maxWidth - 32).clamp(0.0, double.infinity);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 84),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Flows', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            'Drag a note between columns to track shop work.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _flowStages.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final stage = _flowStages[index];
+                final stageNotes = notes
+                    .where((note) => note.flowStage == stage)
+                    .toList();
+                return SizedBox(
+                  width: width < 760 ? (width - 12).clamp(260.0, 360.0) : 340,
+                  child: _flowColumn(stage, stageNotes),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _flowColumn(String stage, List<ScratchPadNote> stageNotes) {
+    final scheme = Theme.of(context).colorScheme;
+    return DragTarget<ScratchPadNote>(
+      onWillAcceptWithDetails: (details) => details.data.flowStage != stage,
+      onAcceptWithDetails: (details) => _setFlowStage(details.data, stage),
+      builder: (context, candidates, _) => AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: candidates.isEmpty ? scheme.outlineVariant : scheme.primary,
+            width: candidates.isEmpty ? 1 : 2,
+          ),
+          color: candidates.isEmpty
+              ? scheme.surfaceContainerLow
+              : scheme.primaryContainer.withValues(alpha: .34),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      stage,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  Text('${stageNotes.length}'),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: stageNotes.isEmpty
+                  ? const Center(child: Text('Drop notes here'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(10),
+                      itemCount: stageNotes.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) =>
+                          _flowNoteCard(stageNotes[index]),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _flowNoteCard(ScratchPadNote note) =>
+      LongPressDraggable<ScratchPadNote>(
+        data: note,
+        feedback: SizedBox(
+          width: 280,
+          child: Material(
+            elevation: 12,
+            child: Opacity(opacity: .9, child: _flowNoteSurface(note)),
+          ),
+        ),
+        childWhenDragging: Opacity(opacity: .28, child: _flowNoteSurface(note)),
+        child: InkWell(onTap: () => _edit(note), child: _flowNoteSurface(note)),
+      );
+
+  Widget _flowNoteSurface(ScratchPadNote note) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surface,
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(note.title, style: Theme.of(context).textTheme.titleSmall),
+          if (note.body.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(note.body, maxLines: 3, overflow: TextOverflow.ellipsis),
+          ],
+          if (note.subject case final subject?) ...[
+            const SizedBox(height: 10),
+            _ScratchPadSubjectChip(subject: subject),
+          ],
+        ],
+      ),
+    ),
+  );
 
   Widget _noteTimeline({
     required List<ScratchPadNote> localNotes,
@@ -1406,6 +1593,7 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
   late final bodyFocus = FocusNode()..addListener(_handleMarkdownFocus);
   late bool isShared = widget.note?.isShared ?? false;
   late ScratchPadSubject? subject = widget.note?.subject;
+  late String flowStage = widget.note?.flowStage ?? 'Backlog';
 
   @override
   void initState() {
@@ -1423,6 +1611,30 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
 
   void _revealMarkdownAtCursor([String? _]) =>
       body.updateFocusedLineFromSelection();
+
+  void _insertMarkdown(String prefix, [String suffix = '']) {
+    final value = body.value;
+    final selection = value.selection;
+    final start = selection.start < 0 ? value.text.length : selection.start;
+    final end = selection.end < 0 ? start : selection.end;
+    final selected = value.text.substring(start, end);
+    final replacement = '$prefix${selected.isEmpty ? 'text' : selected}$suffix';
+    final text = value.text.replaceRange(start, end, replacement);
+    body.value = value.copyWith(
+      text: text,
+      selection: TextSelection.collapsed(
+        offset:
+            start + replacement.length - (selected.isEmpty ? suffix.length : 0),
+      ),
+    );
+    bodyFocus.requestFocus();
+  }
+
+  Widget _formatButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) => IconButton(tooltip: tooltip, onPressed: onPressed, icon: Icon(icon));
 
   Future<void> _pickSubject() async {
     var query = '';
@@ -1573,7 +1785,64 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _pickSubject,
                 ),
+                Row(
+                  children: [
+                    const Icon(Icons.view_kanban_outlined, size: 20),
+                    const SizedBox(width: 12),
+                    const Expanded(child: Text('Flow column')),
+                    DropdownButton<String>(
+                      value: flowStage,
+                      items: _flowStages
+                          .map(
+                            (stage) => DropdownMenuItem(
+                              value: stage,
+                              child: Text(stage),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (stage) {
+                        if (stage != null) setState(() => flowStage = stage);
+                      },
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 8),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                    ),
+                  ),
+                  child: Wrap(
+                    children: [
+                      _formatButton(
+                        tooltip: 'Bold',
+                        icon: Icons.format_bold,
+                        onPressed: () => _insertMarkdown('**', '**'),
+                      ),
+                      _formatButton(
+                        tooltip: 'Italic',
+                        icon: Icons.format_italic,
+                        onPressed: () => _insertMarkdown('_', '_'),
+                      ),
+                      _formatButton(
+                        tooltip: 'Heading',
+                        icon: Icons.title,
+                        onPressed: () => _insertMarkdown('## '),
+                      ),
+                      _formatButton(
+                        tooltip: 'Bullet list',
+                        icon: Icons.format_list_bulleted,
+                        onPressed: () => _insertMarkdown('- '),
+                      ),
+                      _formatButton(
+                        tooltip: 'Checklist',
+                        icon: Icons.check_box_outlined,
+                        onPressed: () => _insertMarkdown('- [ ] '),
+                      ),
+                    ],
+                  ),
+                ),
                 Expanded(
                   child: Focus(
                     onKeyEvent: (_, event) {
@@ -1640,6 +1909,7 @@ class _ScratchPadEditorState extends State<_ScratchPadEditor> {
                               subjectKind: subject?.kind,
                               subjectId: subject?.id,
                               subjectLabel: subject?.label,
+                              flowStage: flowStage,
                             ),
                           );
                         },

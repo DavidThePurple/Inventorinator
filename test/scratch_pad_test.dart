@@ -43,6 +43,21 @@ void main() {
     );
   });
 
+  test('Scratch Pad encoding preserves a flow column', () {
+    final note = ScratchPadNote(
+      id: 'flow-note',
+      title: 'Refill dryer',
+      body: 'Move to the dryer shelf',
+      updatedAt: DateTime.utc(2026, 10, 14),
+      flowStage: 'In progress',
+    );
+
+    expect(
+      decodeScratchPadNotes(encodeScratchPadNotes([note])).single.flowStage,
+      'In progress',
+    );
+  });
+
   test('malformed local Scratch Pad data safely reads as an empty list', () {
     expect(decodeScratchPadNotes('{not-json'), isEmpty);
   });

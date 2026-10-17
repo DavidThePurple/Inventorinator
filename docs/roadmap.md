@@ -14,20 +14,14 @@ Details: [import review and undo](import-review-and-undo.md). Shared undo requir
 
 ### Not started
 
-- [ ] **Project tools:** Kanban and Visual Relationship Architect (design to follow).
-- [ ] **Scratch Pad editor:** alignment, bold, italic, font selection, and a formatting toolbar.
 - [ ] **Browser add-on:** selectively capture web content and import it on Linux/Windows.
-- [ ] **Import feed:** optional live feed of incoming items.
-- [ ] **Note privacy:** locked shared notes and sharing to selected devices; inter-device messaging remains an alternative, not a settled design.
-- [ ] **Custom interface:** reorder controls and add custom buttons for workflow and accessibility needs.
 - [ ] **Notifications:** push notifications and/or ntfy integration.
-- [ ] **3D timer carousel:** showcase drying timers and life-remaining timers in a 3D carousel at the top of the interface.
-- [ ] **New-item carousel:** a separate carousel showcasing newly added items.
-- [ ] **Nextcloud:** view 3D files inside Inventorinator, including a printed-parts queue.
 
 ### Partial — finish the listed gaps
 
-- [ ] **App lock:** device PIN is implemented; biometric unlock remains optional follow-up work.
+- [ ] **Scratch Pad editor:** Markdown formatting controls and Notes/Flows tabs are in progress; alignment and font controls remain.
+- [ ] **Project tools:** Kanban is now in Scratch Pad; the Visual Relationship Architect is still unstarted.
+- [ ] **Nextcloud:** WebDAV connection foundation is in place; the file browser and printed-parts queue remain.
 
 ### Complete this cycle
 
@@ -39,6 +33,16 @@ Details: [import review and undo](import-review-and-undo.md). Shared undo requir
 - [x] **Machine timers:** active/finished timers visible directly on cards.
 - [x] **Status indicator experiment:** a larger animated status indicator.
 - [x] **Restart camera:** reopen the selected camera using its saved device address.
+- [ ] **New-item carousel:** deferred; the previous implementation was removed.
+- [ ] **3D timer carousel:** deferred; the previous implementation was removed.
+
+## v0.1.4 — planned
+
+- [ ] **Biometric unlock:** optional platform biometric unlock alongside the existing device PIN.
+
+## v0.1.5 — planned
+
+- [ ] **Custom interface:** reorder controls and add custom buttons for workflow and accessibility needs.
 
 ## Maybe
 

@@ -1809,7 +1809,10 @@ bool _isInventoryCraft(BuildContext context) =>
     false;
 
 double _designRadius(BuildContext context, double jellyRadius) =>
-    _isInventoryCraft(context) ? 2 : jellyRadius;
+    // ArtCraft's panels meet at crisp 90° line junctions. InventoryCraft
+    // keeps that corner language everywhere; JellyStock retains its softer
+    // geometry.
+    _isInventoryCraft(context) ? 0 : jellyRadius;
 
 String _normalizedStockName(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -6968,12 +6971,12 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
     final selected = widget.states.contains(WidgetState.selected);
     final activeHover = _hovered && _hoverPhase != _GlassHoverPhase.rest;
     if (inventoryCraft) {
-      final radius = widget.joined
-          ? BorderRadius.zero
-          : BorderRadius.circular(2);
+      // InventoryCraft has one control language: even buttons formerly joined
+      // into top/bottom groups keep the Hide Zeroes outlined cell treatment.
+      final radius = BorderRadius.zero;
       final fill = disabled
           ? palette.panel.withValues(alpha: .55)
-          : pressed || selected
+          : pressed
           ? palette.container
           : _hovered
           ? palette.panel
@@ -6984,14 +6987,12 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
         decoration: BoxDecoration(
           color: fill,
           borderRadius: radius,
-          border: widget.joined
-              ? null
-              : Border.all(
-                  color: selected || _hovered
-                      ? palette.accent
-                      : palette.outline,
-                  width: selected ? 2 : 1,
-                ),
+          border: Border.all(
+            color: _hovered ? palette.accent : palette.outline,
+            // Selection changes the accent, not the control's geometry.
+            // Keep it as fine as the Hide Zeroes outline.
+            width: 1,
+          ),
         ),
         child: widget.child ?? const SizedBox.shrink(),
       );
@@ -7091,6 +7092,59 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
       ),
     );
   }
+}
+
+/// ArtCraft frames carry a short light catch at the top-left corner. It is a
+/// subtle edge highlight, not a separate colored rail or decorative bracket.
+class _ArtCraftCornerFrame extends StatelessWidget {
+  const _ArtCraftCornerFrame({
+    required this.child,
+    required this.outline,
+    required this.accent,
+  });
+
+  final Widget child;
+  final Color outline;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    foregroundPainter: _ArtCraftCornerPainter(outline: outline, accent: accent),
+    child: child,
+  );
+}
+
+class _ArtCraftCornerPainter extends CustomPainter {
+  const _ArtCraftCornerPainter({required this.outline, required this.accent});
+
+  final Color outline;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final highlight = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.square
+      ..color = Color.lerp(outline, Colors.white, .72)!;
+    // Match the tiny light segment at the reference frame's upper-left
+    // junction. The ordinary container border continues the rest of the edge.
+    canvas.drawLine(const Offset(2, .75), const Offset(13, .75), highlight);
+    final verticalHighlight = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..strokeCap = StrokeCap.square
+      ..color = highlight.color;
+    canvas.drawLine(
+      const Offset(.75, 2),
+      const Offset(.75, 13),
+      verticalHighlight,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ArtCraftCornerPainter oldDelegate) =>
+      oldDelegate.outline != outline || oldDelegate.accent != accent;
 }
 
 class _GlassTopHighlightPainter extends CustomPainter {
@@ -7217,10 +7271,17 @@ class _GlassFilterChipState extends State<_GlassFilterChip> {
 }
 
 class _NotchedSliderTrackShape extends SliderTrackShape {
-  _NotchedSliderTrackShape(this.palette, {this.technical = false});
+  _NotchedSliderTrackShape(
+    this.palette, {
+    this.technical = false,
+    this.edgeChevronProgress,
+    this.edgeChevronFromStart,
+  });
 
   final InventorinatorColors palette;
   final bool technical;
+  final double? edgeChevronProgress;
+  final bool? edgeChevronFromStart;
 
   // Keep the endpoint centers inside the capsule by its radius. Without this,
   // Flutter places a zero/max thumb at the track edge and half the handle
@@ -7240,7 +7301,9 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
     // Keep the established control footprint.  The technical treatment is a
     // ruler drawn *inside* the existing rail, not a thinner replacement that
     // makes the surrounding layout look misaligned.
-    const height = 26.0;
+    // In InventoryCraft the ruler is the control itself, not a tiny rail
+    // sitting inside a 40px button slot. Match the neighboring controls.
+    final height = technical ? _inventorySquareControlSize : 26.0;
     return Rect.fromLTWH(
       offset.dx + horizontalInset,
       offset.dy + (parentBox.size.height - height) / 2,
@@ -7285,7 +7348,13 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
         false,
       );
     }
-    canvas.drawRRect(track, Paint()..color = palette.input);
+    // Paint the technical frame as a solid one-pixel shell. A centered stroke
+    // anti-aliases against the wallpaper and reads darker than the adjacent
+    // Sort/View/Hide Zeroes button borders.
+    canvas.drawRRect(
+      track,
+      Paint()..color = technical ? palette.outline : palette.input,
+    );
     canvas.drawRRect(
       interior,
       Paint()
@@ -7311,13 +7380,15 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
         Paint()..color = palette.accent.withValues(alpha: .18),
       );
     }
-    canvas.drawRRect(
-      track,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = palette.outline,
-    );
+    if (!technical) {
+      canvas.drawRRect(
+        track,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = palette.outline,
+      );
+    }
 
     if (technical) {
       canvas.save();
@@ -7348,6 +7419,33 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
                 .withValues(alpha: major ? .88 : .68),
         );
         tickIndex++;
+      }
+      final sweep = edgeChevronProgress;
+      if (sweep != null && edgeChevronFromStart != null) {
+        final fromStart = edgeChevronFromStart!;
+        final x = ui.lerpDouble(
+          fromStart ? interior.left + 11 : interior.right - 11,
+          fromStart ? interior.right - 11 : interior.left + 11,
+          sweep.clamp(0.0, 1.0),
+        )!;
+        final direction = fromStart ? 1.0 : -1.0;
+        for (var index = 0; index < 3; index++) {
+          final chevronX = x - direction * index * 8;
+          final opacity = (.62 - index * .17).clamp(0.0, 1.0);
+          final path = Path()
+            ..moveTo(chevronX - direction * 4, interior.center.dy - 5)
+            ..lineTo(chevronX + direction * 3, interior.center.dy)
+            ..lineTo(chevronX - direction * 4, interior.center.dy + 5);
+          canvas.drawPath(
+            path,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.25
+              ..strokeCap = StrokeCap.square
+              ..strokeJoin = StrokeJoin.miter
+              ..color = palette.accent.withValues(alpha: opacity),
+          );
+        }
       }
       canvas.restore();
       return;
@@ -8353,7 +8451,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       shape: WidgetStatePropertyAll(
         RoundedRectangleBorder(
           borderRadius: BorderRadius.all(
-            Radius.circular(inventoryCraft ? 2 : 10),
+            Radius.circular(inventoryCraft ? 0 : 10),
           ),
         ),
       ),
@@ -8407,7 +8505,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           hoverElevation: 8,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(
-              Radius.circular(inventoryCraft ? 2 : 14),
+              Radius.circular(inventoryCraft ? 0 : 14),
             ),
             side: BorderSide(color: palette.outline),
           ),
@@ -8421,7 +8519,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           side: BorderSide(color: palette.outline),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(
-              Radius.circular(inventoryCraft ? 2 : 10),
+              Radius.circular(inventoryCraft ? 0 : 10),
             ),
           ),
           labelStyle: TextStyle(color: foreground),
@@ -8443,23 +8541,23 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           ),
           helperStyle: TextStyle(color: mutedForeground),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             borderSide: BorderSide(color: palette.outlineVariant),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             borderSide: BorderSide(color: palette.outlineVariant),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             borderSide: BorderSide(color: palette.accent, width: 2),
           ),
           errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             borderSide: const BorderSide(color: Color(0xffff6b7a)),
           ),
           focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             borderSide: const BorderSide(color: Color(0xffff6b7a), width: 2),
           ),
           contentPadding: const EdgeInsets.symmetric(
@@ -8471,7 +8569,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           color: palette.surface,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 22),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 22),
             side: BorderSide(color: palette.outlineVariant),
           ),
         ),
@@ -8482,7 +8580,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
               ? Colors.black.withValues(alpha: .48)
               : palette.accent.withValues(alpha: .28),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 24),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 24),
             side: BorderSide(
               color: inventoryCraft
                   ? palette.outlineVariant
@@ -8504,7 +8602,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
             fontWeight: FontWeight.w600,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             side: BorderSide(color: palette.outlineVariant),
           ),
         ),
@@ -8531,7 +8629,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         listTileTheme: ListTileThemeData(
           dense: inventoryCraft,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 12),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 12),
           ),
           contentPadding: EdgeInsets.symmetric(
             horizontal: inventoryCraft ? 12 : 16,
@@ -8541,7 +8639,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           decoration: BoxDecoration(
             color: inventoryCraft ? palette.surface : palette.panel,
             border: Border.all(color: palette.outline),
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 8),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 8),
           ),
           textStyle: TextStyle(
             color: foreground,
@@ -8584,7 +8682,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(
-              top: Radius.circular(inventoryCraft ? 2 : 24),
+              top: Radius.circular(inventoryCraft ? 0 : 24),
             ),
             side: BorderSide(color: palette.outlineVariant),
           ),
@@ -8596,7 +8694,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
             fontFamily: inventoryCraft ? 'monospace' : null,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 12),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 12),
             side: BorderSide(color: palette.outlineVariant),
           ),
           behavior: SnackBarBehavior.floating,
@@ -8618,11 +8716,11 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           iconColor: palette.accent,
           collapsedIconColor: mutedForeground,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             side: BorderSide(color: palette.outlineVariant),
           ),
           collapsedShape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(inventoryCraft ? 2 : 18),
+            borderRadius: BorderRadius.circular(inventoryCraft ? 0 : 18),
             side: BorderSide(color: palette.outlineVariant),
           ),
         ),
@@ -8654,85 +8752,232 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   }
 }
 
-class _CenteredSquareGridDelegate extends SliverGridDelegate {
-  const _CenteredSquareGridDelegate({
-    required this.cardExtent,
+class _AnimatedResponsiveSliverGrid extends StatefulWidget {
+  const _AnimatedResponsiveSliverGrid({
+    required this.itemCount,
+    required this.preferredCardExtent,
+    required this.spacing,
+    required this.crossAxisExtent,
+    required this.itemBuilder,
+  });
+
+  final int itemCount;
+  final double preferredCardExtent;
+  final double spacing;
+  final double crossAxisExtent;
+  final IndexedWidgetBuilder itemBuilder;
+
+  @override
+  State<_AnimatedResponsiveSliverGrid> createState() =>
+      _AnimatedResponsiveSliverGridState();
+}
+
+class _AnimatedResponsiveSliverGridState
+    extends State<_AnimatedResponsiveSliverGrid>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _reflowController =
+      AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 260),
+      )..addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          setState(() => _fromCount = null);
+        }
+      });
+  late int _activeCount;
+  int? _fromCount;
+
+  int _countFor(_AnimatedResponsiveSliverGrid widget) => math.max(
+    1,
+    ((widget.crossAxisExtent + widget.spacing) /
+            (math.min(widget.preferredCardExtent, widget.crossAxisExtent) +
+                widget.spacing))
+        .floor(),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _activeCount = _countFor(widget);
+  }
+
+  @override
+  void dispose() {
+    _reflowController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedResponsiveSliverGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final targetCount = _countFor(widget);
+    if (targetCount == _activeCount) return;
+    _fromCount = _activeCount;
+    _activeCount = targetCount;
+    _reflowController.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _reflowController,
+    builder: (context, _) => SliverGrid.builder(
+      itemCount: widget.itemCount,
+      addAutomaticKeepAlives: false,
+      addRepaintBoundaries: true,
+      addSemanticIndexes: false,
+      gridDelegate: _InterpolatedSquareGridDelegate(
+        crossAxisCount: _activeCount,
+        fromCrossAxisCount: _fromCount,
+        progress: _fromCount == null ? 1 : _reflowController.value,
+        spacing: widget.spacing,
+      ),
+      itemBuilder: widget.itemBuilder,
+    ),
+  );
+}
+
+class _InterpolatedSquareGridDelegate extends SliverGridDelegate {
+  const _InterpolatedSquareGridDelegate({
+    required this.crossAxisCount,
+    required this.fromCrossAxisCount,
+    required this.progress,
     required this.spacing,
   });
 
-  final double cardExtent;
+  final int crossAxisCount;
+  final int? fromCrossAxisCount;
+  final double progress;
   final double spacing;
 
   @override
-  SliverGridLayout getLayout(SliverConstraints constraints) {
-    final extent = math.min(cardExtent, constraints.crossAxisExtent);
-    final count = math.max(
-      1,
-      ((constraints.crossAxisExtent + spacing) / (extent + spacing)).floor(),
-    );
-    final occupied = (count * extent) + ((count - 1) * spacing);
-    return _CenteredSquareGridLayout(
-      crossAxisCount: count,
-      cardExtent: extent,
-      spacing: spacing,
-      leadingSpace: math.max(0, (constraints.crossAxisExtent - occupied) / 2),
-      reverseCrossAxis: axisDirectionIsReversed(constraints.crossAxisDirection),
-      crossAxisExtent: constraints.crossAxisExtent,
+  SliverGridLayout getLayout(SliverConstraints constraints) =>
+      _InterpolatedSquareGridLayout(
+        crossAxisExtent: constraints.crossAxisExtent,
+        crossAxisCount: crossAxisCount,
+        fromCrossAxisCount: fromCrossAxisCount,
+        progress: progress,
+        spacing: spacing,
+        reverseCrossAxis: axisDirectionIsReversed(
+          constraints.crossAxisDirection,
+        ),
+      );
+
+  @override
+  bool shouldRelayout(covariant _InterpolatedSquareGridDelegate oldDelegate) =>
+      crossAxisCount != oldDelegate.crossAxisCount ||
+      fromCrossAxisCount != oldDelegate.fromCrossAxisCount ||
+      progress != oldDelegate.progress ||
+      spacing != oldDelegate.spacing;
+}
+
+class _InterpolatedSquareGridLayout extends SliverGridLayout {
+  const _InterpolatedSquareGridLayout({
+    required this.crossAxisExtent,
+    required this.crossAxisCount,
+    required this.fromCrossAxisCount,
+    required this.progress,
+    required this.spacing,
+    required this.reverseCrossAxis,
+  });
+
+  final double crossAxisExtent;
+  final int crossAxisCount;
+  final int? fromCrossAxisCount;
+  final double progress;
+  final double spacing;
+  final bool reverseCrossAxis;
+
+  double _extentFor(int count) =>
+      (crossAxisExtent - ((count - 1) * spacing)) / count;
+
+  SliverGridGeometry _geometryFor(int index, int count) {
+    final extent = _extentFor(count);
+    final row = index ~/ count;
+    final column = index % count;
+    final crossAxisOffset = column * (extent + spacing);
+    return SliverGridGeometry(
+      scrollOffset: row * (extent + spacing),
+      crossAxisOffset: reverseCrossAxis
+          ? crossAxisExtent - crossAxisOffset - extent
+          : crossAxisOffset,
+      mainAxisExtent: extent,
+      crossAxisExtent: extent,
     );
   }
 
   @override
-  bool shouldRelayout(covariant _CenteredSquareGridDelegate oldDelegate) =>
-      cardExtent != oldDelegate.cardExtent || spacing != oldDelegate.spacing;
-}
-
-class _CenteredSquareGridLayout extends SliverGridLayout {
-  const _CenteredSquareGridLayout({
-    required this.crossAxisCount,
-    required this.cardExtent,
-    required this.spacing,
-    required this.leadingSpace,
-    required this.reverseCrossAxis,
-    required this.crossAxisExtent,
-  });
-
-  final int crossAxisCount;
-  final double cardExtent;
-  final double spacing;
-  final double leadingSpace;
-  final bool reverseCrossAxis;
-  final double crossAxisExtent;
-
-  double get stride => cardExtent + spacing;
+  int getMinChildIndexForScrollOffset(double scrollOffset) {
+    final lowestCount = math.min(
+      fromCrossAxisCount ?? crossAxisCount,
+      crossAxisCount,
+    );
+    final shortestStride = math.min(
+      _extentFor(fromCrossAxisCount ?? crossAxisCount) + spacing,
+      _extentFor(crossAxisCount) + spacing,
+    );
+    return lowestCount * (scrollOffset ~/ shortestStride);
+  }
 
   @override
-  int getMinChildIndexForScrollOffset(double scrollOffset) =>
-      crossAxisCount * (scrollOffset ~/ stride);
-
-  @override
-  int getMaxChildIndexForScrollOffset(double scrollOffset) =>
-      math.max(0, crossAxisCount * (scrollOffset / stride).ceil() - 1);
+  int getMaxChildIndexForScrollOffset(double scrollOffset) {
+    final highestCount = math.max(
+      fromCrossAxisCount ?? crossAxisCount,
+      crossAxisCount,
+    );
+    final shortestStride = math.min(
+      _extentFor(fromCrossAxisCount ?? crossAxisCount) + spacing,
+      _extentFor(crossAxisCount) + spacing,
+    );
+    return math.max(
+      0,
+      highestCount * (scrollOffset / shortestStride).ceil() - 1,
+    );
+  }
 
   @override
   SliverGridGeometry getGeometryForChildIndex(int index) {
-    final row = index ~/ crossAxisCount;
-    final column = index % crossAxisCount;
-    final naturalOffset = leadingSpace + (column * stride);
+    final to = _geometryFor(index, crossAxisCount);
+    final fromCount = fromCrossAxisCount;
+    if (fromCount == null || progress >= 1) return to;
+    final from = _geometryFor(index, fromCount);
     return SliverGridGeometry(
-      scrollOffset: row * stride,
-      crossAxisOffset: reverseCrossAxis
-          ? crossAxisExtent - naturalOffset - cardExtent
-          : naturalOffset,
-      mainAxisExtent: cardExtent,
-      crossAxisExtent: cardExtent,
+      scrollOffset: ui.lerpDouble(
+        from.scrollOffset,
+        to.scrollOffset,
+        progress,
+      )!,
+      crossAxisOffset: ui.lerpDouble(
+        from.crossAxisOffset,
+        to.crossAxisOffset,
+        progress,
+      )!,
+      mainAxisExtent: ui.lerpDouble(
+        from.mainAxisExtent,
+        to.mainAxisExtent,
+        progress,
+      )!,
+      crossAxisExtent: ui.lerpDouble(
+        from.crossAxisExtent,
+        to.crossAxisExtent,
+        progress,
+      )!,
     );
   }
 
   @override
   double computeMaxScrollOffset(int childCount) {
     if (childCount == 0) return 0;
-    final rowCount = ((childCount - 1) ~/ crossAxisCount) + 1;
-    return (rowCount * cardExtent) + ((rowCount - 1) * spacing);
+    double maxFor(int count) {
+      final extent = _extentFor(count);
+      final rows = ((childCount - 1) ~/ count) + 1;
+      return rows * extent + (rows - 1) * spacing;
+    }
+
+    final to = maxFor(crossAxisCount);
+    final fromCount = fromCrossAxisCount;
+    return fromCount == null || progress >= 1
+        ? to
+        : ui.lerpDouble(maxFor(fromCount), to, progress)!;
   }
 }
 
@@ -9153,8 +9398,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   static const _notchedSliderThumbShape = _NotchedSliderThumbShape();
   final ValueNotifier<double> _pageSizeSliderValue = ValueNotifier(0);
   final ValueNotifier<double> _cardSizeSliderValue = ValueNotifier(100);
+  final ValueNotifier<double?> _sliderEdgeChevronProgress = ValueNotifier(null);
   Timer? _pageSizeCommitTimer;
   Timer? _cardSizeCommitTimer;
+  Timer? _sliderEdgeChevronCycleTimer;
+  Timer? _sliderEdgeChevronFrameTimer;
   int pageSizeIndex = 0;
   double cardSizePercent = 100;
   int currentPage = 0;
@@ -9260,6 +9508,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   @override
   void initState() {
     super.initState();
+    _sliderEdgeChevronCycleTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _runSliderEdgeChevronSweep(),
+    );
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
     GestureBinding.instance.pointerRouter.addGlobalRoute(_observeIdleCursor);
     _inventoryIsScrolling.addListener(_syncCountdownClockPause);
@@ -10193,6 +10445,8 @@ class _InventoryHomeState extends State<InventoryHome> {
     _clockTick?.cancel();
     _pageSizeCommitTimer?.cancel();
     _cardSizeCommitTimer?.cancel();
+    _sliderEdgeChevronCycleTimer?.cancel();
+    _sliderEdgeChevronFrameTimer?.cancel();
     _leftPinnedSidebarOpenTimer?.cancel();
     _rightPinnedSidebarOpenTimer?.cancel();
     pageSizeIndex = _pageSizeSliderValue.value.round();
@@ -10207,6 +10461,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
     _pageSizeSliderValue.dispose();
     _cardSizeSliderValue.dispose();
+    _sliderEdgeChevronProgress.dispose();
     _metricsDialogRevision.dispose();
     _syncActivity.dispose();
     _localSaveFeedbackTimer?.cancel();
@@ -11844,6 +12099,12 @@ class _InventoryHomeState extends State<InventoryHome> {
             start: start,
             pageSize: pageSize,
           );
+    final gridCrossAxisExtent = math.max(
+      1.0,
+      MediaQuery.sizeOf(context).width -
+          40 -
+          (_isInventoryCraft(context) ? 64 : 0),
+    );
     return _ItemTimerDisplayScope(
       defaultDisplay: machineTimerDisplay,
       typeDisplays: typeTimerDisplaySettings,
@@ -11860,8 +12121,11 @@ class _InventoryHomeState extends State<InventoryHome> {
             onKeyEvent: (_, event) {
               if (event is KeyDownEvent &&
                   event.logicalKey == LogicalKeyboardKey.escape &&
-                  selectedInventoryIds.isNotEmpty) {
-                setState(selectedInventoryIds.clear);
+                  (selectedInventoryIds.isNotEmpty || _hasCatalogSelection)) {
+                setState(() {
+                  selectedInventoryIds.clear();
+                  _clearCatalogSelection();
+                });
                 return KeyEventResult.handled;
               }
               return KeyEventResult.ignored;
@@ -12000,23 +12264,16 @@ class _InventoryHomeState extends State<InventoryHome> {
                                                         // every scroll pixel, which
                                                         // rebuilt every visible card
                                                         // each frame.
-                                                        SliverGrid.builder(
+                                                        _AnimatedResponsiveSliverGrid(
                                                           itemCount:
                                                               records.length,
-                                                          addAutomaticKeepAlives:
-                                                              false,
-                                                          addRepaintBoundaries:
-                                                              true,
-                                                          addSemanticIndexes:
-                                                              false,
-                                                          gridDelegate:
-                                                              _CenteredSquareGridDelegate(
-                                                                cardExtent:
-                                                                    274.0 *
-                                                                    (liveCardSizePercent /
-                                                                        100),
-                                                                spacing: 14,
-                                                              ),
+                                                          preferredCardExtent:
+                                                              274.0 *
+                                                              (liveCardSizePercent /
+                                                                  100),
+                                                          spacing: 14,
+                                                          crossAxisExtent:
+                                                              gridCrossAxisExtent,
                                                           itemBuilder:
                                                               (
                                                                 _,
@@ -12112,7 +12369,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                         // does for the header and page content.
                         right: _isInventoryCraft(context) ? 64 : 0,
                         bottom: 0,
-                        child: _bottomActionBar(),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: _bottomActionBar(),
+                        ),
                       ),
                   ],
                 ),
@@ -22526,7 +22786,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _header() => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 920;
-      final narrow = constraints.maxWidth < 600;
+      // Small desktop windows need the same deliberate three-column controls
+      // as phones. The former 600px cutoff left a cramped middle band using
+      // the desktop compact controls (including the stray "Card" label).
+      final narrow = constraints.maxWidth < 720;
       // Keep the filter panel out of the narrow side-control column on small
       // Android windows. A 400px logical-width phone otherwise leaves it only
       // a few pixels wide beside Sort/View.
@@ -22536,7 +22799,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       final narrowViewGap =
           ((constraints.maxWidth - 24) -
                   (56 + 5 + _inventorySquareControlSize) -
-                  (_inventorySquareControlSize * 2 + 4 + 72))
+                  (_inventorySquareControlSize * 2 + 4 + 96))
               .clamp(0.0, 60.0)
               .toDouble();
       return Padding(
@@ -22564,43 +22827,49 @@ class _InventoryHomeState extends State<InventoryHome> {
               ),
               const SizedBox(height: 12),
               if (narrow) ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (catalogFilter == null) ...[
-                      _sortControl(showLabel: true, compact: true),
-                      const Spacer(),
+                _inventoryControlBand(
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _narrowInventoryControlRow(),
+                      const SizedBox(height: 10),
+                      _mobileSizeControls(),
                     ],
-                    _viewOptions(gap: narrowViewGap),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 10),
-                _mobileSizeControls(),
               ] else if (compact) ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _resultCount(),
-                    const Spacer(),
-                    _sortControl(showLabel: true),
-                    const SizedBox(width: 16),
-                    _viewOptions(),
-                  ],
+                // Keep Sort in the same fluid control grid across the 720px
+                // breakpoint. The previous compact row used a Spacer, so the
+                // dropdown visibly jumped toward the center on resize.
+                _inventoryControlBand(
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _narrowInventoryControlRow(),
+                      const SizedBox(height: 8),
+                      _sizeControls(expandSliders: true),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 8),
-                _sizeControls(expandSliders: true),
               ] else
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _resultCount(),
-                    const SizedBox(width: 12),
-                    _sortControl(showLabel: true),
-                    const SizedBox(width: 12),
-                    Expanded(child: _sizeControls(expandSliders: true)),
-                    const SizedBox(width: 12),
-                    _viewOptions(),
-                  ],
+                _inventoryControlBand(
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _resultCount(),
+                      const SizedBox(width: 12),
+                      _sortControl(showLabel: true),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _sizeControls(
+                          expandSliders: true,
+                          alignRailsToControls: true,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      _viewOptions(),
+                    ],
+                  ),
                 ),
             ] else if (phoneNarrow) ...[
               _typeFilterPanel(compact: true),
@@ -22608,12 +22877,8 @@ class _InventoryHomeState extends State<InventoryHome> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (catalogFilter == null) ...[
-                    Expanded(
-                      child: _sortControl(showLabel: true, compact: true),
-                    ),
-                    const SizedBox(width: 12),
-                  ],
+                  Expanded(child: _sortControl(showLabel: true, compact: true)),
+                  const SizedBox(width: 12),
                   if (catalogFilter == CatalogViewFilter.kits) ...[
                     _resultCount(),
                     const Spacer(),
@@ -22634,8 +22899,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (catalogFilter == null)
-                          _sortControl(showLabel: true, compact: narrow),
+                        _sortControl(showLabel: true, compact: narrow),
                         if (catalogFilter == CatalogViewFilter.kits)
                           _resultCount(),
                         const SizedBox(width: 16),
@@ -22662,15 +22926,18 @@ class _InventoryHomeState extends State<InventoryHome> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (catalogFilter == null) ...[
-                            _sortControl(showLabel: true),
-                            const SizedBox(width: 12),
-                          ],
+                          _sortControl(showLabel: true),
+                          const SizedBox(width: 12),
                           if (catalogFilter == CatalogViewFilter.kits) ...[
                             _resultCount(),
                             const SizedBox(width: 12),
                           ],
-                          Expanded(child: _sizeControls(expandSliders: true)),
+                          Expanded(
+                            child: _sizeControls(
+                              expandSliders: true,
+                              alignRailsToControls: true,
+                            ),
+                          ),
                           const SizedBox(width: 12),
                           _viewOptions(),
                         ],
@@ -22683,6 +22950,109 @@ class _InventoryHomeState extends State<InventoryHome> {
         ),
       );
     },
+  );
+
+  /// InventoryCraft uses the same translucent technical panel behind its
+  /// identity strip and its inventory controls, so the row reads as one
+  /// deliberate instrument panel over the wallpaper.
+  Widget _inventoryControlBand(Widget child) {
+    if (!_isInventoryCraft(context)) return child;
+    final theme = Theme.of(context);
+    final palette =
+        theme.extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    return _ArtCraftCornerFrame(
+      outline: theme.colorScheme.outlineVariant,
+      accent: palette.accent,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface.withValues(alpha: .62),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  /// Phone and small-window controls use one explicit three-column grid.
+  /// The old intrinsic Sort + Spacer + combined View/Hide layout left the
+  /// headers and targets drifting independently as the window narrowed.
+  Widget _narrowInventoryControlRow() => LayoutBuilder(
+    builder: (context, constraints) {
+      final sort = _narrowInventoryControl(
+        label: 'Sort',
+        // The selected sort must remain readable. Do not use the icon-only
+        // version merely to force it into a narrow column.
+        child: _sortControl(),
+      );
+      final view = _narrowInventoryControl(
+        label: 'View',
+        child: _viewOptionsControls(gap: 0, showHideZeroes: false),
+      );
+      final hideZeroes = _narrowInventoryControl(
+        label: 'Hide Zeroes',
+        labelStyle: _inventoryControlLabelStyle(context, fontSize: 12),
+        child: _viewOptionsControls(gap: 0, showView: false),
+      );
+
+      // Three equal cells forced Sort into an icon-only dropdown and shifted
+      // the Hide Zeroes target. Keep Sort wider, then stack at phone widths.
+      if (constraints.maxWidth < 580) {
+        return Column(
+          children: [
+            Align(alignment: Alignment.centerLeft, child: sort),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: view),
+                const SizedBox(width: 8),
+                Expanded(child: hideZeroes),
+              ],
+            ),
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 3, child: sort),
+          const SizedBox(width: 8),
+          Expanded(flex: 2, child: view),
+          const SizedBox(width: 8),
+          Expanded(flex: 2, child: hideZeroes),
+        ],
+      );
+    },
+  );
+
+  Widget _narrowInventoryControl({
+    required String label,
+    required Widget child,
+    TextStyle? labelStyle,
+  }) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      SizedBox(
+        height: 18,
+        child: Center(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: labelStyle ?? _inventoryControlLabelStyle(context),
+          ),
+        ),
+      ),
+      const SizedBox(height: 2),
+      SizedBox(
+        height: _inventorySquareControlSize,
+        child: Center(child: child),
+      ),
+    ],
   );
 
   Widget _titleHeader() => ValueListenableBuilder<int>(
@@ -22931,9 +23301,17 @@ class _InventoryHomeState extends State<InventoryHome> {
                 ),
               )
             : normalHeader!;
+        final useFullWidthTechnicalRail =
+            _isInventoryCraft(context) && Platform.isAndroid;
         return Padding(
           key: const Key('floating-header-shell'),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          // On Android, the technical rail should run to the same usable
+          // edges as the bottom rail. The scroll ruler still has its own
+          // reserved lane outside this sliver.
+          padding: EdgeInsets.symmetric(
+            horizontal: useFullWidthTechnicalRail ? 0 : 16,
+            vertical: 8,
+          ),
           child: IgnorePointer(
             ignoring: scrolling,
             child: AnimatedSlide(
@@ -23053,7 +23431,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         // controls outlined, but do not put an opaque sheet behind the whole
         // top or bottom bar.
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(2),
+        borderRadius: BorderRadius.zero,
         border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       );
     }
@@ -23102,7 +23480,16 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _withFloatingActionBarGlow({required Widget child}) {
-    if (_isInventoryCraft(context)) return child;
+    if (_isInventoryCraft(context)) {
+      final palette =
+          Theme.of(context).extension<InventorinatorColors>() ??
+          InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+      return _ArtCraftCornerFrame(
+        outline: Theme.of(context).colorScheme.outlineVariant,
+        accent: palette.accent,
+        child: child,
+      );
+    }
     final colors = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -23197,6 +23584,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     final dropdown = PopupMenuButton<InventorySort>(
       key: const Key('sort-menu'),
       tooltip: 'Sort items',
+      padding: EdgeInsets.zero,
       borderRadius: BorderRadius.circular(14),
       clipBehavior: Clip.antiAlias,
       initialValue: sort,
@@ -23269,27 +23657,29 @@ class _InventoryHomeState extends State<InventoryHome> {
       message: sortAscending
           ? 'Ascending · click for descending'
           : 'Descending · click for ascending',
-      child: InkWell(
-        key: const Key('sort-direction-toggle'),
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => setState(() {
-          sortAscending = !sortAscending;
-          currentPage = 0;
-          widget.database?.saveBoolPreference(
-            'inventory_sort_ascending',
-            sortAscending,
-          );
-        }),
-        child: _GlassFilterChip(
-          selected: false,
-          child: SizedBox.square(
-            dimension: _inventorySquareControlSize,
-            child: Icon(
-              sortAscending
-                  ? Icons.arrow_upward_rounded
-                  : Icons.arrow_downward_rounded,
-              size: 18,
-              color: Theme.of(context).colorScheme.primary,
+      child: SizedBox.square(
+        dimension: _inventorySquareControlSize,
+        child: InkWell(
+          key: const Key('sort-direction-toggle'),
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() {
+            sortAscending = !sortAscending;
+            currentPage = 0;
+            widget.database?.saveBoolPreference(
+              'inventory_sort_ascending',
+              sortAscending,
+            );
+          }),
+          child: _GlassFilterChip(
+            selected: false,
+            child: SizedBox.expand(
+              child: Icon(
+                sortAscending
+                    ? Icons.arrow_upward_rounded
+                    : Icons.arrow_downward_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
             ),
           ),
         ),
@@ -23306,9 +23696,16 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (!showLabel) return controls;
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      // Keep the header centered over the two sort controls, matching View
+      // and Hide Zeroes on narrow screens.
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('Sort', style: _inventoryControlLabelStyle(context)),
+        SizedBox(
+          height: 18,
+          child: Center(
+            child: Text('Sort', style: _inventoryControlLabelStyle(context)),
+          ),
+        ),
         const SizedBox(height: 2),
         controls,
       ],
@@ -23318,6 +23715,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _pageSizeControl({
     bool expandSlider = false,
     bool compactLabel = false,
+    bool matchControlHeight = false,
   }) => ValueListenableBuilder<double>(
     valueListenable: _pageSizeSliderValue,
     builder: (context, previewValue, _) {
@@ -23326,46 +23724,69 @@ class _InventoryHomeState extends State<InventoryHome> {
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
       final previewIndex = previewValue.round().clamp(0, _pageSizes.length - 1);
       final technical = _isInventoryCraft(context);
-      final slider = SliderTheme(
-        data: SliderTheme.of(context).copyWith(
-          trackShape: _NotchedSliderTrackShape(palette, technical: technical),
-          trackHeight: 26,
-          thumbShape: technical
-              ? const _RulerSliderThumbShape()
-              : _notchedSliderThumbShape,
-          thumbColor: technical
-              ? palette.accent
-              : Theme.of(context).colorScheme.onSurface,
-          activeTrackColor: palette.accent,
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
-          overlayColor: palette.accent.withValues(alpha: .16),
-          showValueIndicator: ShowValueIndicator.onDrag,
-        ),
-        child: Slider(
-          key: const Key('page-size-slider'),
-          value: previewValue,
-          min: 0,
-          max: (_pageSizes.length - 1).toDouble(),
-          divisions: _pageSizes.length - 1,
-          label: '${_pageSizes[previewIndex]}',
-          onChanged: _previewPageSize,
+      final edgeFraction = previewValue / (_pageSizes.length - 1).toDouble();
+      final edgeFromStart = edgeFraction <= .05
+          ? true
+          : edgeFraction >= .95
+          ? false
+          : null;
+      final slider = ValueListenableBuilder<double?>(
+        valueListenable: _sliderEdgeChevronProgress,
+        builder: (context, sweep, _) => SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackShape: _NotchedSliderTrackShape(
+              palette,
+              technical: technical,
+              edgeChevronProgress: edgeFromStart == null ? null : sweep,
+              edgeChevronFromStart: edgeFromStart,
+            ),
+            trackHeight: 26,
+            thumbShape: technical
+                ? const _RulerSliderThumbShape()
+                : _notchedSliderThumbShape,
+            thumbColor: technical
+                ? palette.accent
+                : Theme.of(context).colorScheme.onSurface,
+            activeTrackColor: palette.accent,
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+            overlayColor: palette.accent.withValues(alpha: .16),
+            showValueIndicator: ShowValueIndicator.onDrag,
+          ),
+          child: Slider(
+            key: const Key('page-size-slider'),
+            value: previewValue,
+            min: 0,
+            max: (_pageSizes.length - 1).toDouble(),
+            divisions: _pageSizes.length - 1,
+            label: '${_pageSizes[previewIndex]}',
+            onChanged: _previewPageSize,
+          ),
         ),
       );
+      final sliderField = technical && matchControlHeight
+          ? SizedBox(height: _inventorySquareControlSize, child: slider)
+          : slider;
       return LayoutBuilder(
         builder: (context, constraints) {
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                compactLabel ? 'Page' : 'Page size',
-                style: _inventoryControlLabelStyle(context),
+              SizedBox(
+                height: 18,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    compactLabel ? 'Page' : 'Page size',
+                    style: _inventoryControlLabelStyle(context),
+                  ),
+                ),
               ),
               const SizedBox(height: 2),
               if (expandSlider)
-                SizedBox(width: double.infinity, child: slider)
+                SizedBox(width: double.infinity, child: sliderField)
               else
-                SizedBox(width: 190, child: slider),
+                SizedBox(width: 190, child: sliderField),
             ],
           );
         },
@@ -23391,26 +23812,75 @@ class _InventoryHomeState extends State<InventoryHome> {
     });
   }
 
-  Widget _sizeControls({bool expandSliders = false}) {
+  void _runSliderEdgeChevronSweep() {
+    if (!mounted || !_isInventoryCraft(context)) return;
+    const edgeThreshold = .05;
+    final pageFraction =
+        _pageSizeSliderValue.value / (_pageSizes.length - 1).toDouble();
+    final cardFraction =
+        (_cardSizeSliderValue.value - _minimumCardSizePercent) /
+        (_maximumCardSizePercent - _minimumCardSizePercent);
+    final pageAtEdge =
+        pageFraction <= edgeThreshold || pageFraction >= 1 - edgeThreshold;
+    final cardAtEdge =
+        cardFraction <= edgeThreshold || cardFraction >= 1 - edgeThreshold;
+    if (!pageAtEdge && !cardAtEdge) return;
+
+    _sliderEdgeChevronFrameTimer?.cancel();
+    final startedAt = DateTime.now();
+    _sliderEdgeChevronFrameTimer = Timer.periodic(
+      const Duration(milliseconds: 32),
+      (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        final progress =
+            DateTime.now().difference(startedAt).inMilliseconds / 900;
+        if (progress >= 1) {
+          _sliderEdgeChevronProgress.value = null;
+          timer.cancel();
+          return;
+        }
+        _sliderEdgeChevronProgress.value = Curves.easeInOut.transform(progress);
+      },
+    );
+  }
+
+  Widget _sizeControls({
+    bool expandSliders = false,
+    bool alignRailsToControls = false,
+  }) {
     if (!gridView) {
-      return _pageSizeControl(expandSlider: expandSliders);
+      return _pageSizeControl(
+        expandSlider: expandSliders,
+        matchControlHeight: alignRailsToControls,
+      );
     }
     return Row(
       mainAxisSize: expandSliders ? MainAxisSize.max : MainAxisSize.min,
       children: [
         if (expandSliders)
           Expanded(
-            child: _pageSizeControl(expandSlider: true, compactLabel: true),
+            child: _pageSizeControl(
+              expandSlider: true,
+              compactLabel: true,
+              matchControlHeight: alignRailsToControls,
+            ),
           )
         else
-          _pageSizeControl(),
+          _pageSizeControl(matchControlHeight: alignRailsToControls),
         const SizedBox(width: 14),
         if (expandSliders)
           Expanded(
-            child: _cardSizeControl(expandSlider: true, compactLabel: true),
+            child: _cardSizeControl(
+              expandSlider: true,
+              compactLabel: true,
+              matchControlHeight: alignRailsToControls,
+            ),
           )
         else
-          _cardSizeControl(),
+          _cardSizeControl(matchControlHeight: alignRailsToControls),
       ],
     );
   }
@@ -23418,11 +23888,17 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _mobileSizeControls() => Container(
     key: const Key('mobile-size-controls'),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
+    // InventoryCraft rails belong directly on the canvas. The mobile-only
+    // rounded surface read as an unrelated dark slab behind them.
+    decoration: _isInventoryCraft(context)
+        ? null
+        : BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
     child: SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: 3,
@@ -23446,6 +23922,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _cardSizeControl({
     bool expandSlider = false,
     bool compactLabel = false,
+    bool matchControlHeight = false,
   }) => ValueListenableBuilder<double>(
     valueListenable: _cardSizeSliderValue,
     builder: (context, previewValue, _) {
@@ -23453,45 +23930,70 @@ class _InventoryHomeState extends State<InventoryHome> {
           Theme.of(context).extension<InventorinatorColors>() ??
           InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
       final technical = _isInventoryCraft(context);
-      final slider = SliderTheme(
-        data: SliderTheme.of(context).copyWith(
-          trackShape: _NotchedSliderTrackShape(palette, technical: technical),
-          trackHeight: 26,
-          thumbShape: technical
-              ? const _RulerSliderThumbShape()
-              : _notchedSliderThumbShape,
-          thumbColor: technical
-              ? palette.accent
-              : Theme.of(context).colorScheme.onSurface,
-          activeTrackColor: palette.accent,
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
-          overlayColor: palette.accent.withValues(alpha: .16),
-          showValueIndicator: ShowValueIndicator.onDrag,
-        ),
-        child: Slider(
-          key: const Key('card-size-slider'),
-          value: previewValue,
-          min: _minimumCardSizePercent,
-          max: _maximumCardSizePercent,
-          label: '${previewValue.round()}%',
-          onChanged: _previewCardSize,
+      final edgeFraction =
+          (previewValue - _minimumCardSizePercent) /
+          (_maximumCardSizePercent - _minimumCardSizePercent);
+      final edgeFromStart = edgeFraction <= .05
+          ? true
+          : edgeFraction >= .95
+          ? false
+          : null;
+      final slider = ValueListenableBuilder<double?>(
+        valueListenable: _sliderEdgeChevronProgress,
+        builder: (context, sweep, _) => SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackShape: _NotchedSliderTrackShape(
+              palette,
+              technical: technical,
+              edgeChevronProgress: edgeFromStart == null ? null : sweep,
+              edgeChevronFromStart: edgeFromStart,
+            ),
+            trackHeight: 26,
+            thumbShape: technical
+                ? const _RulerSliderThumbShape()
+                : _notchedSliderThumbShape,
+            thumbColor: technical
+                ? palette.accent
+                : Theme.of(context).colorScheme.onSurface,
+            activeTrackColor: palette.accent,
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+            overlayColor: palette.accent.withValues(alpha: .16),
+            showValueIndicator: ShowValueIndicator.onDrag,
+          ),
+          child: Slider(
+            key: const Key('card-size-slider'),
+            value: previewValue,
+            min: _minimumCardSizePercent,
+            max: _maximumCardSizePercent,
+            label: '${previewValue.round()}%',
+            onChanged: _previewCardSize,
+          ),
         ),
       );
+      final sliderField = technical && matchControlHeight
+          ? SizedBox(height: _inventorySquareControlSize, child: slider)
+          : slider;
       return LayoutBuilder(
         builder: (context, constraints) {
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                compactLabel ? 'Card' : 'Card size',
-                style: _inventoryControlLabelStyle(context),
+              SizedBox(
+                height: 18,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    compactLabel ? 'Card' : 'Card size',
+                    style: _inventoryControlLabelStyle(context),
+                  ),
+                ),
               ),
               const SizedBox(height: 2),
               if (expandSlider)
-                SizedBox(width: double.infinity, child: slider)
+                SizedBox(width: double.infinity, child: sliderField)
               else
-                SizedBox(width: 120, child: slider),
+                SizedBox(width: 120, child: sliderField),
             ],
           );
         },
@@ -25503,6 +26005,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   ButtonStyle _destructiveIconButtonStyle(BuildContext context) {
     final danger = Theme.of(context).colorScheme.error;
+    final closeRadius = _isInventoryCraft(context) ? 0.0 : 10.0;
     Widget dangerLayer(
       BuildContext context,
       Set<WidgetState> states,
@@ -25516,7 +26019,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
           color: danger.withValues(alpha: active ? .2 : .11),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(closeRadius),
           border: Border.all(
             color: danger.withValues(alpha: active ? .72 : .42),
           ),
@@ -25531,7 +26034,7 @@ class _InventoryHomeState extends State<InventoryHome> {
               : const [],
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(closeRadius),
           child: child ?? const SizedBox.shrink(),
         ),
       );
@@ -25543,9 +26046,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       padding: const WidgetStatePropertyAll(EdgeInsets.all(8)),
       minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
-      shape: const WidgetStatePropertyAll(
+      shape: WidgetStatePropertyAll(
         RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(10)),
+          borderRadius: BorderRadius.all(Radius.circular(closeRadius)),
         ),
       ),
       backgroundBuilder: dangerLayer,
@@ -27756,6 +28259,12 @@ class _InventoryHomeState extends State<InventoryHome> {
     backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
     overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     side: const WidgetStatePropertyAll(BorderSide.none),
+    // InventoryCraft quick actions use the same outlined surface as Hide
+    // Zeroes. Its hover state becomes the visible activated treatment.
+    backgroundBuilder: (buttonContext, states, child) =>
+        _isInventoryCraft(buttonContext)
+        ? _GlassButtonSurface(states: states, child: child)
+        : child ?? const SizedBox.shrink(),
     shape: WidgetStatePropertyAll(
       RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(_designRadius(context, 10)),
@@ -28340,163 +28849,145 @@ class _InventoryHomeState extends State<InventoryHome> {
     disabledMessage: disabledMessage,
   );
 
-  Widget _viewToggle() {
-    Widget passthroughButtonLayer(
-      BuildContext context,
-      Set<WidgetState> states,
-      Widget? child,
-    ) => child ?? const SizedBox.shrink();
-
-    return SegmentedButton<bool>(
-      key: const Key('inventory-view-toggle'),
-      style: ButtonStyle(
-        backgroundColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            final palette =
-                Theme.of(context).extension<InventorinatorColors>() ??
-                InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-            return palette.base.withValues(alpha: .58);
-          }
-          return Colors.transparent;
-        }),
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-        backgroundBuilder: passthroughButtonLayer,
-        foregroundColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.disabled)) {
-            return const Color(0xff6f7180);
-          }
-          final palette =
-              Theme.of(context).extension<InventorinatorColors>() ??
-              InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-          return states.contains(WidgetState.selected)
-              ? palette.accent
-              : Theme.of(context).colorScheme.onSurfaceVariant;
-        }),
-        side: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            final palette =
-                Theme.of(context).extension<InventorinatorColors>() ??
-                InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-            return BorderSide(color: palette.rim.withValues(alpha: .78));
-          }
-          return BorderSide.none;
-        }),
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(_designRadius(context, 10)),
-          ),
-        ),
-        padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-        ),
-        minimumSize: const WidgetStatePropertyAll(
-          Size(0, _inventorySquareControlSize),
-        ),
-        maximumSize: const WidgetStatePropertyAll(
-          Size(double.infinity, _inventorySquareControlSize),
-        ),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.standard,
-      ),
-      segments: const [
-        ButtonSegment(
-          value: false,
-          icon: Icon(Icons.view_agenda_outlined),
-          tooltip: 'List view',
-        ),
-        ButtonSegment(
-          value: true,
-          icon: Icon(Icons.grid_view_rounded),
-          tooltip: 'Grid view',
-        ),
-      ],
-      // Force both icon-only segments to share the control width evenly so
-      // their glyphs stay centered instead of falling back to intrinsic-size
-      // placement inside the glass shell.
-      expandedInsets: EdgeInsets.zero,
-      selected: {gridView},
-      showSelectedIcon: false,
-      onSelectionChanged: (value) => setState(() => gridView = value.first),
-    );
-  }
-
-  Widget _viewOptionsControls({double gap = 60}) => Row(
+  Widget _viewToggle() => Row(
+    key: const Key('inventory-view-toggle'),
     mainAxisSize: MainAxisSize.min,
     children: [
-      SizedBox(
-        width: _inventorySquareControlSize * 2 + 4,
-        height: _inventorySquareControlSize,
-        child: _GlassFilterChip(
-          selected: false,
-          child: SizedBox.expand(child: _viewToggle()),
+      _viewModeToggle(
+        value: false,
+        icon: Icons.view_agenda_outlined,
+        tooltip: 'List view',
+      ),
+      const SizedBox(width: 4),
+      _viewModeToggle(
+        value: true,
+        icon: Icons.grid_view_rounded,
+        tooltip: 'Grid view',
+      ),
+    ],
+  );
+
+  Widget _viewModeToggle({
+    required bool value,
+    required IconData icon,
+    required String tooltip,
+  }) => Tooltip(
+    message: tooltip,
+    child: SizedBox.square(
+      dimension: _inventorySquareControlSize,
+      child: _GlassFilterChip(
+        // Keep the exact same shell as Hide Zeroes. Selection is conveyed by
+        // the icon color only, never by a second border treatment.
+        selected: false,
+        child: SizedBox.expand(
+          // Do not put an IconButton inside the shared surface: Material's
+          // focused/selected button layers can draw a second, thick outline.
+          // This is deliberately just a hit target inside the one-pixel shell.
+          child: Semantics(
+            button: true,
+            selected: gridView == value,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => gridView = value),
+              child: Center(
+                child: Icon(
+                  icon,
+                  color: gridView == value
+                      ? (Theme.of(context).extension<InventorinatorColors>() ??
+                                InventorinatorColors.palettes[AppColorTheme
+                                    .darkPurple]!)
+                            .accent
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
-      SizedBox(width: gap),
-      Tooltip(
-        message: hideZeroQuantityItems
-            ? 'Show zero-quantity items'
-            : 'Hide zero-quantity items',
-        child: SizedBox.square(
-          dimension: _inventorySquareControlSize,
-          child: _GlassFilterChip(
-            selected: hideZeroQuantityItems,
-            child: SizedBox.expand(
-              child: IconButton(
-                key: const Key('hide-zero-quantity-items'),
-                isSelected: hideZeroQuantityItems,
-                onPressed: catalogFilter != null
-                    ? null
-                    : () {
-                        setState(() {
-                          hideZeroQuantityItems = !hideZeroQuantityItems;
-                          currentPage = 0;
-                        });
-                        widget.database?.saveBoolPreference(
-                          'hide_zero_quantity_items',
-                          hideZeroQuantityItems,
-                        );
-                      },
-                icon: const Icon(Icons.visibility_outlined),
-                selectedIcon: const Icon(Icons.visibility_off_outlined),
-                padding: EdgeInsets.zero,
-                style: ButtonStyle(
-                  minimumSize: const WidgetStatePropertyAll(
-                    Size(
-                      _inventorySquareControlSize,
-                      _inventorySquareControlSize,
+    ),
+  );
+
+  Widget _viewOptionsControls({
+    double gap = 60,
+    bool showView = true,
+    bool showHideZeroes = true,
+  }) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (showView)
+        SizedBox(
+          width: _inventorySquareControlSize * 2 + 4,
+          height: _inventorySquareControlSize,
+          child: _viewToggle(),
+        ),
+      if (showView && showHideZeroes) SizedBox(width: gap),
+      if (showHideZeroes)
+        Tooltip(
+          message: hideZeroQuantityItems
+              ? 'Show zero-quantity items'
+              : 'Hide zero-quantity items',
+          child: SizedBox.square(
+            dimension: _inventorySquareControlSize,
+            child: _GlassFilterChip(
+              selected: hideZeroQuantityItems,
+              child: SizedBox.expand(
+                child: IconButton(
+                  key: const Key('hide-zero-quantity-items'),
+                  isSelected: hideZeroQuantityItems,
+                  onPressed: catalogFilter != null
+                      ? null
+                      : () {
+                          setState(() {
+                            hideZeroQuantityItems = !hideZeroQuantityItems;
+                            currentPage = 0;
+                          });
+                          widget.database?.saveBoolPreference(
+                            'hide_zero_quantity_items',
+                            hideZeroQuantityItems,
+                          );
+                        },
+                  icon: const Icon(Icons.visibility_outlined),
+                  selectedIcon: const Icon(Icons.visibility_off_outlined),
+                  padding: EdgeInsets.zero,
+                  style: ButtonStyle(
+                    minimumSize: const WidgetStatePropertyAll(
+                      Size(
+                        _inventorySquareControlSize,
+                        _inventorySquareControlSize,
+                      ),
                     ),
-                  ),
-                  maximumSize: const WidgetStatePropertyAll(
-                    Size(
-                      _inventorySquareControlSize,
-                      _inventorySquareControlSize,
+                    maximumSize: const WidgetStatePropertyAll(
+                      Size(
+                        _inventorySquareControlSize,
+                        _inventorySquareControlSize,
+                      ),
                     ),
-                  ),
-                  backgroundColor: const WidgetStatePropertyAll(
-                    Colors.transparent,
-                  ),
-                  backgroundBuilder: (context, states, child) =>
-                      child ?? const SizedBox.shrink(),
-                  overlayColor: const WidgetStatePropertyAll(
-                    Colors.transparent,
-                  ),
-                  foregroundColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return const Color(0xff6f7180);
-                    }
-                    final palette =
-                        Theme.of(context).extension<InventorinatorColors>() ??
-                        InventorinatorColors.palettes[AppColorTheme
-                            .darkPurple]!;
-                    return states.contains(WidgetState.selected)
-                        ? palette.accent
-                        : Theme.of(context).colorScheme.onSurfaceVariant;
-                  }),
-                  side: const WidgetStatePropertyAll(BorderSide.none),
-                  shape: WidgetStatePropertyAll(
-                    RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(
-                        _designRadius(context, 10),
+                    backgroundColor: const WidgetStatePropertyAll(
+                      Colors.transparent,
+                    ),
+                    backgroundBuilder: (context, states, child) =>
+                        child ?? const SizedBox.shrink(),
+                    overlayColor: const WidgetStatePropertyAll(
+                      Colors.transparent,
+                    ),
+                    foregroundColor: WidgetStateProperty.resolveWith((states) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return const Color(0xff6f7180);
+                      }
+                      final palette =
+                          Theme.of(context).extension<InventorinatorColors>() ??
+                          InventorinatorColors.palettes[AppColorTheme
+                              .darkPurple]!;
+                      return states.contains(WidgetState.selected)
+                          ? palette.accent
+                          : Theme.of(context).colorScheme.onSurfaceVariant;
+                    }),
+                    side: const WidgetStatePropertyAll(BorderSide.none),
+                    shape: WidgetStatePropertyAll(
+                      RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          _designRadius(context, 10),
+                        ),
                       ),
                     ),
                   ),
@@ -28505,45 +28996,63 @@ class _InventoryHomeState extends State<InventoryHome> {
             ),
           ),
         ),
-      ),
     ],
   );
 
-  Widget _viewOptions({double gap = 60}) => SizedBox(
-    width: _inventorySquareControlSize * 2 + 4 + gap + 72,
-    child: Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 20),
-          child: _viewOptionsControls(gap: gap),
-        ),
-        Positioned(
-          left: 0,
-          top: 0,
-          width: _inventorySquareControlSize * 2 + 4,
-          child: Text(
-            'View',
-            textAlign: TextAlign.center,
-            style: _inventoryControlLabelStyle(context),
+  Widget _viewOptions({double gap = 60}) {
+    final viewWidth = _inventorySquareControlSize * 2 + 4;
+    const hideZeroesWidth = 96.0;
+    return SizedBox(
+      width: viewWidth + gap + hideZeroesWidth,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: viewWidth,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 18,
+                  child: Center(
+                    child: Text(
+                      'View',
+                      style: _inventoryControlLabelStyle(context),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                _viewOptionsControls(gap: 0, showHideZeroes: false),
+              ],
+            ),
           ),
-        ),
-        Positioned(
-          left: _inventorySquareControlSize * 2 + 4 + gap - 16,
-          top: 0,
-          width: 72,
-          child: Text(
-            'Hide Zeroes',
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.visible,
-            style: _inventoryControlLabelStyle(context, fontSize: 12),
+          SizedBox(width: gap),
+          SizedBox(
+            width: hideZeroesWidth,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 18,
+                  child: Center(
+                    child: Text(
+                      'Hide Zeroes',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _inventoryControlLabelStyle(context, fontSize: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                _viewOptionsControls(gap: 0, showView: false),
+              ],
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 
   String get _activeTypeFilterLabel {
     if (archivedOnly) return 'Archived';
@@ -28692,50 +29201,53 @@ class _InventoryHomeState extends State<InventoryHome> {
     required VoidCallback onPressed,
   }) {
     final technical = _isInventoryCraft(context);
-    return OutlinedButton(
-      onPressed: onPressed,
-      // Material adds a generous default inset to every outlined button. The
-      // technical launcher cards supply their own tighter edge spacing.
-      style: technical
-          ? const ButtonStyle(
-              padding: WidgetStatePropertyAll(EdgeInsets.zero),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            )
-          : null,
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: technical ? 8 : 10,
-          vertical: 8,
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 20),
-            SizedBox(width: technical ? 8 : 10),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  if (summary != null && summary.isNotEmpty)
+    return SizedBox(
+      height: technical ? 56 : null,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        // Material adds a generous default inset to every outlined button. The
+        // technical launcher cards supply their own tighter edge spacing.
+        style: technical
+            ? const ButtonStyle(
+                padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              )
+            : null,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: technical ? 8 : 10,
+            vertical: 8,
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 20),
+              SizedBox(width: technical ? 8 : 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      summary,
+                      title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: _inventoryControlSummaryStyle(
-                        context,
-                        fontSize: 11,
-                      ),
+                      style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
-                ],
+                    if (summary != null && summary.isNotEmpty)
+                      Text(
+                        summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _inventoryControlSummaryStyle(
+                          context,
+                          fontSize: 11,
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -28805,22 +29317,19 @@ class _InventoryHomeState extends State<InventoryHome> {
           );
         }
         final searchWidth = constraints.maxWidth / 3;
-        // Preserve the existing, two-line launcher cards. Search gets the
-        // spare width; the cards have a readable, bounded desktop width.
-        final launcherWidth =
-            ((constraints.maxWidth - searchWidth - 12 - 24) / 4)
-                .clamp(176.0, 260.0)
-                .toDouble();
+        // Search retains its desktop width; the four utility launchers share
+        // every remaining pixel instead of leaving a trailing gap.
         return Row(
           children: [
             SizedBox(width: searchWidth, child: leadingSearch),
             const SizedBox(width: 12),
             Expanded(
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  for (final launcher in launchers)
-                    SizedBox(width: launcherWidth, child: launcher),
+                  for (var index = 0; index < launchers.length; index++) ...[
+                    Expanded(child: launchers[index]),
+                    if (index < launchers.length - 1) const SizedBox(width: 8),
+                  ],
                 ],
               ),
             ),
@@ -43649,19 +44158,32 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     IconData icon,
   ) {
     final selected = filamentSidebarTab == tab;
+    final technical = _isInventoryCraft(context);
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
     return Expanded(
       child: InkWell(
         key: Key('filament-details-tab-${tab.name}'),
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(11),
         onTap: () => setState(() => filamentSidebarTab = tab),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
+          height: technical ? 42 : null,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
           decoration: BoxDecoration(
             color: selected
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: .28)
+                ? technical
+                      ? palette.panel
+                      : Theme.of(context).colorScheme.primary
+                            .withValues(alpha: .28)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(11),
+            borderRadius: technical
+                ? BorderRadius.zero
+                : BorderRadius.circular(11),
+            border: technical && selected
+                ? Border(bottom: BorderSide(color: palette.accent, width: 2))
+                : null,
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -43670,7 +44192,9 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                 icon,
                 size: 17,
                 color: selected
-                    ? Theme.of(context).colorScheme.primary
+                    ? technical
+                          ? palette.accent
+                          : Theme.of(context).colorScheme.primary
                     : Theme.of(context).colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 6),
@@ -43681,10 +44205,13 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: selected
-                        ? const Color(0xfff1edff)
+                        ? technical
+                              ? Theme.of(context).colorScheme.onSurface
+                              : const Color(0xfff1edff)
                         : Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 13,
                     fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    fontFamily: technical ? 'monospace' : null,
                   ),
                 ),
               ),
@@ -43702,6 +44229,10 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
     required DryingSettings dryingSettings,
     required int? dryingDuration,
   }) {
+    final technical = _isInventoryCraft(context);
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
     final spoolDimensions = [
       if (item.spoolOuterDiameterMm != null)
         'OD ${_optionalNumber(item.spoolOuterDiameterMm)} mm',
@@ -43838,6 +44369,59 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
         ),
       ],
     };
+    final tabStrip = Row(
+      children: [
+        _filamentTabButton(
+          _FilamentSidebarTab.instructions,
+          'Instructions',
+          Icons.menu_book_outlined,
+        ),
+        if (technical)
+          Container(width: 1, height: 42, color: palette.outlineVariant),
+        _filamentTabButton(
+          _FilamentSidebarTab.spool,
+          'Spool / AMS',
+          Icons.donut_large_rounded,
+        ),
+        if (technical)
+          Container(width: 1, height: 42, color: palette.outlineVariant),
+        _filamentTabButton(
+          _FilamentSidebarTab.brand,
+          'Brand',
+          Icons.sell_outlined,
+        ),
+      ],
+    );
+    final tabContent = AnimatedSwitcher(
+      key: const Key('filament-details-tab-content'),
+      duration: const Duration(milliseconds: 180),
+      child: Column(
+        key: ValueKey(filamentSidebarTab),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: content,
+      ),
+    );
+    if (technical) {
+      return _ArtCraftCornerFrame(
+        outline: palette.outlineVariant,
+        accent: palette.accent,
+        child: Container(
+          key: const Key('filament-details-tabs'),
+          decoration: BoxDecoration(
+            color: palette.surface.withValues(alpha: .62),
+            border: Border.all(color: palette.outlineVariant),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              tabStrip,
+              Divider(height: 1, color: palette.outlineVariant),
+              Padding(padding: const EdgeInsets.all(14), child: tabContent),
+            ],
+          ),
+        ),
+      );
+    }
     return Column(
       key: const Key('filament-details-tabs'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -43849,36 +44433,10 @@ class _ItemDetailsPanelState extends State<ItemDetailsPanel> {
             border: Border.all(color: const Color(0xff34394a)),
             borderRadius: BorderRadius.circular(14),
           ),
-          child: Row(
-            children: [
-              _filamentTabButton(
-                _FilamentSidebarTab.instructions,
-                'Instructions',
-                Icons.menu_book_outlined,
-              ),
-              _filamentTabButton(
-                _FilamentSidebarTab.spool,
-                'Spool / AMS',
-                Icons.donut_large_rounded,
-              ),
-              _filamentTabButton(
-                _FilamentSidebarTab.brand,
-                'Brand',
-                Icons.sell_outlined,
-              ),
-            ],
-          ),
+          child: tabStrip,
         ),
         const SizedBox(height: 22),
-        AnimatedSwitcher(
-          key: const Key('filament-details-tab-content'),
-          duration: const Duration(milliseconds: 180),
-          child: Column(
-            key: ValueKey(filamentSidebarTab),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: content,
-          ),
-        ),
+        tabContent,
       ],
     );
   }
@@ -47492,30 +48050,29 @@ class _ScrollingInventoryCard extends StatelessWidget {
   final ValueListenable<bool>? scrolling;
   final Widget child;
 
-  Widget _buildCard(
-    BuildContext context,
-    Clip clipBehavior,
-    Widget child,
-  ) => Card(
-    key: Key('inventory-card-$itemId'),
-    color: selected
-        ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
-        : null,
-    shape: selected
-        ? RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(_designRadius(context, 22)),
-            side: BorderSide(
-              color: Theme.of(context).colorScheme.primary,
-              width: 2,
-            ),
-          )
-        : null,
-    // Anti-aliasing every moving card costs a full viewport's worth of edge
-    // samples. A hard clip is visually equivalent while content is in motion;
-    // restore the polished anti-aliased edge as soon as the viewport settles.
-    clipBehavior: clipBehavior,
-    child: child,
-  );
+  Widget _buildCard(BuildContext context, Clip clipBehavior, Widget child) {
+    final card = Card(
+      key: Key('inventory-card-$itemId'),
+      color: selected
+          ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
+          : null,
+      shape: selected
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(_designRadius(context, 22)),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
+      // Anti-aliasing every moving card costs a full viewport's worth of edge
+      // samples. A hard clip is visually equivalent while content is in motion;
+      // restore the polished anti-aliased edge as soon as the viewport settles.
+      clipBehavior: clipBehavior,
+      child: child,
+    );
+    return card;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48302,6 +48859,291 @@ class _ItemTimerDisplayScope extends InheritedWidget {
   bool updateShouldNotify(_ItemTimerDisplayScope oldWidget) =>
       defaultDisplay != oldWidget.defaultDisplay ||
       !mapEquals(typeDisplays, oldWidget.typeDisplays);
+}
+
+class _InventoryShowcaseCarousel extends StatefulWidget {
+  const _InventoryShowcaseCarousel({
+    required this.newItems,
+    required this.timedMachines,
+    required this.timerDisplay,
+    required this.onOpenItem,
+    required this.onOpenMachine,
+  });
+
+  final List<InventoryItem> newItems;
+  final List<MachineRecord> timedMachines;
+  final MachineTimerDisplay timerDisplay;
+  final ValueChanged<InventoryItem> onOpenItem;
+  final ValueChanged<MachineRecord> onOpenMachine;
+
+  @override
+  State<_InventoryShowcaseCarousel> createState() =>
+      _InventoryShowcaseCarouselState();
+}
+
+class _InventoryShowcaseCarouselState
+    extends State<_InventoryShowcaseCarousel> {
+  Timer? _newItemAutoplay;
+  var _newItemsIndex = 0;
+  var _timerIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _newItemAutoplay = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (mounted && widget.newItems.length > 1) {
+        setState(
+          () => _newItemsIndex = (_newItemsIndex + 1) % widget.newItems.length,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _newItemAutoplay?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 14, 20, 2),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (widget.timedMachines.isNotEmpty) ...[
+          Text(
+            'Active machine timers',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          _carousel(
+            count: widget.timedMachines.length,
+            activeIndex: _timerIndex,
+            onIndexChanged: (index) => setState(() => _timerIndex = index),
+            itemBuilder: (context, index, focus) {
+              final machine = widget.timedMachines[index];
+              return InkWell(
+                onTap: () => widget.onOpenMachine(machine),
+                child: _machineCard(context, machine),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (widget.newItems.isNotEmpty) ...[
+          Text(
+            'Recently added',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          _carousel(
+            count: widget.newItems.length,
+            activeIndex: _newItemsIndex,
+            onIndexChanged: (index) => setState(() => _newItemsIndex = index),
+            itemBuilder: (context, index, focus) {
+              final item = widget.newItems[index];
+              return InkWell(
+                onTap: () => widget.onOpenItem(item),
+                child: _itemCard(context, item),
+              );
+            },
+          ),
+        ],
+      ],
+    ),
+  );
+
+  Widget _carousel({
+    required int count,
+    required int activeIndex,
+    required ValueChanged<int> onIndexChanged,
+    required Widget Function(BuildContext, int, double) itemBuilder,
+  }) => SizedBox(
+    height: 178,
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth = math.min(244.0, constraints.maxWidth - 40);
+        final cardHeight = cardWidth * 186 / 244;
+        final radius = math.min(
+          constraints.maxWidth * .35,
+          cardWidth * (1.45 + math.min(count, 8) * .12),
+        );
+        // A desktop switcher normally has only a handful of windows. Inventory
+        // can have hundreds, so render the same five-card focal window rather
+        // than stacking every distant record into an unreadable fog.
+        final visibleSlots = math.min(count, 5);
+        final stepDegrees = math.min(48.0, 82 / math.max(1, visibleSlots ~/ 2));
+        int wrappedDelta(int index) {
+          var delta = index - activeIndex;
+          if (delta > count / 2) delta -= count;
+          if (delta < -count / 2) delta += count;
+          return delta;
+        }
+
+        final visible =
+            List.generate(
+                count,
+                (index) => index,
+              ).where((index) => wrappedDelta(index).abs() <= 2).toList()
+              ..sort((a, b) {
+                final depthA = math.cos(
+                  wrappedDelta(a) * stepDegrees * math.pi / 180,
+                );
+                final depthB = math.cos(
+                  wrappedDelta(b) * stepDegrees * math.pi / 180,
+                );
+                return depthA.compareTo(depthB);
+              });
+        return GestureDetector(
+          onHorizontalDragEnd: (details) {
+            final velocity = details.primaryVelocity ?? 0;
+            if (velocity.abs() < 120 || count < 2) return;
+            onIndexChanged(
+              (activeIndex + (velocity < 0 ? 1 : -1) + count) % count,
+            );
+          },
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (final index in visible)
+                Builder(
+                  builder: (context) {
+                    final offset = wrappedDelta(index);
+                    final angleDegrees = offset * stepDegrees;
+                    final angle = angleDegrees * math.pi / 180;
+                    final depth = math.max(0.0, math.cos(angle));
+                    final scale = .66 + .34 * depth;
+                    final opacity = .18 + .82 * math.pow(depth, 1.7);
+                    return AnimatedPositioned(
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeOutCubic,
+                      left:
+                          constraints.maxWidth / 2 +
+                          math.sin(angle) * radius -
+                          cardWidth / 2,
+                      top: (1 - depth) * cardHeight * .2,
+                      width: cardWidth,
+                      height: cardHeight,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 180),
+                        opacity: opacity,
+                        child: Transform(
+                          alignment: Alignment.center,
+                          transform: Matrix4.identity()
+                            ..setEntry(3, 2, .0014)
+                            ..rotateY(-angleDegrees * .82 * math.pi / 180)
+                            ..scaleByDouble(scale, scale, scale, 1),
+                          child: GestureDetector(
+                            onTap: () => index == activeIndex
+                                ? null
+                                : onIndexChanged(index),
+                            child: IgnorePointer(
+                              ignoring: index != activeIndex,
+                              child: itemBuilder(
+                                context,
+                                index,
+                                offset.toDouble(),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+
+  BoxDecoration _cardDecoration(BuildContext context) => BoxDecoration(
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+  );
+
+  Widget _machineCard(BuildContext context, MachineRecord machine) =>
+      DecoratedBox(
+        decoration: _cardDecoration(context),
+        child: Stack(
+          children: [
+            Center(
+              child: _MachineTimerGizmo(
+                machine: machine,
+                display: widget.timerDisplay,
+              ),
+            ),
+            _carouselCaption(
+              context,
+              machine.name,
+              machine.timerLabel.isEmpty ? 'Timer active' : machine.timerLabel,
+            ),
+          ],
+        ),
+      );
+
+  Widget _itemCard(BuildContext context, InventoryItem item) {
+    final image = item.thumbnailBytes ?? item.imageBytes;
+    return DecoratedBox(
+      decoration: _cardDecoration(context),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          image == null
+              ? ColoredBox(
+                  color: item.color.withValues(alpha: .32),
+                  child: Icon(_itemIcon(item.type), size: 40),
+                )
+              : Image.memory(image, fit: BoxFit.cover),
+          _carouselCaption(context, item.name, item.type.name),
+        ],
+      ),
+    );
+  }
+
+  Widget _carouselCaption(
+    BuildContext context,
+    String title,
+    String subtitle,
+  ) => Align(
+    alignment: Alignment.bottomCenter,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.transparent,
+            const Color(0xff0a0c10).withValues(alpha: .96),
+          ],
+        ),
+      ),
+      child: SizedBox(
+        width: double.infinity,
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(9, 13, 9, 5),
+          child: Text(
+            '$title · $subtitle',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  IconData _itemIcon(InventoryType type) => switch (type) {
+    InventoryType.filament => Icons.circle_outlined,
+    InventoryType.nozzle ||
+    InventoryType.heatBreak ||
+    InventoryType.heatBlock => Icons.precision_manufacturing_outlined,
+    InventoryType.fastener => Icons.hardware_outlined,
+    _ => Icons.inventory_2_outlined,
+  };
 }
 
 /// The machine equivalent of [CountdownRing]. It deliberately uses the same

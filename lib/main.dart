@@ -7431,7 +7431,10 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
         final direction = fromStart ? 1.0 : -1.0;
         for (var index = 0; index < 3; index++) {
           final chevronX = x - direction * index * 8;
-          final opacity = (.62 - index * .17).clamp(0.0, 1.0);
+          // The edge cue needs to read through both a busy wallpaper and the
+          // ruler ticks. Keep the trailing falloff, but make the signal five
+          // times brighter than the original low-contrast treatment.
+          final opacity = ((.62 - index * .17) * 5).clamp(0.0, 1.0);
           final path = Path()
             ..moveTo(chevronX - direction * 4, interior.center.dy - 5)
             ..lineTo(chevronX + direction * 3, interior.center.dy)
@@ -7440,7 +7443,17 @@ class _NotchedSliderTrackShape extends SliderTrackShape {
             path,
             Paint()
               ..style = PaintingStyle.stroke
-              ..strokeWidth = 1.25
+              ..strokeWidth = 4
+              ..strokeCap = StrokeCap.square
+              ..strokeJoin = StrokeJoin.miter
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
+              ..color = palette.accent.withValues(alpha: opacity * .5),
+          );
+          canvas.drawPath(
+            path,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.75
               ..strokeCap = StrokeCap.square
               ..strokeJoin = StrokeJoin.miter
               ..color = palette.accent.withValues(alpha: opacity),
@@ -12416,6 +12429,16 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _beginInventoryScrollInteraction() {
+    // Pointer signals and a held mouse can arrive before the scrollable has
+    // actually moved. Do not hide the bars until the inventory has left its
+    // opening position; otherwise an app can open with both rails invisible.
+    if (!inventoryScrollController.hasClients ||
+        inventoryScrollController.position.pixels <=
+            inventoryScrollController.position.minScrollExtent + .5) {
+      _inventoryOverlayRestore?.cancel();
+      if (_inventoryIsScrolling.value) _inventoryIsScrolling.value = false;
+      return;
+    }
     _inventoryOverlayRestore?.cancel();
     if (!_inventoryIsScrolling.value) {
       _inventoryIsScrolling.value = true;

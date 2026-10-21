@@ -78,4 +78,16 @@ class DiskInventoryList<T> extends ListBase<T> {
     pending.remove(id);
     removed.remove(id);
   }
+
+  /// Replaces the in-memory index after the database has atomically adopted a
+  /// shared inventory. This is deliberately not expressed as a sequence of
+  /// removals and additions: those are user edits and would otherwise leave
+  /// stale deletion markers behind during an initial Remote Sync.
+  void replaceWith(Iterable<T> values) {
+    _ids
+      ..clear()
+      ..addAll(values.map(idOf));
+    pending.clear();
+    removed.clear();
+  }
 }

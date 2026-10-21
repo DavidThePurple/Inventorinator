@@ -43,6 +43,7 @@ class CloudSyncDialog extends StatefulWidget {
     this.deviceId,
     required this.localStateJson,
     required this.onCloudState,
+    this.onCloudReplacementState,
     this.onCloudChanges,
     this.onRemoteAccessRevoked,
     this.initialPairingCode,
@@ -53,6 +54,9 @@ class CloudSyncDialog extends StatefulWidget {
   final String? deviceId;
   final String localStateJson;
   final ValueChanged<String> onCloudState;
+  /// Used after a first-time join has atomically replaced the local database.
+  /// It must not inspect the now-stale local entity list before rebuilding.
+  final ValueChanged<String>? onCloudReplacementState;
   final ValueChanged<List<WorkshopEntityChange>>? onCloudChanges;
   final Future<void> Function()? onRemoteAccessRevoked;
   final String? initialPairingCode;
@@ -1272,10 +1276,24 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       afterRevision: cursor,
     );
     if (replaceLocal) {
-      final applied = widget.database.replaceWithRemoteEntities(
-        incoming.changes,
+      final remote = incoming.changes
+          .where((change) => !change.deleted)
+          .toList(growable: false);
+      widget.database.replaceWithRemoteEntities(remote);
+
+      // A first-time join replaces the entire local inventory. Applying this
+      // as a sequence of deletions followed by additions briefly leaves the
+      // live UI without a valid inventory, which is especially unsafe for
+      // Android's paged inventory list. Rehydrate it once from the committed
+      // remote snapshot instead.
+      final state = applyWorkshopEntityChanges(
+        jsonEncode({
+          'schemaVersion': 8,
+          for (final type in workshopEntityCollections) type: <Object?>[],
+        }),
+        remote,
       );
-      widget.onCloudChanges?.call(applied);
+      (widget.onCloudReplacementState ?? widget.onCloudState)(state);
     } else if (incoming.changes.isNotEmpty) {
       final result = mergeRemoteChangesWithPending(
         incoming.changes,

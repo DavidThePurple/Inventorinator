@@ -20875,7 +20875,10 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
-  void _applyCloudState(String source) {
+  void _applyCloudState(
+    String source, {
+    bool databaseAlreadyUpdated = false,
+  }) {
     final restored = decodeWorkshopState(source);
     if (restored == null) {
       throw const FormatException('The remote inventory could not be read.');
@@ -20883,9 +20886,17 @@ class _InventoryHomeState extends State<InventoryHome> {
     _applyingCloudState = true;
     var initializedKitSections = false;
     setState(() {
-      inventory
-        ..clear()
-        ..addAll(restored.inventory);
+      final diskInventory = _diskInventory;
+      if (diskInventory != null) {
+        // The database has already been replaced by Remote Sync. Update the
+        // paged list's ID index atomically rather than staging phantom local
+        // deletions while the shared state is being adopted.
+        diskInventory.replaceWith(restored.inventory);
+      } else {
+        inventory
+          ..clear()
+          ..addAll(restored.inventory);
+      }
       selectedInventoryIds.retainAll(inventory.map((item) => item.id).toSet());
       _initializeDryingTimers();
       vendors
@@ -20961,7 +20972,17 @@ class _InventoryHomeState extends State<InventoryHome> {
       historyLimit = restored.historyLimit;
       _trimAdditionHistory();
     });
-    _persist();
+    if (databaseAlreadyUpdated) {
+      // Remote Sync has already committed the entity rows. Capture that exact
+      // baseline instead of queuing the freshly received records as local
+      // edits. This also makes the next incremental sync a true no-op.
+      _reconcileReadInventoryAlerts();
+      _invalidateSearchCaches();
+      _synchronizeInventoryNotifiers();
+      _capturePersistedEntityReferences();
+    } else {
+      _persist();
+    }
     _applyingCloudState = false;
     if (initializedKitSections) unawaited(_syncAutomatically());
   }
@@ -20995,6 +21016,15 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
     _checkMoistureThresholdAnimations();
     if (inventoryChanged) unawaited(_playSyncChime());
+  }
+
+  void _applyRemoteCloudReplacementState(String source) {
+    // The entity database was replaced before this callback. Do not compare it
+    // to the previous paged inventory here: its old IDs no longer exist in the
+    // database, which previously crashed Android immediately after pairing.
+    _applyCloudState(source, databaseAlreadyUpdated: true);
+    _checkMoistureThresholdAnimations();
+    unawaited(_playSyncChime());
   }
 
   void _applyRemoteEntityChanges(List<WorkshopEntityChange> changes) {
@@ -22217,6 +22247,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         deviceId: deviceId,
         localStateJson: _currentStateJson(),
         onCloudState: _applyRemoteCloudState,
+        onCloudReplacementState: _applyRemoteCloudReplacementState,
         onCloudChanges: _applyRemoteEntityChanges,
         onRemoteAccessRevoked: () => _purgeLocalDataAfterRevocation(database),
         initialPairingCode: initialPairingCode,

@@ -27,15 +27,23 @@ void main() {
     }
   });
 
-  test('Android uses a transparent adaptive launcher icon', () {
-    for (final path in [
-      'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
-      'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml',
-    ]) {
-      final xml = File(path).readAsStringSync();
-      expect(xml, contains('<adaptive-icon'));
-      expect(xml, contains('@android:color/transparent'));
-      expect(xml, contains('@mipmap/ic_launcher_foreground'));
-    }
+  test('Android uses the transparent launcher raster without a system plate', () {
+    // Samsung launchers can turn an adaptive icon with a transparent
+    // background into an opaque square. Keep the manifest on the transparent
+    // raster and deliberately omit adaptive resources.
+    final manifest = File('android/app/src/main/AndroidManifest.xml')
+        .readAsStringSync();
+    expect(manifest, contains('android:icon="@mipmap/ic_launcher"'));
+    expect(manifest, isNot(contains('android:roundIcon')));
+    expect(
+      File('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml')
+          .existsSync(),
+      isFalse,
+    );
+    expect(
+      File('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml')
+          .existsSync(),
+      isFalse,
+    );
   });
 }

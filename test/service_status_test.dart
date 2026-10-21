@@ -109,6 +109,102 @@ void main() {
       dir.deleteSync(recursive: true);
     });
   }
+
+  testWidgets(
+    'pairing persists the membership and ignores unavailable optional policies',
+    (tester) async {
+      final dir = Directory.systemTemp.createTempSync('pairing-persist-');
+      final db = (await tester.runAsync(
+        () => LocalDatabase.open(overridePath: '${dir.path}/db.sqlite3'),
+      ))!;
+      const workspaceId = '10000000-0000-0000-0000-000000000001';
+      const userId = '20000000-0000-0000-0000-000000000001';
+      const initial = SupabaseConfig(
+        url: 'https://example.invalid',
+        publishableKey: 'fixture',
+        syncMode: 'local',
+      );
+      db.saveSyncConfig(jsonEncode(initial.toJson()));
+      await tester.runAsync(() => db.waitForPendingWrites());
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/auth/v1/signup')) {
+          return http.Response(
+            jsonEncode({
+              'access_token': 'access-token',
+              'refresh_token': 'refresh-token',
+              'expires_in': 3600,
+              'user': {'id': userId},
+            }),
+            200,
+          );
+        }
+        if (path.endsWith('inventorinator_schema')) {
+          return http.Response(
+            '[{"version":$latestInventorinatorSchemaVersion}]',
+            200,
+          );
+        }
+        if (path.endsWith('redeem_inventorinator_pairing_code')) {
+          return http.Response('"$workspaceId"', 200);
+        }
+        if (path.endsWith('get_inventorinator_role') ||
+            path.endsWith('get_inventorinator_effective_role')) {
+          return http.Response('"builder"', 200);
+        }
+        if (path.endsWith('register_inventorinator_device') ||
+            path.endsWith('get_inventorinator_remote_purge_days') ||
+            path.endsWith('get_inventorinator_checkout_sync')) {
+          return http.Response('{"message":"optional RPC unavailable"}', 404);
+        }
+        if (path.endsWith('workshop_states')) return http.Response('[]', 200);
+        if (path.endsWith('save_inventorinator_workshop_state')) {
+          return http.Response('"2026-10-21T00:00:00Z"', 200);
+        }
+        throw StateError('Unexpected request: $path');
+      });
+      final statusKey = 'Supabase:${digiKeyScope(initial.url, workspaceId)}';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CloudSyncDialog(
+            database: db,
+            httpClient: client,
+            localStateJson: '{}',
+            onCloudState: (_) {},
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('show-join-device')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('pairing-code')),
+        'PAIR-CODE',
+      );
+      await tester.tap(find.byKey(const Key('join-device')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic dialog = tester.state(find.byType(CloudSyncDialog));
+      expect(dialog.message as String, contains('Connected'));
+      final saved = SupabaseConfig.fromJson(
+        jsonDecode(db.loadSyncConfig()!) as Map<String, dynamic>,
+      );
+      expect(saved.workspaceId, workspaceId);
+      expect(saved.userId, userId);
+      expect(saved.hasSession, isTrue);
+      expect(find.byKey(const Key('join-device')), findsNothing);
+      expect(ServiceStatus.read(statusKey), ConnectionStateLed.connected);
+
+      await tester.pumpWidget(const SizedBox());
+      client.close();
+      db.close();
+      dir.deleteSync(recursive: true);
+    },
+  );
+
   testWidgets('background sync pauses for an outdated Remote schema', (
     tester,
   ) async {

@@ -370,7 +370,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final registrationName = await _deviceNameForRegistration();
     final next = _formConfig();
     _requireServer(next);
-    final service = SupabaseSyncService(next);
+    final service = SupabaseSyncService(next, client: widget.httpClient);
     final session = await service.signInAnonymously();
     await service.requireInventorySchema(session);
     final recovery = await service.createWorkspaceWithRecovery(session);
@@ -388,8 +388,14 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         refreshToken: session.refreshToken,
       ),
     );
-    await SupabaseSyncService(config)
-        .registerDevice(session, registrationName, deviceId: _stableDeviceId);
+    try {
+      await SupabaseSyncService(
+        config,
+        client: widget.httpClient,
+      ).registerDevice(session, registrationName, deviceId: _stableDeviceId);
+    } catch (error) {
+      debugPrint('New workspace device registration is waiting: $error');
+    }
     if (widget.onCloudChanges != null) {
       widget.database.queueAllEntitiesForSync();
     }
@@ -449,7 +455,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     if (!await _confirmOwnershipRecovery()) return '';
     final next = _formConfig();
     _requireServer(next);
-    final service = SupabaseSyncService(next);
+    final service = SupabaseSyncService(next, client: widget.httpClient);
     final session = await service.signInAnonymously();
     final serverSchema = await service.requireInventorySchema(session);
     // Validate before changing remote membership or recovery credentials.
@@ -475,12 +481,19 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       refreshToken: session.refreshToken,
     );
     _save(recovered);
-    final recoveredService = SupabaseSyncService(recovered);
-    await recoveredService.registerDevice(
-      session,
-      registrationName,
-      deviceId: _stableDeviceId,
+    final recoveredService = SupabaseSyncService(
+      recovered,
+      client: widget.httpClient,
     );
+    try {
+      await recoveredService.registerDevice(
+        session,
+        registrationName,
+        deviceId: _stableDeviceId,
+      );
+    } catch (error) {
+      debugPrint('Recovered workspace device registration is waiting: $error');
+    }
     if (widget.onCloudChanges != null) {
       await _syncEntities(recoveredService, session);
     } else {
@@ -569,7 +582,7 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     final code = payload?['code'] as String? ?? raw;
     final next = _formConfig();
     _requireServer(next);
-    final service = SupabaseSyncService(next);
+    final service = SupabaseSyncService(next, client: widget.httpClient);
     final session = await service.signInAnonymously();
     final serverSchema = await service.requireInventorySchema(session);
     // Pairing codes are single-use. Refuse an out-of-date Remote before the
@@ -584,68 +597,103 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
       code,
       deviceId: stableDeviceId.isEmpty ? null : stableDeviceId,
     );
-    final restoredRole = await SupabaseSyncService(
-      next.copyWith(
-        userId: session.userId,
-        workspaceId: workspaceId,
-        accessToken: session.accessToken,
-        accessTokenExpiresAt: session.expiresAt,
-        refreshToken: session.refreshToken,
-      ),
-    ).currentRole(session);
+    // Redeeming the code has already created the server-side membership. Save
+    // that durable result before any follow-up RPC so a temporarily missing
+    // optional service can never strand this device behind a spent code.
     var joined = next.copyWith(
       userId: session.userId,
       workspaceId: workspaceId,
-      workspaceRole: restoredRole,
+      workspaceRole: 'builder',
       accessToken: session.accessToken,
       accessTokenExpiresAt: session.expiresAt,
       refreshToken: session.refreshToken,
     );
     _save(joined);
-    final joinedService = SupabaseSyncService(joined);
-    await joinedService.registerDevice(
-      session,
-      registrationName,
-      deviceId: _stableDeviceId,
+    final joinedService = SupabaseSyncService(
+      joined,
+      client: widget.httpClient,
     );
-    final purgeDays = await joinedService.remotePurgeAfterDays(session);
-    joined = joined.copyWith(
-      remotePurgeAfterDays: purgeDays,
-      requireManualDryingTimes: await joinedService.manualDryingTimesRequired(
-        session,
-      ),
-    );
-    widget.database.setCheckoutSyncEnabled(
-      await joinedService.checkoutSyncEnabled(session),
-    );
-    _save(joined);
-    if (mounted) setState(() => isWorkspaceOwner = false);
-    if (widget.onCloudChanges != null) {
-      await _syncEntities(joinedService, session, replaceLocal: true);
-    } else {
-      final cloud = await joinedService.download(session);
-      if (cloud == null) {
-        final state = _canonicalJson(widget.localStateJson);
-        final updatedAt = await joinedService.upload(session, state);
-        _save(
-          joined.copyWith(lastSyncedAt: updatedAt, lastSyncedStateJson: state),
-        );
-      } else {
-        // Joining an existing shared inventory must never upload starter/local
-        // rows over it. The existing workspace is authoritative at pairing time.
-        final state = canonicalWorkshopState(cloud.stateJson);
-        widget.onCloudState(state);
-        _save(
-          joined.copyWith(
-            lastSyncedAt: cloud.updatedAt,
-            lastSyncedStateJson: state,
-          ),
-        );
+    final statusKey =
+        'Supabase:${digiKeyScope(joined.url, joined.workspaceId)}';
+    ServiceStatus.set(statusKey, ConnectionStateLed.checking);
+    try {
+      // The pairing transaction is complete at this point. Do not leave the
+      // join form active: pressing Join again would only retry a single-use key.
+      if (mounted) setState(() => joining = false);
+      var restoredRole = joined.workspaceRole ?? 'builder';
+      try {
+        restoredRole = await joinedService.currentRole(session);
+      } catch (error) {
+        debugPrint('Paired device role refresh is waiting: $error');
       }
+      joined = joined.copyWith(workspaceRole: restoredRole);
+      _save(joined);
+      try {
+        await joinedService.registerDevice(
+          session,
+          registrationName,
+          deviceId: _stableDeviceId,
+        );
+      } catch (error) {
+        debugPrint('Paired device registration is waiting: $error');
+      }
+      var purgeDays = joined.remotePurgeAfterDays ?? 3;
+      var manualDrying = joined.requireManualDryingTimes;
+      try {
+        purgeDays = await joinedService.remotePurgeAfterDays(session);
+        manualDrying = await joinedService.manualDryingTimesRequired(session);
+      } catch (error) {
+        debugPrint('Paired workspace policy is waiting: $error');
+      }
+      try {
+        widget.database.setCheckoutSyncEnabled(
+          await joinedService.checkoutSyncEnabled(session),
+        );
+      } catch (error) {
+        debugPrint('Paired checkout preference is waiting: $error');
+      }
+      joined = joined.copyWith(
+        remotePurgeAfterDays: purgeDays,
+        requireManualDryingTimes: manualDrying,
+      );
+      _save(joined);
+      if (mounted) setState(() => isWorkspaceOwner = false);
+      if (widget.onCloudChanges != null) {
+        await _syncEntities(joinedService, session, replaceLocal: true);
+      } else {
+        final cloud = await joinedService.download(session);
+        if (cloud == null) {
+          final state = _canonicalJson(widget.localStateJson);
+          final updatedAt = await joinedService.upload(session, state);
+          _save(
+            joined.copyWith(
+              lastSyncedAt: updatedAt,
+              lastSyncedStateJson: state,
+            ),
+          );
+        } else {
+          // Joining an existing shared inventory must never upload starter/local
+          // rows over it. The existing workspace is authoritative at pairing time.
+          final state = canonicalWorkshopState(cloud.stateJson);
+          widget.onCloudState(state);
+          _save(
+            joined.copyWith(
+              lastSyncedAt: cloud.updatedAt,
+              lastSyncedStateJson: state,
+            ),
+          );
+        }
+      }
+      pairingController.clear();
+      if (mounted) setState(() => sessionNeedsReconnect = false);
+      ServiceStatus.set(statusKey, ConnectionStateLed.connected);
+      return 'Connected. This device now shares the same inventory.';
+    } catch (_) {
+      // Pairing itself is already persisted above. A red LED here means the
+      // first inventory transfer needs retrying, not that the QR was rejected.
+      ServiceStatus.set(statusKey, ConnectionStateLed.failed);
+      rethrow;
     }
-    pairingController.clear();
-    if (mounted) setState(() => sessionNeedsReconnect = false);
-    return 'Connected. This device now shares the same inventory.';
   }
 
   Future<void> _syncDigiKeyCredentials() async {
@@ -1473,27 +1521,43 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     // Refresh tokens rotate. Preserve the replacement before any later request
     // can fail and strand an otherwise valid remembered workspace.
     _rememberWorkspace(restored);
-    var service = SupabaseSyncService(restored);
+    var service = SupabaseSyncService(restored, client: widget.httpClient);
     await service.requireInventorySchema(session);
     final role = await service.currentRole(session);
-    final purgeDays = await service.remotePurgeAfterDays(session);
+    var purgeDays = restored.remotePurgeAfterDays ?? 3;
+    var manualDrying = restored.requireManualDryingTimes;
+    // These policy RPCs enhance the workspace settings panel, but a missing
+    // optional connector must not make an otherwise valid remembered session
+    // look disconnected.
+    try {
+      purgeDays = await service.remotePurgeAfterDays(session);
+      manualDrying = await service.manualDryingTimesRequired(session);
+    } catch (error) {
+      debugPrint('Reconnected workspace policy is waiting: $error');
+    }
     restored = restored.copyWith(
       workspaceRole: role,
       remotePurgeAfterDays: purgeDays,
-      requireManualDryingTimes: await service.manualDryingTimesRequired(
-        session,
-      ),
+      requireManualDryingTimes: manualDrying,
     );
-    widget.database.setCheckoutSyncEnabled(
-      await service.checkoutSyncEnabled(session),
-    );
+    try {
+      widget.database.setCheckoutSyncEnabled(
+        await service.checkoutSyncEnabled(session),
+      );
+    } catch (error) {
+      debugPrint('Reconnected checkout preference is waiting: $error');
+    }
     remotePurgeAfterDays = purgeDays;
-    service = SupabaseSyncService(restored);
-    await service.registerDevice(
-      session,
-      _deviceName,
-      deviceId: _stableDeviceId,
-    );
+    service = SupabaseSyncService(restored, client: widget.httpClient);
+    try {
+      await service.registerDevice(
+        session,
+        _deviceName,
+        deviceId: _stableDeviceId,
+      );
+    } catch (error) {
+      debugPrint('Reconnected device registration is waiting: $error');
+    }
     CloudWorkshopState? cloud;
     if (widget.onCloudChanges != null) {
       _save(restored);

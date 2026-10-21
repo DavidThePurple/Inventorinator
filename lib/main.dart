@@ -23020,9 +23020,14 @@ class _InventoryHomeState extends State<InventoryHome> {
         child: _viewOptionsControls(gap: 0, showView: false),
       );
 
-      // Three equal cells forced Sort into an icon-only dropdown and shifted
-      // the Hide Zeroes target. Keep Sort wider, then stack at phone widths.
-      if (constraints.maxWidth < 580) {
+      // Keep the labels and their controls on one baseline whenever the
+      // selected sort can still be read. Only the truly narrow fallback
+      // stacks them, rather than letting Sort drift above View and Hide Zeroes.
+      // Large accessibility text needs the vertical fallback before a 360px
+      // phone does; the readable Sort label must never squeeze the controls
+      // into an overflow.
+      final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.2;
+      if (constraints.maxWidth < 340 || largeText) {
         return Column(
           children: [
             Align(alignment: Alignment.centerLeft, child: sort),
@@ -23040,11 +23045,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(flex: 3, child: sort),
+          Expanded(flex: 5, child: sort),
           const SizedBox(width: 8),
           Expanded(flex: 2, child: view),
           const SizedBox(width: 8),
-          Expanded(flex: 2, child: hideZeroes),
+          Expanded(child: hideZeroes),
         ],
       );
     },

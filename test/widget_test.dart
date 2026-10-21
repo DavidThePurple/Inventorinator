@@ -6409,8 +6409,8 @@ Bed Temperature: 80°C
       tester.getCenter(view),
       kind: PointerDeviceKind.mouse,
     );
-    // The visibility target changes on the first held-pointer movement, before
-    // Flutter needs to resolve the drag as a scroll gesture.
+    // A held pointer alone must not hide the bar. It hides only once the list
+    // actually starts moving.
     await gesture.moveBy(const Offset(0, -1));
     await tester.pump();
     expect(
@@ -6419,11 +6419,19 @@ Bed Temperature: 80°C
             find.byKey(const Key('floating-header-visibility')),
           )
           .opacity,
-      0,
+      1,
     );
     await gesture.moveBy(const Offset(0, -3));
     await tester.pump();
     expect(position.pixels, greaterThan(0));
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const Key('floating-header-visibility')),
+          )
+          .opacity,
+      0,
+    );
     await gesture.moveBy(const Offset(0, -180));
     await gesture.up();
     await tester.pumpAndSettle();
@@ -6556,20 +6564,29 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
-    final toggle = tester.widget<SegmentedButton<bool>>(
-      find.byKey(const Key('inventory-view-toggle')),
+    final toggle = find.byKey(const Key('inventory-view-toggle'));
+    expect(toggle, findsOneWidget);
+    expect(
+      find.descendant(
+        of: toggle,
+        matching: find.byIcon(Icons.view_agenda_outlined),
+      ),
+      findsOneWidget,
     );
     expect(
-      toggle.style?.backgroundColor?.resolve(const {}),
-      Colors.transparent,
+      find.descendant(
+        of: toggle,
+        matching: find.byIcon(Icons.grid_view_rounded),
+      ),
+      findsOneWidget,
     );
-    expect(
-      toggle.style?.foregroundColor?.resolve({WidgetState.selected}),
-      const Color(0xff9f8aff),
-    );
-    expect(toggle.style?.side?.resolve(const {}), BorderSide.none);
     expect(find.byType(InventoryCard), findsWidgets);
-    await tester.tap(find.byIcon(Icons.view_agenda_outlined));
+    await tester.tap(
+      find.descendant(
+        of: toggle,
+        matching: find.byIcon(Icons.view_agenda_outlined),
+      ),
+    );
     await tester.pump();
     expect(find.byType(InventoryRow), findsWidgets);
   });
@@ -9529,6 +9546,13 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('inventory-card-INV-ZERO')), findsOneWidget);
     expect(find.byKey(const Key('inventory-card-INV-STOCKED')), findsOneWidget);
 
+    // Inventory actions are intentionally hidden while the list is moving.
+    // Return to the top before using the header toggle.
+    await tester.drag(
+      find.byKey(const Key('inventory-scroll-view')),
+      const Offset(0, 1200),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('hide-zero-quantity-items')));
     await tester.pump();
 
@@ -10710,6 +10734,9 @@ Bed Temperature: 80°C
   testWidgets('custom type filters match only their own inventory items', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     const soapType = CustomItemTypeRecord(id: 'TYPE-SOAP', name: 'Soap batch');
     final state = encodeWorkshopState(
       inventory: [

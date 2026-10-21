@@ -451,7 +451,9 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _requireServer(next);
     final service = SupabaseSyncService(next);
     final session = await service.signInAnonymously();
-    await service.requireInventorySchema(session);
+    final serverSchema = await service.requireInventorySchema(session);
+    // Validate before changing remote membership or recovery credentials.
+    service.requireCurrentInventorySchema(serverSchema);
     final registrationName = await _deviceNameForRegistration();
     final replacement = await service.recoverWorkspace(
       session,
@@ -569,7 +571,10 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
     _requireServer(next);
     final service = SupabaseSyncService(next);
     final session = await service.signInAnonymously();
-    await service.requireInventorySchema(session);
+    final serverSchema = await service.requireInventorySchema(session);
+    // Pairing codes are single-use. Refuse an out-of-date Remote before the
+    // code is redeemed so the owner can migrate it and retry the same code.
+    service.requireCurrentInventorySchema(serverSchema);
     final registrationName = await _deviceNameForRegistration();
     final stableDeviceId =
         widget.deviceId ??

@@ -722,13 +722,21 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
         // hides removed members, but an empty response would otherwise look like
         // a successful "already up to date" sync.
         final role = await service.currentRole(session);
-        final purgeDays = await service.remotePurgeAfterDays(session);
+        var purgeDays = refreshed.remotePurgeAfterDays ?? 3;
+        var manualDrying = refreshed.requireManualDryingTimes;
+        // These are convenience policies, not the shared inventory protocol.
+        // A missing or briefly unavailable optional RPC must not turn a
+        // completed inventory sync into a red connection failure.
+        try {
+          purgeDays = await service.remotePurgeAfterDays(session);
+          manualDrying = await service.manualDryingTimesRequired(session);
+        } catch (error) {
+          debugPrint('Remote workspace policy is waiting: $error');
+        }
         final roleConfig = refreshed.copyWith(
           workspaceRole: role,
           remotePurgeAfterDays: purgeDays,
-          requireManualDryingTimes: await service.manualDryingTimesRequired(
-            session,
-          ),
+          requireManualDryingTimes: manualDrying,
         );
         if (roleConfig.workspaceRole != refreshed.workspaceRole ||
             roleConfig.remotePurgeAfterDays != refreshed.remotePurgeAfterDays ||
@@ -736,9 +744,13 @@ class _CloudSyncDialogState extends State<CloudSyncDialog> {
                 refreshed.requireManualDryingTimes) {
           _save(roleConfig);
         }
-        widget.database.setCheckoutSyncEnabled(
-          await service.checkoutSyncEnabled(session),
-        );
+        try {
+          widget.database.setCheckoutSyncEnabled(
+            await service.checkoutSyncEnabled(session),
+          );
+        } catch (error) {
+          debugPrint('Remote checkout preference is waiting: $error');
+        }
         config = roleConfig;
         return (
           SupabaseSyncService(roleConfig, client: widget.httpClient),

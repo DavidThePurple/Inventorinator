@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui' show ImageFilter, PointerDeviceKind;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:markdown_editor_live/markdown_editor_live.dart';
@@ -763,6 +764,9 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
       onWillAcceptWithDetails: (details) => details.data.flowStage != stage,
       onAcceptWithDetails: (details) => _setFlowStage(details.data, stage),
       builder: (context, candidates, _) => AnimatedContainer(
+        key: Key(
+          'scratch-pad-flow-column-${stage.toLowerCase().replaceAll(' ', '-')}',
+        ),
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
           border: Border.all(
@@ -808,19 +812,41 @@ class _ScratchPadDialogState extends State<ScratchPadDialog> {
     );
   }
 
-  Widget _flowNoteCard(ScratchPadNote note) =>
-      LongPressDraggable<ScratchPadNote>(
-        data: note,
-        feedback: SizedBox(
-          width: 280,
-          child: Material(
-            elevation: 12,
-            child: Opacity(opacity: .9, child: _flowNoteSurface(note)),
-          ),
-        ),
-        childWhenDragging: Opacity(opacity: .28, child: _flowNoteSurface(note)),
-        child: InkWell(onTap: () => _edit(note), child: _flowNoteSurface(note)),
-      );
+  Widget _flowNoteCard(ScratchPadNote note) {
+    final surface = _flowNoteSurface(note);
+    final feedback = SizedBox(
+      width: 280,
+      child: Material(
+        elevation: 12,
+        child: Opacity(opacity: .9, child: _flowNoteSurface(note)),
+      ),
+    );
+    final childWhenDragging = Opacity(opacity: .28, child: surface);
+    final child = InkWell(
+      key: Key('scratch-pad-flow-note-${note.id}'),
+      onTap: () => _edit(note),
+      child: surface,
+    );
+    // Desktop pointer drags should begin immediately. On touch, keeping the
+    // long press leaves ordinary board scrolling and note taps intact.
+    final directDrag = switch (defaultTargetPlatform) {
+      TargetPlatform.android || TargetPlatform.iOS => false,
+      _ => true,
+    };
+    return directDrag
+        ? Draggable<ScratchPadNote>(
+            data: note,
+            feedback: feedback,
+            childWhenDragging: childWhenDragging,
+            child: child,
+          )
+        : LongPressDraggable<ScratchPadNote>(
+            data: note,
+            feedback: feedback,
+            childWhenDragging: childWhenDragging,
+            child: child,
+          );
+  }
 
   Widget _flowNoteSurface(ScratchPadNote note) => DecoratedBox(
     decoration: BoxDecoration(

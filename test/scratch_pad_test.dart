@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inventorinator/scratch_pad.dart';
@@ -56,6 +57,48 @@ void main() {
       decodeScratchPadNotes(encodeScratchPadNotes([note])).single.flowStage,
       'In progress',
     );
+  });
+
+  testWidgets('desktop flow cards drag between Kanban columns', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      List<ScratchPadNote> saved = const [];
+      final flowNote = ScratchPadNote(
+        id: 'drag-me',
+        title: 'Move this note',
+        body: '',
+        updatedAt: DateTime.utc(2026, 10, 22),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ScratchPadDialog(
+            notes: [flowNote],
+            onChanged: (notes) => saved = notes,
+            buttonSurfaceBuilder: ({
+              required states,
+              required child,
+              joined = false,
+            }) => child,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Flows'));
+      await tester.pumpAndSettle();
+
+      final note = find.byKey(const Key('scratch-pad-flow-note-drag-me'));
+      final inProgress = find.byKey(
+        const Key('scratch-pad-flow-column-in-progress'),
+      );
+      final start = tester.getCenter(note);
+      final destination = tester.getCenter(inProgress);
+      await tester.dragFrom(start, destination - start);
+      await tester.pumpAndSettle();
+
+      expect(saved.single.flowStage, 'In progress');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   test('malformed local Scratch Pad data safely reads as an empty list', () {

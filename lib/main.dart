@@ -1817,6 +1817,74 @@ double _designRadius(BuildContext context, double jellyRadius) =>
 String _normalizedStockName(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
+String _availabilityRequestKey(String productId, String name) =>
+    '$productId\u0000${_normalizedStockName(name)}';
+
+/// Pure, serializable Kit availability indexing. `compute` runs this on a
+/// background isolate so an opening dialog never starves its progress frame.
+Map<String, double> _calculateKitAvailability(Map<String, dynamic> payload) {
+  final inventory = (payload['inventory'] as List).cast<Map>();
+  final reservations = (payload['reservations'] as List).cast<Map>();
+  final requests = (payload['requests'] as List).cast<Map>();
+  final byId = <String, Map>{};
+  final byCatalog = <String, List<Map>>{};
+  final byName = <String, List<Map>>{};
+  for (final item in inventory) {
+    final id = item['id'] as String;
+    byId.putIfAbsent(id, () => item);
+    final catalogId = item['catalogId'] as String?;
+    if (catalogId != null && catalogId.isNotEmpty) {
+      byCatalog.putIfAbsent(catalogId, () => []).add(item);
+    }
+    byName.putIfAbsent(item['name'] as String, () => []).add(item);
+  }
+  String stockKey(String productId, String name) {
+    final normalized = _normalizedStockName(name);
+    final item =
+        byId[productId] ??
+        byCatalog[productId]?.firstOrNull ??
+        byName[normalized]?.firstOrNull;
+    if (item == null) {
+      return productId.isEmpty ? 'name:$normalized' : 'product:$productId';
+    }
+    final catalogId = item['catalogId'] as String?;
+    return catalogId != null && catalogId.isNotEmpty
+        ? 'product:$catalogId'
+        : 'inventory:${item['id']}';
+  }
+
+  final reserved = <String, double>{};
+  for (final line in reservations) {
+    final key = stockKey(line['productId'] as String, line['name'] as String);
+    reserved[key] = (reserved[key] ?? 0) + (line['quantity'] as num).toDouble();
+  }
+  final result = <String, double>{};
+  for (final request in requests) {
+    final productId = request['productId'] as String;
+    final name = request['name'] as String;
+    final normalized = _normalizedStockName(name);
+    final candidates = <String, Map>{
+      if (byId[productId] != null) productId: byId[productId]!,
+      for (final item in byCatalog[productId] ?? const <Map>[])
+        item['id'] as String: item,
+      for (final item in byName[normalized] ?? const <Map>[])
+        item['id'] as String: item,
+    }.values;
+    final available = candidates
+        .where(
+          (item) => item['archived'] != true && (item['quantity'] as num) > 0,
+        )
+        .fold<double>(
+          0,
+          (total, item) => total + (item['quantity'] as num).toDouble(),
+        );
+    result[_availabilityRequestKey(productId, name)] = math
+        .max(0, available - (reserved[stockKey(productId, name)] ?? 0))
+        .toDouble();
+  }
+  return result;
+}
+
 bool isGenericAndroidDeviceName(String value) {
   final normalized = value.trim().toLowerCase().replaceAll('_', ' ');
   return normalized.isEmpty ||
@@ -1912,6 +1980,7 @@ enum InventoryType {
   fastener,
   filament,
   printedPart,
+  electronics,
   resin,
   nozzle,
   heatBreak,
@@ -2370,6 +2439,7 @@ String inventoryTypeLabel(InventoryType type, String customTypeName) =>
         InventoryType.fastener => 'Fastener',
         InventoryType.filament => 'Filament',
         InventoryType.printedPart => 'Printed part',
+        InventoryType.electronics => 'Electronics',
         InventoryType.resin => 'Resin',
         InventoryType.nozzle => 'Nozzle',
         InventoryType.heatBreak => 'Heat break',
@@ -2631,6 +2701,7 @@ class CustomItemTypeRecord {
     this.iconKey = 'tune',
     this.canMarkDepleted = false,
     this.showsStatus = false,
+    this.listsMaterial = false,
   });
   final String id;
   final String name;
@@ -2638,6 +2709,9 @@ class CustomItemTypeRecord {
   final String iconKey;
   final bool canMarkDepleted;
   final bool showsStatus;
+
+  /// Whether Add Item should offer this type's Material selector.
+  final bool listsMaterial;
 }
 
 const _defaultTypeDepletionSettings = <String, bool>{
@@ -2652,6 +2726,11 @@ const _defaultTypeStatusSettings = <String, bool>{'item:filament': true};
 
 bool _typeShowsStatus(String key, Map<String, bool> settings) =>
     settings[key] ?? _defaultTypeStatusSettings[key] ?? false;
+
+/// Existing built-in types historically exposed their Material picker. Keep
+/// that behavior for saved workspaces; Catalog can disable it per type.
+bool _typeListsMaterial(String key, Map<String, bool> settings) =>
+    settings[key] ?? key.startsWith('item:');
 
 const typeIconChoices = <String, IconData>{
   'inventory': Icons.inventory_2_outlined,
@@ -3464,12 +3543,14 @@ class BuildLine {
   final List<String> consumedInventoryIds;
 
   BuildLine copyWith({
+    String? productId,
+    String? name,
     double? usedQuantity,
     List<String>? consumedInventoryIds,
   }) => BuildLine(
     id: id,
-    productId: productId,
-    name: name,
+    productId: productId ?? this.productId,
+    name: name ?? this.name,
     section: section,
     requiredQuantity: requiredQuantity,
     usedQuantity: usedQuantity ?? this.usedQuantity,
@@ -3791,7 +3872,7 @@ class _KitPackageImportPlan {
   const _KitPackageImportPlan({
     required this.package,
     required this.existingInventory,
-    required this.inventory,
+    this.inventory = const [],
     required this.brands,
     required this.materials,
     required this.products,
@@ -4705,6 +4786,7 @@ class InventoryItem {
     InventoryType.fastener => Icons.hardware_rounded,
     InventoryType.filament => Icons.donut_large_rounded,
     InventoryType.printedPart => Icons.view_in_ar_outlined,
+    InventoryType.electronics => Icons.memory_rounded,
     InventoryType.resin => Icons.opacity_rounded,
     InventoryType.nozzle => Icons.change_history_rounded,
     InventoryType.heatBreak => Icons.compress_rounded,
@@ -5851,6 +5933,7 @@ typedef WorkshopState = ({
   Map<String, String> typeIconOverrides,
   Map<String, bool> typeDepletionSettings,
   Map<String, bool> typeStatusSettings,
+  Map<String, bool> typeMaterialListingSettings,
   Map<String, String> typeTimerDisplaySettings,
   Set<String> deletedTypeKeys,
   List<CatalogProduct> products,
@@ -6006,6 +6089,7 @@ String encodeWorkshopState({
   Map<String, String> typeIconOverrides = const {},
   Map<String, bool> typeDepletionSettings = const {},
   Map<String, bool> typeStatusSettings = const {},
+  Map<String, bool> typeMaterialListingSettings = const {},
   Map<String, String> typeTimerDisplaySettings = const {},
   Set<String> deletedTypeKeys = const {},
   required List<CatalogProduct> products,
@@ -6033,6 +6117,7 @@ String encodeWorkshopState({
           'iconKey': type.iconKey,
           'canMarkDepleted': type.canMarkDepleted,
           'showsStatus': type.showsStatus,
+          'listsMaterial': type.listsMaterial,
         },
       )
       .toList(),
@@ -6040,6 +6125,7 @@ String encodeWorkshopState({
   'typeIconOverrides': typeIconOverrides,
   'typeDepletionSettings': typeDepletionSettings,
   'typeStatusSettings': typeStatusSettings,
+  'typeMaterialListingSettings': typeMaterialListingSettings,
   'typeTimerDisplaySettings': typeTimerDisplaySettings,
   'deletedTypeKeys': deletedTypeKeys.toList(),
   'machineTypes': machineTypes
@@ -6473,6 +6559,7 @@ WorkshopState? decodeWorkshopState(String? source) {
                 iconKey: type['iconKey'] as String? ?? 'tune',
                 canMarkDepleted: type['canMarkDepleted'] as bool? ?? false,
                 showsStatus: type['showsStatus'] as bool? ?? false,
+                listsMaterial: type['listsMaterial'] as bool? ?? false,
               ),
             )
             .toList();
@@ -6491,6 +6578,10 @@ WorkshopState? decodeWorkshopState(String? source) {
         (root['typeStatusSettings'] as Map<String, dynamic>? ?? const {}).map(
           (key, value) => MapEntry(key, value == true),
         );
+    final typeMaterialListingSettings =
+        (root['typeMaterialListingSettings'] as Map<String, dynamic>? ??
+                const {})
+            .map((key, value) => MapEntry(key, value == true));
     final typeTimerDisplaySettings =
         (root['typeTimerDisplaySettings'] as Map<String, dynamic>? ?? const {})
             .map((key, value) => MapEntry(key, value.toString()));
@@ -6874,6 +6965,7 @@ WorkshopState? decodeWorkshopState(String? source) {
       typeIconOverrides: typeIconOverrides,
       typeDepletionSettings: typeDepletionSettings,
       typeStatusSettings: typeStatusSettings,
+      typeMaterialListingSettings: typeMaterialListingSettings,
       typeTimerDisplaySettings: typeTimerDisplaySettings,
       deletedTypeKeys: deletedTypeKeys,
       products: products,
@@ -7147,6 +7239,50 @@ class _ArtCraftCornerPainter extends CustomPainter {
       oldDelegate.outline != outline || oldDelegate.accent != accent;
 }
 
+/// InventoryCraft shortage states use a red edge sweep, while ordinary cards
+/// continue using their regular solid outline.
+class _InventoryCraftShortageFrame extends StatelessWidget {
+  const _InventoryCraftShortageFrame({
+    required this.enabled,
+    required this.child,
+  });
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => enabled
+      ? CustomPaint(
+          foregroundPainter: const _ShortageOutlinePainter(),
+          child: child,
+        )
+      : child;
+}
+
+class _ShortageOutlinePainter extends CustomPainter {
+  const _ShortageOutlinePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xffff6969), Color(0xffff2020), Color(0xff7a121b)],
+        stops: [0, .52, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(
+      Offset(.625, .625) & Size(size.width - 1.25, size.height - 1.25),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShortageOutlinePainter oldDelegate) => false;
+}
+
 class _GlassTopHighlightPainter extends CustomPainter {
   const _GlassTopHighlightPainter({required this.color, required this.radius});
 
@@ -7263,6 +7399,133 @@ class _GlassFilterChipState extends State<_GlassFilterChip> {
               ),
               child: widget.child,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Kit/Build display mode deliberately shares the same two-cell control
+/// language as the inventory list/grid switch.
+class _KitBuildViewToggle extends StatelessWidget {
+  const _KitBuildViewToggle({required this.tileView, required this.onChanged});
+
+  final bool tileView;
+  final ValueChanged<bool>? onChanged;
+
+  Widget _mode(BuildContext context, bool value, IconData icon, String label) {
+    final accent =
+        Theme.of(context).extension<InventorinatorColors>()?.accent ??
+        Theme.of(context).colorScheme.primary;
+    return Tooltip(
+      message: label,
+      child: SizedBox.square(
+        dimension: _inventorySquareControlSize,
+        child: _GlassFilterChip(
+          selected: false,
+          child: Semantics(
+            button: true,
+            selected: tileView == value,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onChanged == null ? null : () => onChanged!(value),
+              child: Center(
+                child: Icon(
+                  icon,
+                  color: tileView == value
+                      ? accent
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    key: const Key('kit-build-view-toggle'),
+    behavior: HitTestBehavior.translucent,
+    onTap: onChanged == null ? null : () => onChanged!(!tileView),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _mode(context, false, Icons.view_agenda_outlined, 'Hamburger view'),
+        const SizedBox(width: 4),
+        _mode(context, true, Icons.grid_view_rounded, 'Tile view'),
+      ],
+    ),
+  );
+}
+
+class _ViewSwitchingIndicator extends StatelessWidget {
+  const _ViewSwitchingIndicator({
+    this.label = 'Switching view…',
+    this.completed,
+    this.total,
+  });
+
+  final String label;
+  final int? completed;
+  final int? total;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Center(
+      child: Semantics(
+        liveRegion: true,
+        label: label,
+        child: Container(
+          key: const Key('view-switching-indicator'),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            border: Border.all(color: colors.primary.withValues(alpha: .72)),
+            borderRadius: _isInventoryCraft(context)
+                ? BorderRadius.zero
+                : BorderRadius.circular(14),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox.square(
+                    dimension: 22,
+                    child: CircularProgressIndicator(
+                      color: colors.primary,
+                      strokeWidth: 2.5,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              if (completed != null && total != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: 220,
+                  child: LinearProgressIndicator(
+                    value: total == 0 ? 1 : completed! / total!,
+                    color: colors.primary,
+                    backgroundColor: colors.outlineVariant.withValues(
+                      alpha: .36,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text('$completed / $total parts ready'),
+              ],
+            ],
           ),
         ),
       ),
@@ -8492,6 +8755,27 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         // language, not the layout density chosen for the app.
         visualDensity: VisualDensity.adaptivePlatformDensity,
         useMaterial3: true,
+        scrollbarTheme: ScrollbarThemeData(
+          thumbColor: WidgetStateProperty.resolveWith(
+            (states) => inventoryCraft
+                ? palette.accent.withValues(
+                    alpha: states.contains(WidgetState.hovered) ? .95 : .72,
+                  )
+                : null,
+          ),
+          trackColor: WidgetStatePropertyAll(
+            inventoryCraft ? palette.panel.withValues(alpha: .62) : null,
+          ),
+          trackBorderColor: WidgetStatePropertyAll(
+            inventoryCraft
+                ? palette.outlineVariant.withValues(alpha: .72)
+                : null,
+          ),
+          thickness: WidgetStatePropertyAll(inventoryCraft ? 16 : null),
+          radius: Radius.circular(inventoryCraft ? 0 : 8),
+          crossAxisMargin: inventoryCraft ? 0 : 2,
+          mainAxisMargin: inventoryCraft ? 0 : 2,
+        ),
         outlinedButtonTheme: OutlinedButtonThemeData(style: glassButtonStyle),
         filledButtonTheme: FilledButtonThemeData(style: glassButtonStyle),
         elevatedButtonTheme: ElevatedButtonThemeData(style: glassButtonStyle),
@@ -9266,8 +9550,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   late final Map<String, String> typeIconOverrides;
   late final Map<String, bool> typeDepletionSettings;
   late final Map<String, bool> typeStatusSettings;
+  late final Map<String, bool> typeMaterialListingSettings;
   late final Map<String, String> typeTimerDisplaySettings;
   late final Set<String> deletedTypeKeys;
+  bool _detailsLoading = false;
   late List<String> catalogTypeOrder;
   late List<String> catalogSectionOrder;
   late final List<CatalogProduct> products;
@@ -9356,6 +9642,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   late String deviceId;
   String? currentUserId;
   bool gridView = true;
+  bool kitBuildTileView = false;
   bool hideZeroQuantityItems = false;
   bool archivedOnly = false;
   CatalogViewFilter? catalogFilter;
@@ -9384,6 +9671,8 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Set<String> selectedBuildIds = {};
   final Set<String> selectedKitIds = {};
   final Set<String> selectedMachineIds = {};
+  String? _controllerFocusedItemId;
+  bool _controllerGuideShowing = false;
   InventorySort sort = InventorySort.type;
   bool sortAscending = true;
   Set<String> _similarItemIds = <String>{};
@@ -9622,6 +9911,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     typeIconOverrides = {...?restored?.typeIconOverrides};
     typeDepletionSettings = {...?restored?.typeDepletionSettings};
     typeStatusSettings = {...?restored?.typeStatusSettings};
+    typeMaterialListingSettings = {...?restored?.typeMaterialListingSettings};
     typeTimerDisplaySettings = {...?restored?.typeTimerDisplaySettings};
     deletedTypeKeys = {...?restored?.deletedTypeKeys};
     catalogTypeOrder = _readCatalogTypeOrder();
@@ -9792,6 +10082,12 @@ class _InventoryHomeState extends State<InventoryHome> {
           fallback: defaultInventorySortAscending(sort),
         ) ??
         defaultInventorySortAscending(sort);
+    kitBuildTileView =
+        widget.database?.loadBoolPreference(
+          'kit_build_tile_view',
+          fallback: false,
+        ) ??
+        false;
     cardSizePercent =
         (double.tryParse(
                   widget.database?.loadStringPreference(
@@ -10548,24 +10844,11 @@ class _InventoryHomeState extends State<InventoryHome> {
       return false;
     }
     final key = event.logicalKey;
-    final direction = switch (key) {
-      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
-      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
-      LogicalKeyboardKey.arrowLeft => TraversalDirection.left,
-      LogicalKeyboardKey.arrowRight => TraversalDirection.right,
-      _ => null,
-    };
-    if (direction != null) {
-      // Android controllers expose their D-pad as arrows. Search fields are
-      // deliberately skipped by traversal, so navigation cannot summon the
-      // on-screen keyboard while browsing cards and actions.
-      FocusScope.of(context).focusInDirection(direction);
-      return true;
-    }
+    if (_isControllerKey(key) && _maybeShowControllerGuide()) return true;
     if (key == LogicalKeyboardKey.gameButtonA ||
-        key == LogicalKeyboardKey.gameButton1 ||
-        key == LogicalKeyboardKey.gameButtonSelect) {
-      Actions.maybeInvoke(context, const ActivateIntent());
+        key == LogicalKeyboardKey.gameButton1) {
+      final item = _controllerTargetItem;
+      if (item != null) unawaited(_openDetails(item));
       return true;
     }
     if (key == LogicalKeyboardKey.gameButtonB ||
@@ -10573,21 +10856,129 @@ class _InventoryHomeState extends State<InventoryHome> {
       Navigator.of(context).maybePop();
       return true;
     }
-    if (key == LogicalKeyboardKey.gameButtonLeft1 ||
-        key == LogicalKeyboardKey.gameButtonLeft2) {
+    if (key == LogicalKeyboardKey.gameButtonY ||
+        key == LogicalKeyboardKey.gameButton3) {
+      final item = _controllerTargetItem;
+      if (item != null) unawaited(_handleAction(item, ItemAction.edit));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonX ||
+        key == LogicalKeyboardKey.gameButton4) {
+      unawaited(_openStockroom());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonLeft1) {
       _scrollInventoryBy(-MediaQuery.sizeOf(context).height * .8);
       return true;
     }
-    if (key == LogicalKeyboardKey.gameButtonRight1 ||
-        key == LogicalKeyboardKey.gameButtonRight2) {
+    if (key == LogicalKeyboardKey.gameButtonRight1) {
       _scrollInventoryBy(MediaQuery.sizeOf(context).height * .8);
       return true;
     }
+    if (key == LogicalKeyboardKey.gameButtonLeft2) {
+      final item = _controllerTargetItem;
+      if (item != null) _adjustItemQuantity(item, -1);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonRight2) {
+      final item = _controllerTargetItem;
+      if (item != null) _adjustItemQuantity(item, 1);
+      return true;
+    }
     if (key == LogicalKeyboardKey.gameButtonStart) {
-      FocusScope.of(context).focusInDirection(TraversalDirection.down);
+      unawaited(_openCloudSync());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonSelect) {
+      unawaited(_openAnimationControls());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.gameButtonThumbRight) {
+      unawaited(_addItem());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      unawaited(_openScratchPad());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowDown) {
+      unawaited(_openCatalog());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _changeInventoryPage(-1);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _changeInventoryPage(1);
       return true;
     }
     return false;
+  }
+
+  bool _isControllerKey(LogicalKeyboardKey key) =>
+      key.keyId >= LogicalKeyboardKey.gameButton1.keyId &&
+      key.keyId <= LogicalKeyboardKey.gameButtonZ.keyId;
+
+  InventoryItem? get _controllerTargetItem {
+    final selectedId = selectedInventoryIds.length == 1
+        ? selectedInventoryIds.first
+        : _controllerFocusedItemId;
+    if (selectedId == null) return null;
+    return inventory.where((item) => item.id == selectedId).firstOrNull;
+  }
+
+  void _changeInventoryPage(int delta) {
+    final sqlFilter = _inventorySqlFilter();
+    final itemCount = catalogFilter != null
+        ? 0
+        : _diskInventory != null
+        ? widget.database?.inventoryCount(
+                where: sqlFilter.$1,
+                parameters: sqlFilter.$2,
+              ) ??
+              0
+        : visibleItems.length;
+    final count = catalogFilter != null
+        ? visibleCatalogRecords.length
+        : visibleEverythingCatalogRecords.length + itemCount;
+    final pageCount = math.max(1, (count / _pageSizes[pageSizeIndex]).ceil());
+    final next = (currentPage + delta).clamp(0, pageCount - 1);
+    if (next == currentPage) return;
+    setState(() => currentPage = next);
+  }
+
+  bool _maybeShowControllerGuide() {
+    final database = widget.database;
+    if (_controllerGuideShowing ||
+        database?.loadBoolPreference(
+              'controller_guide_hidden',
+              fallback: false,
+            ) ==
+            true) {
+      return false;
+    }
+    _showControllerGuide();
+    return true;
+  }
+
+  Future<void> _showControllerGuide({bool resetHidden = false}) async {
+    final database = widget.database;
+    if (_controllerGuideShowing || !mounted) return;
+    if (resetHidden) {
+      database?.saveBoolPreference('controller_guide_hidden', false);
+    }
+    _controllerGuideShowing = true;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _ControllerGuideDialog(
+        onHideForever: () {
+          database?.saveBoolPreference('controller_guide_hidden', true);
+          Navigator.pop(dialogContext);
+        },
+      ),
+    );
+    _controllerGuideShowing = false;
   }
 
   void _scrollInventoryBy(double delta) {
@@ -12387,6 +12778,56 @@ class _InventoryHomeState extends State<InventoryHome> {
                           child: _bottomActionBar(),
                         ),
                       ),
+                    if (_detailsLoading)
+                      Positioned.fill(
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: .28),
+                          child: Center(
+                            child: Semantics(
+                              liveRegion: true,
+                              label: 'Loading details',
+                              child: Container(
+                                key: const Key('details-loading-indicator'),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 16,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.surface,
+                                  border: Border.all(
+                                    color: Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: .72),
+                                  ),
+                                  borderRadius: _isInventoryCraft(context)
+                                      ? BorderRadius.zero
+                                      : BorderRadius.circular(14),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox.square(
+                                      dimension: 22,
+                                      child: CircularProgressIndicator(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    ),
+                                    SizedBox(width: 12),
+                                    const Text(
+                                      'Loading details…',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
                 bottomNavigationBar: selectedInventoryIds.isNotEmpty
@@ -12606,6 +13047,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             _openBulkItemContextMenu(record, position),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+        onFocusChanged: (focused) {
+          if (focused) _controllerFocusedItemId = record.id;
+        },
         onStatusPressed:
             _itemShowsStatus(record) && currentRole.canEditInventory
             ? () => _chooseCardStatus(record)
@@ -12642,6 +13086,9 @@ class _InventoryHomeState extends State<InventoryHome> {
             _openBulkItemContextMenu(record, position),
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
+        onFocusChanged: (focused) {
+          if (focused) _controllerFocusedItemId = record.id;
+        },
         onStatusPressed:
             _itemShowsStatus(record) && currentRole.canEditInventory
             ? () => _chooseCardStatus(record)
@@ -14078,6 +14525,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         customItemTypes: customItemTypes,
         typeLabelOverrides: typeLabelOverrides,
         typeIconOverrides: typeIconOverrides,
+        typeMaterialListingSettings: typeMaterialListingSettings,
         database: widget.database,
         filamentColorsClient: _filamentColorsClient,
       ),
@@ -15643,15 +16091,22 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Future<void> _openDetails(InventoryItem item) async {
-    final detailedItem = _withFullInventoryImages(item);
-    final storageLocation = _itemStorageLocation(item);
+    final prepared = await _prepareDetails(
+      () => (
+        item: _withFullInventoryImages(item),
+        storageLocation: _itemStorageLocation(item),
+      ),
+    );
+    if (!mounted) return;
+    final detailedItem = prepared.item;
+    final storageLocation = prepared.storageLocation;
     final desktopWindow = Platform.isLinux || Platform.isWindows;
     var detailsFullscreen = false;
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close item details',
-      barrierColor: Colors.black54,
+      barrierColor: const Color(0xc9000000),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (context, _, _) => StatefulBuilder(
         builder: (context, refreshDetails) {
@@ -15761,6 +16216,32 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
       },
     );
+  }
+
+  /// Lets the current frame show an intentional handoff while potentially
+  /// expensive detail data (images, BOM availability, linked records) is read.
+  Future<T> _prepareDetails<T>(T Function() prepare) async {
+    if (mounted) setState(() => _detailsLoading = true);
+    await WidgetsBinding.instance.endOfFrame;
+    // Give the animated indicator enough wall time to be perceived before a
+    // fast detail snapshot completes; slow snapshots still keep it visible.
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    try {
+      return prepare();
+    } finally {
+      if (mounted) setState(() => _detailsLoading = false);
+    }
+  }
+
+  Future<T> _prepareDetailsAsync<T>(Future<T> Function() prepare) async {
+    if (mounted) setState(() => _detailsLoading = true);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    try {
+      return await prepare();
+    } finally {
+      if (mounted) setState(() => _detailsLoading = false);
+    }
   }
 
   Set<String> _similarityTokens(String value) => value
@@ -16021,6 +16502,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             customItemTypes: customItemTypes,
             typeLabelOverrides: typeLabelOverrides,
             typeIconOverrides: typeIconOverrides,
+            typeMaterialListingSettings: typeMaterialListingSettings,
             products: products,
             machineTypes: machineTypes,
             machines: machines,
@@ -16383,6 +16865,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       typeIconOverrides: typeIconOverrides,
       typeDepletionSettings: typeDepletionSettings,
       typeStatusSettings: typeStatusSettings,
+      typeMaterialListingSettings: typeMaterialListingSettings,
       typeTimerDisplaySettings: typeTimerDisplaySettings,
       deletedTypeKeys: deletedTypeKeys,
       builtInTypeOrder: catalogTypeOrder,
@@ -16592,6 +17075,10 @@ class _InventoryHomeState extends State<InventoryHome> {
       },
       onBuiltInTypeStatusChanged: (entry) {
         setState(() => typeStatusSettings[entry.key] = entry.value);
+        _persist();
+      },
+      onBuiltInTypeMaterialListingChanged: (entry) {
+        setState(() => typeMaterialListingSettings[entry.key] = entry.value);
         _persist();
       },
       onBuiltInTypeTimerDisplayChanged: (entry) {
@@ -17999,10 +18486,14 @@ class _InventoryHomeState extends State<InventoryHome> {
     _persist();
   }
 
-  Future<void> _openKitDetails(KitRecord kit) {
-    final availableQuantity = _inventoryAvailabilitySnapshot();
+  Future<void> _openKitDetails(KitRecord kit) async {
+    final availableQuantity = await _prepareDetailsAsync(
+      () => _inventoryAvailabilitySnapshot(kit),
+    );
+    if (!mounted) return;
     return showDialog<void>(
       context: context,
+      barrierColor: const Color(0xc9000000),
       builder: (_) => KitDetailsDialog(
         kit: kit,
         kits: kits,
@@ -18016,6 +18507,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         canBuild: currentRole.canCreateBuilds,
         canDelete: currentRole.canHardDeleteItems,
         onDelete: _confirmDeleteKit,
+        tileView: kitBuildTileView,
+        onTileViewChanged: _setKitBuildTileView,
         buildDisabledReason: currentRole.canCreateBuilds
             ? null
             : _buildDisabledReason,
@@ -18023,137 +18516,147 @@ class _InventoryHomeState extends State<InventoryHome> {
     );
   }
 
-  Future<void> _openMachineDetails(MachineRecord machine) => showDialog<void>(
-    context: context,
-    builder: (dialogContext) {
-      final linkedKits = kits
-          .where((kit) => machine.kitIds.contains(kit.id))
-          .toList();
-      final typeName = _machineTypePath(machine.typeId).trim();
-      return AlertDialog(
-        key: Key('machine-details-${machine.id}'),
-        title: Row(
-          children: [
-            _catalogRecordVisual(
-              machine.imageBytes,
-              _isPrinter(machine)
-                  ? Icons.print_outlined
-                  : Icons.precision_manufacturing_outlined,
-              _isPrinter(machine)
-                  ? const Color(0xff42d8c7)
-                  : const Color(0xffffb34d),
-              48,
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Text(machine.name)),
-            IconButton(
-              tooltip: 'Close',
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              icon: const Icon(Icons.close_rounded),
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: 560,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (typeName.isNotEmpty)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.category_outlined),
-                    title: const Text('Type'),
-                    subtitle: Text(typeName),
-                  ),
-                if (machine.model.trim().isNotEmpty)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.badge_outlined),
-                    title: const Text('Model'),
-                    subtitle: Text(machine.model),
-                  ),
-                if (machine.address.trim().isNotEmpty)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.lan_outlined),
-                    title: const Text('Address'),
-                    subtitle: SelectableText(
-                      machine.address,
-                      key: Key('machine-address-${machine.id}'),
-                    ),
-                  ),
-                const Divider(),
-                _MachineTimerPanel(
-                  machineId: machine.id,
-                  lookup: (id) => machines
-                      .where((candidate) => candidate.id == id)
-                      .firstOrNull,
-                  canChange: currentRole.canManageCatalog,
-                  onStart: _startMachineTimer,
-                  onClear: _clearMachineTimer,
-                ),
-                if (linkedKits.isNotEmpty) ...[
-                  const Divider(),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8, bottom: 4),
-                    child: Text(
-                      'Associated kits',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                  for (final kit in linkedKits)
-                    ListTile(
-                      key: Key('machine-kit-details-${kit.id}'),
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.inventory_2_outlined),
-                      title: Text(kit.name),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () {
-                        Navigator.of(dialogContext).pop();
-                        unawaited(_openKitDetails(kit));
-                      },
-                    ),
-                ],
-                if (machine.sourceUrls.isNotEmpty) ...[
-                  const Divider(),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8, bottom: 4),
-                    child: Text(
-                      'Sources',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                  for (final source in machine.sourceUrls)
+  Future<void> _openMachineDetails(MachineRecord machine) async {
+    final prepared = await _prepareDetails(
+      () => (
+        linkedKits: kits
+            .where((kit) => machine.kitIds.contains(kit.id))
+            .toList(),
+        typeName: _machineTypePath(machine.typeId).trim(),
+      ),
+    );
+    if (!mounted) return;
+    return showDialog<void>(
+      context: context,
+      barrierColor: const Color(0xc9000000),
+      builder: (dialogContext) {
+        final linkedKits = prepared.linkedKits;
+        final typeName = prepared.typeName;
+        return AlertDialog(
+          key: Key('machine-details-${machine.id}'),
+          title: Row(
+            children: [
+              _catalogRecordVisual(
+                machine.imageBytes,
+                _isPrinter(machine)
+                    ? Icons.print_outlined
+                    : Icons.precision_manufacturing_outlined,
+                _isPrinter(machine)
+                    ? const Color(0xff42d8c7)
+                    : const Color(0xffffb34d),
+                48,
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(machine.name)),
+              IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (typeName.isNotEmpty)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.link_rounded),
-                      title: Text(
-                        source,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      leading: const Icon(Icons.category_outlined),
+                      title: const Text('Type'),
+                      subtitle: Text(typeName),
+                    ),
+                  if (machine.model.trim().isNotEmpty)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.badge_outlined),
+                      title: const Text('Model'),
+                      subtitle: Text(machine.model),
+                    ),
+                  if (machine.address.trim().isNotEmpty)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.lan_outlined),
+                      title: const Text('Address'),
+                      subtitle: SelectableText(
+                        machine.address,
+                        key: Key('machine-address-${machine.id}'),
                       ),
-                      trailing: const Icon(Icons.open_in_new_rounded),
-                      onTap: () {
-                        final uri = Uri.tryParse(source);
-                        if (uri != null) {
-                          unawaited(
-                            launchUrl(
-                              uri,
-                              mode: LaunchMode.externalApplication,
-                            ),
-                          );
-                        }
-                      },
                     ),
+                  const Divider(),
+                  _MachineTimerPanel(
+                    machineId: machine.id,
+                    lookup: (id) => machines
+                        .where((candidate) => candidate.id == id)
+                        .firstOrNull,
+                    canChange: currentRole.canManageCatalog,
+                    onStart: _startMachineTimer,
+                    onClear: _clearMachineTimer,
+                  ),
+                  if (linkedKits.isNotEmpty) ...[
+                    const Divider(),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8, bottom: 4),
+                      child: Text(
+                        'Associated kits',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    for (final kit in linkedKits)
+                      ListTile(
+                        key: Key('machine-kit-details-${kit.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.inventory_2_outlined),
+                        title: Text(kit.name),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () {
+                          Navigator.of(dialogContext).pop();
+                          unawaited(_openKitDetails(kit));
+                        },
+                      ),
+                  ],
+                  if (machine.sourceUrls.isNotEmpty) ...[
+                    const Divider(),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8, bottom: 4),
+                      child: Text(
+                        'Sources',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    for (final source in machine.sourceUrls)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.link_rounded),
+                        title: Text(
+                          source,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: const Icon(Icons.open_in_new_rounded),
+                        onTap: () {
+                          final uri = Uri.tryParse(source);
+                          if (uri != null) {
+                            unawaited(
+                              launchUrl(
+                                uri,
+                                mode: LaunchMode.externalApplication,
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 
   String get _buildDisabledReason {
     final source = widget.database?.loadSyncConfig();
@@ -18260,24 +18763,71 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
   }
 
-  double Function(String productId, String name)
-  _inventoryAvailabilitySnapshot() {
+  Future<double Function(String productId, String name)>
+  _inventoryAvailabilitySnapshot(KitRecord kit) async {
+    // The disk-backed lookup already has a native indexed path; serializing it
+    // would be slower than reading the index directly.
+    if (_diskInventory != null) return _inventoryAvailabilitySnapshotUi();
+    final requestLines = kit.bom
+        .map(
+          (line) => <String, String>{
+            'productId': line.productId,
+            'name': _kitLineName(line),
+          },
+        )
+        .toList();
+    final payload = <String, dynamic>{
+      'inventory': [
+        for (final item in inventory)
+          <String, dynamic>{
+            'id': item.id,
+            'catalogId': item.catalogProductId,
+            'name': _normalized(item.name),
+            'quantity': item.quantity,
+            'archived': item.archived,
+          },
+      ],
+      'reservations': [
+        for (final build in _reservingBuilds)
+          for (final line in build.lines)
+            <String, dynamic>{
+              'productId': line.productId,
+              'name': line.name,
+              'quantity': (line.requiredQuantity - line.usedQuantity).clamp(
+                0,
+                line.requiredQuantity,
+              ),
+            },
+      ],
+      'requests': requestLines,
+    };
+    final values = await compute(_calculateKitAvailability, payload);
+    return (productId, name) =>
+        values[_availabilityRequestKey(productId, name)] ?? 0;
+  }
+
+  Future<double Function(String productId, String name)>
+  _inventoryAvailabilitySnapshotUi() async {
     final byId = <String, InventoryItem>{};
-    final byCatalogId = <String, InventoryItem>{};
-    final byName = <String, InventoryItem>{};
+    final byCatalogId = <String, List<InventoryItem>>{};
+    final byName = <String, List<InventoryItem>>{};
+    var processed = 0;
     for (final item in inventory) {
       byId.putIfAbsent(item.id, () => item);
       final catalogId = item.catalogProductId;
       if (catalogId != null && catalogId.isNotEmpty) {
-        byCatalogId.putIfAbsent(catalogId, () => item);
+        byCatalogId.putIfAbsent(catalogId, () => []).add(item);
       }
-      byName.putIfAbsent(_normalized(item.name), () => item);
+      byName.putIfAbsent(_normalized(item.name), () => []).add(item);
+      if (++processed % 80 == 0) await Future<void>.delayed(Duration.zero);
     }
 
     String stockKey(String productId, String name) {
       final normalizedName = _normalized(name);
       final match =
-          byId[productId] ?? byCatalogId[productId] ?? byName[normalizedName];
+          byId[productId] ??
+          byCatalogId[productId]?.firstOrNull ??
+          byName[normalizedName]?.firstOrNull;
       if (match != null) {
         return match.catalogProductId?.isNotEmpty == true
             ? 'product:${match.catalogProductId}'
@@ -18295,22 +18845,25 @@ class _InventoryHomeState extends State<InventoryHome> {
         );
         final key = stockKey(line.productId, line.name);
         reservedByKey[key] = (reservedByKey[key] ?? 0) + remaining;
+        if (++processed % 80 == 0) await Future<void>.delayed(Duration.zero);
       }
     }
 
-    return (productId, name) {
+    return (String productId, String name) {
       final normalizedName = _normalized(name);
-      final available = inventory
-          .where(
-            (item) =>
-                !item.archived &&
-                item.quantity > 0 &&
-                (item.id == productId ||
-                    item.catalogProductId == productId ||
-                    _normalized(item.name) == normalizedName),
-          )
+      // A kit can contain hundreds of lines. Index candidates once above,
+      // rather than filtering the complete inventory for every dialog row.
+      final candidates = <String, InventoryItem>{
+        if (byId[productId] != null) byId[productId]!.id: byId[productId]!,
+        for (final item in byCatalogId[productId] ?? const <InventoryItem>[])
+          item.id: item,
+        for (final item in byName[normalizedName] ?? const <InventoryItem>[])
+          item.id: item,
+      }.values;
+      final available = candidates
+          .where((item) => !item.archived && item.quantity > 0)
           .fold<double>(0, (total, item) => total + item.quantity);
-      return math.max(
+      return math.max<double>(
         0,
         available - (reservedByKey[stockKey(productId, name)] ?? 0),
       );
@@ -18597,25 +19150,40 @@ class _InventoryHomeState extends State<InventoryHome> {
     unawaited(_openBuildQueue(build, kit));
   }
 
-  Future<void> _openBuildQueue(BuildRecord build, KitRecord kit) =>
-      showDialog<void>(
-        context: context,
-        builder: (_) => BuildQueueDialog(
-          build: build,
-          kit: kit,
-          kits: kits,
-          products: products,
-          availableQuantity: _availableInventoryQuantity,
-          onAdjust: (lineId, use) => _adjustBuildInventory(build, lineId, use),
-          canUse: currentRole.canOperateBuilds && _canOperateBuild(build),
-          canShare:
-              currentRole.canShareBuilds &&
-              (_ownsBuild(build) || currentRole == WorkspaceRole.admin),
-          onSharedChanged: (shared) => _setBuildShared(build, shared),
-          onCompletedChanged: (completed) =>
-              _setBuildCompleted(build, completed),
-        ),
-      );
+  Future<void> _openBuildQueue(BuildRecord build, KitRecord kit) async {
+    // Build queues can expand a large kit on first paint. Yield one frame so a
+    // click always has immediate feedback before the dialog is constructed.
+    await _prepareDetails(() => null);
+    if (!mounted) return;
+    return showDialog<void>(
+      context: context,
+      barrierColor: const Color(0xc9000000),
+      builder: (_) => BuildQueueDialog(
+        build: build,
+        kit: kit,
+        kits: kits,
+        products: products,
+        inventory: inventory,
+        availableQuantity: _availableInventoryQuantity,
+        onAdjust: (lineId, use) => _adjustBuildInventory(build, lineId, use),
+        onSubstitute: (lineId, item) =>
+            _substituteBuildLine(build, lineId, item),
+        canUse: currentRole.canOperateBuilds && _canOperateBuild(build),
+        canShare:
+            currentRole.canShareBuilds &&
+            (_ownsBuild(build) || currentRole == WorkspaceRole.admin),
+        onSharedChanged: (shared) => _setBuildShared(build, shared),
+        onCompletedChanged: (completed) => _setBuildCompleted(build, completed),
+        tileView: kitBuildTileView,
+        onTileViewChanged: _setKitBuildTileView,
+      ),
+    );
+  }
+
+  void _setKitBuildTileView(bool value) {
+    setState(() => kitBuildTileView = value);
+    widget.database?.saveBoolPreference('kit_build_tile_view', value);
+  }
 
   KitRecord _kitForBuild(BuildRecord build) =>
       kits.where((candidate) => candidate.id == build.kitId).firstOrNull ??
@@ -18750,6 +19318,31 @@ class _InventoryHomeState extends State<InventoryHome> {
         'inventoryId': item.id,
         'quantity': amount.toString(),
       });
+    });
+    _persist();
+    return true;
+  }
+
+  Future<bool> _substituteBuildLine(
+    BuildRecord build,
+    String lineId,
+    InventoryItem item,
+  ) async {
+    if (!currentRole.canOperateBuilds || !_canOperateBuild(build)) return false;
+    final index = build.lines.indexWhere((line) => line.id == lineId);
+    if (index < 0 || build.lines[index].usedQuantity > 0) return false;
+    final line = build.lines[index];
+    build.lines[index] = line.copyWith(
+      productId: item.catalogProductId?.isNotEmpty == true
+          ? item.catalogProductId
+          : item.id,
+      name: item.name,
+    );
+    build.updatedAt = DateTime.now();
+    _recordAudit('edit', 'build', build.id, {
+      'line': line.name,
+      'substitute': item.name,
+      'inventoryId': item.id,
     });
     _persist();
     return true;
@@ -19406,6 +19999,7 @@ class _InventoryHomeState extends State<InventoryHome> {
           value.name,
         );
       },
+      onControllerGuideReplay: () => _showControllerGuide(resetHidden: true),
     ),
   );
 
@@ -20248,6 +20842,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     'typeIconOverrides': typeIconOverrides,
     'typeDepletionSettings': typeDepletionSettings,
     'typeStatusSettings': typeStatusSettings,
+    'typeMaterialListingSettings': typeMaterialListingSettings,
     'deletedTypeKeys': deletedTypeKeys.toList(),
     'pinnedDragKitIds': _pinnedKitIds.toList(),
     // Canvas bounds are shared workshop data. Without them another device can
@@ -20458,6 +21053,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     typeIconOverrides: typeIconOverrides,
     typeDepletionSettings: typeDepletionSettings,
     typeStatusSettings: typeStatusSettings,
+    typeMaterialListingSettings: typeMaterialListingSettings,
     typeTimerDisplaySettings: typeTimerDisplaySettings,
     deletedTypeKeys: deletedTypeKeys,
     products: products,
@@ -20875,10 +21471,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     }
   }
 
-  void _applyCloudState(
-    String source, {
-    bool databaseAlreadyUpdated = false,
-  }) {
+  void _applyCloudState(String source, {bool databaseAlreadyUpdated = false}) {
     final restored = decodeWorkshopState(source);
     if (restored == null) {
       throw const FormatException('The remote inventory could not be read.');
@@ -20926,6 +21519,9 @@ class _InventoryHomeState extends State<InventoryHome> {
       typeStatusSettings
         ..clear()
         ..addAll(restored.typeStatusSettings);
+      typeMaterialListingSettings
+        ..clear()
+        ..addAll(restored.typeMaterialListingSettings);
       deletedTypeKeys
         ..clear()
         ..addAll(restored.deletedTypeKeys);
@@ -21144,6 +21740,15 @@ class _InventoryHomeState extends State<InventoryHome> {
             ..addAll(
               Map<String, dynamic>.from(fields['typeStatusSettings'] as Map)
                   .map((key, value) => MapEntry(key, value == true)),
+            );
+        }
+        if (fields['typeMaterialListingSettings'] is Map) {
+          typeMaterialListingSettings
+            ..clear()
+            ..addAll(
+              Map<String, dynamic>.from(
+                fields['typeMaterialListingSettings'] as Map,
+              ).map((key, value) => MapEntry(key, value == true)),
             );
         }
         if (fields['deletedTypeKeys'] is List) {
@@ -30949,6 +31554,20 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 }
 
+Map<String, InventoryItem> _tileInventoryIndex(
+  Iterable<InventoryItem> inventory,
+) {
+  final result = <String, InventoryItem>{};
+  for (final item in inventory) {
+    result.putIfAbsent(item.id, () => item);
+    final catalogId = item.catalogProductId;
+    if (catalogId != null && catalogId.isNotEmpty) {
+      result.putIfAbsent(catalogId, () => item);
+    }
+  }
+  return result;
+}
+
 class KitDetailsDialog extends StatefulWidget {
   const KitDetailsDialog({
     super.key,
@@ -30965,6 +31584,8 @@ class KitDetailsDialog extends StatefulWidget {
     this.canDelete = false,
     this.onDelete,
     this.buildDisabledReason,
+    this.tileView = false,
+    this.onTileViewChanged,
   });
 
   final KitRecord kit;
@@ -30982,6 +31603,8 @@ class KitDetailsDialog extends StatefulWidget {
   final bool canDelete;
   final Future<bool> Function(KitRecord kit)? onDelete;
   final String? buildDisabledReason;
+  final bool tileView;
+  final ValueChanged<bool>? onTileViewChanged;
 
   @override
   State<KitDetailsDialog> createState() => _KitDetailsDialogState();
@@ -30989,6 +31612,15 @@ class KitDetailsDialog extends StatefulWidget {
 
 class _KitDetailsDialogState extends State<KitDetailsDialog> {
   late KitRecord kit = widget.kit;
+  late bool tileView = widget.tileView;
+  bool initialLoading = true;
+  bool switchingView = false;
+  bool preparingRows = true;
+  int preparedLineCount = 0;
+  final Map<int, _LineStockStatus> preparedStock = {};
+  late final Map<String, InventoryItem> tileInventory;
+  String kitSearch = '';
+  InventoryType? kitTypeFilter;
   List<KitRecord> get kits => widget.kits;
   List<CatalogProduct> get products => widget.products;
   List<InventoryItem> get inventory => widget.inventory;
@@ -31000,6 +31632,63 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
   Future<bool> Function(KitRecord kit)? get onDelete => widget.onDelete;
   String? get buildDisabledReason => widget.buildDisabledReason;
 
+  @override
+  void initState() {
+    super.initState();
+    tileInventory = _tileInventoryIndex(inventory);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_prepareRows()),
+    );
+  }
+
+  Future<void> _prepareRows() async {
+    final reserved = <String, double>{};
+    const chunkSize = 8;
+    for (var index = 0; index < kit.bom.length; index++) {
+      final line = kit.bom[index];
+      if (!kits.any((candidate) => candidate.id == line.productId)) {
+        final name = _lineName(line);
+        final key = line.productId.isEmpty
+            ? 'name:${_normalizedStockName(name)}'
+            : 'product:${line.productId}';
+        final totalAvailable = availableQuantity(line.productId, name);
+        final remaining = (totalAvailable - (reserved[key] ?? 0)).clamp(
+          0,
+          line.quantity,
+        );
+        reserved[key] = (reserved[key] ?? 0) + line.quantity;
+        preparedStock[index] = _LineStockStatus(
+          available: remaining.toDouble(),
+          missing: (line.quantity - remaining)
+              .clamp(0, line.quantity)
+              .toDouble(),
+        );
+      }
+      if ((index + 1) % chunkSize == 0 || index + 1 == kit.bom.length) {
+        if (!mounted) return;
+        setState(() {
+          preparedLineCount = index + 1;
+          initialLoading = false;
+        });
+        await WidgetsBinding.instance.endOfFrame;
+      }
+    }
+    if (mounted) setState(() => preparingRows = false);
+  }
+
+  Future<void> _setTileView(bool value) async {
+    if (tileView == value) return;
+    setState(() => switchingView = true);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 140));
+    if (!mounted) return;
+    setState(() => tileView = value);
+    widget.onTileViewChanged?.call(value);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (mounted) setState(() => switchingView = false);
+  }
+
   String _lineName(KitBomEntry line) =>
       line.name ??
       products
@@ -31009,29 +31698,19 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
       kits.where((kit) => kit.id == line.productId).firstOrNull?.name ??
       'Missing item';
 
-  Map<int, _LineStockStatus> _stockStatus() {
-    final reserved = <String, double>{};
-    final result = <int, _LineStockStatus>{};
-    for (var index = 0; index < kit.bom.length; index++) {
-      final line = kit.bom[index];
-      if (kits.any((candidate) => candidate.id == line.productId)) continue;
-      final name = _lineName(line);
-      final key = line.productId.isEmpty
-          ? 'name:${_normalizedStockName(name)}'
-          : 'product:${line.productId}';
-      final totalAvailable = availableQuantity(line.productId, name);
-      final remaining = (totalAvailable - (reserved[key] ?? 0)).clamp(
-        0,
-        line.quantity,
-      );
-      reserved[key] = (reserved[key] ?? 0) + line.quantity;
-      result[index] = _LineStockStatus(
-        available: remaining.toDouble(),
-        missing: (line.quantity - remaining).clamp(0, line.quantity).toDouble(),
-      );
-    }
-    return result;
-  }
+  InventoryType? _lineType(KitBomEntry line) =>
+      inventory
+          .where(
+            (item) =>
+                item.id == line.productId ||
+                item.catalogProductId == line.productId,
+          )
+          .firstOrNull
+          ?.type ??
+      products
+          .where((product) => product.id == line.productId)
+          .firstOrNull
+          ?.category;
 
   Future<void> _showSources(BuildContext context) => showDialog<void>(
     context: context,
@@ -31207,16 +31886,74 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
     });
   }
 
+  Widget _kitPhotoTile(BuildContext context, KitBomEntry line, int lineIndex) {
+    final item = tileInventory[line.productId];
+    final image = item?.thumbnailBytes ?? item?.imageBytes;
+    final technical = _isInventoryCraft(context);
+    return Card(
+      key: Key('kit-tile-line-$lineIndex'),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(12),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (image != null)
+            Image.memory(image, fit: BoxFit.cover, cacheWidth: 420),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: .86),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Text(
+                '${_lineName(line)}\n× ${_formatBomQuantity(line.quantity)}',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final stock = _stockStatus();
+    final technical = _isInventoryCraft(context);
+    final stock = preparedStock;
+    final matchingIndexes = <int>[
+      for (var index = 0; index < preparedLineCount; index++)
+        if (kitSearch.trim().isEmpty ||
+            _normalizedStockName(
+              '${_lineName(kit.bom[index])} ${kit.bom[index].section}',
+            ).contains(_normalizedStockName(kitSearch)))
+          if (kitTypeFilter == null ||
+              _lineType(kit.bom[index]) == kitTypeFilter)
+            index,
+    ];
     final compact = MediaQuery.sizeOf(context).width < 600;
 
     Widget identity() => Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: technical
+              ? BorderRadius.zero
+              : BorderRadius.circular(12),
           child: SizedBox.square(
             dimension: 44,
             child: kit.imageBytes == null
@@ -31278,6 +32015,9 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
       icon: const Icon(Icons.link_rounded),
     );
 
+    Widget viewButton() =>
+        _KitBuildViewToggle(tileView: tileView, onChanged: _setTileView);
+
     Widget deleteButton() => IconButton(
       key: const Key('delete-kit'),
       tooltip: 'Delete kit',
@@ -31296,315 +32036,481 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(20),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 860),
-        child: Column(
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                compact ? 16 : 24,
-                compact ? 14 : 20,
-                compact ? 8 : 14,
-                14,
-              ),
-              child: compact
-                  ? Column(
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: identity()),
-                            closeButton(),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            buildButton(expand: true),
-                            if (kit.sourceUrls.isNotEmpty) sourceButton(),
-                            if (canDelete && onDelete != null) deleteButton(),
-                          ],
-                        ),
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Expanded(child: identity()),
-                        buildButton(),
-                        const SizedBox(width: 8),
-                        if (kit.sourceUrls.isNotEmpty) ...[
-                          sourceButton(),
-                          const SizedBox(width: 4),
-                        ],
-                        if (canDelete && onDelete != null) ...[
-                          deleteButton(),
-                          const SizedBox(width: 4),
-                        ],
-                        closeButton(),
-                      ],
-                    ),
-            ),
-            if (!canBuild)
-              Container(
-                key: const Key('build-disabled-reason'),
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
+      backgroundColor: technical ? Theme.of(context).colorScheme.surface : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(28),
+        side: BorderSide(
+          color: technical
+              ? Theme.of(context).colorScheme.outlineVariant
+              : Colors.transparent,
+        ),
+      ),
+      child: _ArtCraftCornerFrame(
+        outline: Theme.of(context).colorScheme.outlineVariant,
+        accent: Theme.of(context).colorScheme.primary,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 860),
+          child: Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 16 : 24,
+                  compact ? 14 : 20,
+                  compact ? 8 : 14,
+                  14,
                 ),
-                decoration: BoxDecoration(
-                  color: const Color(0xff332817),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xffa8782a)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.admin_panel_settings_outlined,
-                      color: Color(0xffffc15c),
-                      size: 20,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        buildDisabledReason ?? 'You cannot create builds.',
-                        style: const TextStyle(color: Color(0xffffd79a)),
+                child: compact
+                    ? Column(
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: identity()),
+                              closeButton(),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              buildButton(expand: true),
+                              viewButton(),
+                              if (kit.sourceUrls.isNotEmpty) sourceButton(),
+                              if (canDelete && onDelete != null) deleteButton(),
+                            ],
+                          ),
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          Expanded(child: identity()),
+                          buildButton(),
+                          const SizedBox(width: 8),
+                          viewButton(),
+                          if (kit.sourceUrls.isNotEmpty) ...[
+                            sourceButton(),
+                            const SizedBox(width: 4),
+                          ],
+                          if (canDelete && onDelete != null) ...[
+                            deleteButton(),
+                            const SizedBox(width: 4),
+                          ],
+                          closeButton(),
+                        ],
                       ),
+              ),
+              if (!canBuild)
+                Container(
+                  key: const Key('build-disabled-reason'),
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xff332817),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xffa8782a)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.admin_panel_settings_outlined,
+                        color: Color(0xffffc15c),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          buildDisabledReason ?? 'You cannot create builds.',
+                          style: const TextStyle(color: Color(0xffffd79a)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 1),
+              if (kit.bom.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 4),
+                  child: TextField(
+                    key: const Key('kit-details-search'),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      labelText: 'Search kit parts',
                     ),
+                    onChanged: (value) => setState(() => kitSearch = value),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final entry in const <(InventoryType, String)>[
+                      (InventoryType.printedPart, 'Printed parts'),
+                      (InventoryType.fastener, 'Fasteners'),
+                      (InventoryType.electronics, 'Electronics'),
+                    ])
+                      FilterChip(
+                        key: Key('kit-type-filter-${entry.$1.name}'),
+                        label: Text(entry.$2),
+                        selected: kitTypeFilter == entry.$1,
+                        onSelected: (selected) => setState(
+                          () => kitTypeFilter = selected ? entry.$1 : null,
+                        ),
+                      ),
                   ],
                 ),
               ),
-            const Divider(height: 1),
-            if (kit.bom.isEmpty)
-              const Expanded(
-                child: Center(child: Text('This kit has no BOM items.')),
-              )
-            else
-              Expanded(
-                child: ListView.separated(
-                  key: const Key('kit-details-list'),
-                  padding: const EdgeInsets.all(10),
-                  itemCount: kit.bom.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 6),
-                  itemBuilder: (context, index) {
-                    final line = kit.bom[index];
-                    final lineStock = stock[index];
-                    final missing = lineStock?.isMissing ?? false;
-                    final colors = Theme.of(context).colorScheme;
-                    final nestedKit = kits
-                        .where((candidate) => candidate.id == line.productId)
-                        .firstOrNull;
-                    final matchedInventory = inventory
-                        .where(
-                          (candidate) =>
-                              candidate.id == line.productId ||
-                              candidate.catalogProductId == line.productId,
+              if (preparingRows && !initialLoading)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+                  child: Row(
+                    children: [
+                      SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(
+                          color: Theme.of(context).colorScheme.primary,
+                          strokeWidth: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: LinearProgressIndicator(
+                          value: kit.bom.isEmpty
+                              ? 1
+                              : preparedLineCount / kit.bom.length,
+                          color: Theme.of(context).colorScheme.primary,
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withValues(alpha: .36),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('$preparedLineCount / ${kit.bom.length}'),
+                    ],
+                  ),
+                ),
+              if (kit.bom.isEmpty)
+                const Expanded(
+                  child: Center(child: Text('This kit has no BOM items.')),
+                )
+              else
+                Expanded(
+                  child: initialLoading || switchingView
+                      ? _ViewSwitchingIndicator(
+                          label: initialLoading
+                              ? 'Loading kit…'
+                              : 'Switching view…',
+                          completed: initialLoading ? preparedLineCount : null,
+                          total: initialLoading ? kit.bom.length : null,
                         )
-                        .firstOrNull;
-                    final duplicate =
-                        kit.bom
-                            .where(
-                              (candidate) =>
-                                  candidate.productId == line.productId,
-                            )
-                            .length >
-                        1;
-                    final leading = Icon(
-                      missing
-                          ? Icons.error_outline_rounded
-                          : nestedKit == null
-                          ? Icons.inventory_2_outlined
-                          : Icons.account_tree_outlined,
-                      color: missing
-                          ? colors.error
-                          : nestedKit == null
-                          ? colors.onSurfaceVariant
-                          : colors.primary,
-                    );
-                    final title = Text(
-                      _lineName(line),
-                      key: Key('kit-line-title-$index'),
-                      style: missing
-                          ? TextStyle(
-                              color: colors.onErrorContainer,
-                              fontWeight: FontWeight.w700,
-                            )
-                          : null,
-                    );
-                    final subtitle = nestedKit == null
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (line.section != 'Unassigned')
-                                Text(line.section),
-                              if (matchedInventory != null)
+                      : tileView
+                      ? GridView.builder(
+                          key: const Key('kit-details-tile-grid'),
+                          padding: const EdgeInsets.all(10),
+                          gridDelegate:
+                              const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 210,
+                                mainAxisExtent: 180,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                              ),
+                          scrollCacheExtent: const ScrollCacheExtent.pixels(
+                            300,
+                          ),
+                          itemCount: matchingIndexes.length,
+                          itemBuilder: (context, index) => RepaintBoundary(
+                            child: _kitPhotoTile(
+                              context,
+                              kit.bom[matchingIndexes[index]],
+                              matchingIndexes[index],
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          key: const Key('kit-details-list'),
+                          padding: const EdgeInsets.all(10),
+                          itemCount: matchingIndexes.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 6),
+                          itemBuilder: (context, index) {
+                            final lineIndex = matchingIndexes[index];
+                            final line = kit.bom[lineIndex];
+                            final lineStock = stock[lineIndex];
+                            final missing = lineStock?.isMissing ?? false;
+                            final colors = Theme.of(context).colorScheme;
+                            const shortageRed = Color(0xffff3939);
+                            final nestedKit = kits
+                                .where(
+                                  (candidate) => candidate.id == line.productId,
+                                )
+                                .firstOrNull;
+                            final matchedInventory = inventory
+                                .where(
+                                  (candidate) =>
+                                      candidate.id == line.productId ||
+                                      candidate.catalogProductId ==
+                                          line.productId,
+                                )
+                                .firstOrNull;
+                            final duplicate =
+                                kit.bom
+                                    .where(
+                                      (candidate) =>
+                                          candidate.productId == line.productId,
+                                    )
+                                    .length >
+                                1;
+                            final leading = Icon(
+                              missing
+                                  ? Icons.error_outline_rounded
+                                  : nestedKit == null
+                                  ? Icons.inventory_2_outlined
+                                  : Icons.account_tree_outlined,
+                              color: missing
+                                  ? technical
+                                        ? shortageRed
+                                        : colors.error
+                                  : nestedKit == null
+                                  ? colors.onSurfaceVariant
+                                  : colors.primary,
+                            );
+                            final title = Text(
+                              _lineName(line),
+                              key: Key('kit-line-title-$lineIndex'),
+                              style: missing
+                                  ? TextStyle(
+                                      color: technical
+                                          ? shortageRed
+                                          : colors.onErrorContainer,
+                                      fontWeight: FontWeight.w700,
+                                    )
+                                  : null,
+                            );
+                            final subtitle = nestedKit == null
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (line.section != 'Unassigned')
+                                        Text(line.section),
+                                      if (matchedInventory != null)
+                                        Text(
+                                          'Matched to ${matchedInventory.name}',
+                                          key: Key(
+                                            'kit-match-label-$lineIndex',
+                                          ),
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      Text(
+                                        'Required ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(lineStock?.available ?? 0)}${missing ? ' · Missing ${_formatBomQuantity(lineStock!.missing)}' : ''}',
+                                        key: Key('kit-stock-$lineIndex'),
+                                        style: TextStyle(
+                                          color: missing
+                                              ? technical
+                                                    ? shortageRed
+                                                    : colors.onErrorContainer
+                                              : colors.onSurfaceVariant,
+                                          fontWeight: missing
+                                              ? FontWeight.w700
+                                              : FontWeight.w400,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : Text('Kit · Open BOM · ${line.section}');
+                            final trailing = Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
                                 Text(
-                                  'Matched to ${matchedInventory.name}',
-                                  key: Key('kit-match-label-$index'),
+                                  '× ${_formatBomQuantity(line.quantity)}',
                                   style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary,
+                                    color: missing
+                                        ? technical
+                                              ? shortageRed
+                                              : colors.onErrorContainer
+                                        : colors.onSurface,
+                                    fontSize: 16,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                              Text(
-                                'Required ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(lineStock?.available ?? 0)}${missing ? ' · Missing ${_formatBomQuantity(lineStock!.missing)}' : ''}',
-                                key: Key('kit-stock-$index'),
-                                style: TextStyle(
-                                  color: missing
-                                      ? colors.onErrorContainer
-                                      : colors.onSurfaceVariant,
-                                  fontWeight: missing
-                                      ? FontWeight.w700
-                                      : FontWeight.w400,
+                                if (nestedKit == null &&
+                                    missing &&
+                                    widget.onAddShortage != null) ...[
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                    key: Key('shop-kit-line-$lineIndex'),
+                                    tooltip: 'Add shortage to shopping list',
+                                    onPressed: () => widget.onAddShortage!(
+                                      kit,
+                                      line,
+                                      lineStock!.missing,
+                                    ),
+                                    icon: const _ShoppingCartIcon(
+                                      key: Key('bom-shopping-cart-glyph'),
+                                    ),
+                                    color: technical
+                                        ? shortageRed
+                                        : colors.error,
+                                  ),
+                                ],
+                                if (nestedKit == null &&
+                                    missing &&
+                                    widget.canMatchInventory &&
+                                    widget.onMatchInventory != null) ...[
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                    key: Key('match-kit-line-$lineIndex'),
+                                    tooltip: 'Substitute selection',
+                                    onPressed: () =>
+                                        _matchBomLine(context, lineIndex),
+                                    icon: const Icon(Icons.link_rounded),
+                                    color: technical
+                                        ? shortageRed
+                                        : colors.error,
+                                  ),
+                                ],
+                                if (nestedKit != null) ...[
+                                  const SizedBox(width: 8),
+                                  const Icon(Icons.chevron_right_rounded),
+                                ],
+                              ],
+                            );
+                            final VoidCallback? openNested = nestedKit == null
+                                ? null
+                                : () => showDialog<void>(
+                                    context: context,
+                                    builder: (_) => KitDetailsDialog(
+                                      kit: nestedKit,
+                                      kits: kits,
+                                      products: products,
+                                      inventory: inventory,
+                                      availableQuantity: availableQuantity,
+                                      onMatchInventory: widget.onMatchInventory,
+                                      canMatchInventory:
+                                          widget.canMatchInventory,
+                                      onAddShortage: widget.onAddShortage,
+                                      onBuild: onBuild,
+                                      canBuild: canBuild,
+                                      buildDisabledReason: buildDisabledReason,
+                                    ),
+                                  );
+                            return _InventoryCraftShortageFrame(
+                              enabled: missing && technical,
+                              child: Card(
+                                key: Key(
+                                  duplicate
+                                      ? 'kit-detail-line-${line.productId}-$index'
+                                      : 'kit-detail-line-${line.productId}',
+                                ),
+                                color: missing && !technical
+                                    ? Color.lerp(
+                                        colors.errorContainer,
+                                        Colors.black,
+                                        .15,
+                                      )
+                                    : technical
+                                    ? (missing
+                                          ? Colors.transparent
+                                          : colors.surfaceContainerLow)
+                                    : null,
+                                clipBehavior: Clip.antiAlias,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: technical
+                                      ? BorderRadius.zero
+                                      : BorderRadius.circular(14),
+                                  side: BorderSide(
+                                    color: missing
+                                        ? technical
+                                              ? Colors.transparent
+                                              : colors.error
+                                        : colors.outlineVariant,
+                                  ),
+                                ),
+                                child: DecoratedBox(
+                                  decoration: missing && technical
+                                      ? const BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                            colors: [
+                                              Color(0xff481116),
+                                              Color(0xff1b1012),
+                                            ],
+                                          ),
+                                        )
+                                      : const BoxDecoration(),
+                                  child: compact
+                                      ? InkWell(
+                                          onTap: openNested,
+                                          child: Padding(
+                                            padding: const EdgeInsets.fromLTRB(
+                                              14,
+                                              12,
+                                              8,
+                                              8,
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                Row(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                            top: 2,
+                                                          ),
+                                                      child: leading,
+                                                    ),
+                                                    const SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          title,
+                                                          subtitle,
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 6),
+                                                Align(
+                                                  alignment:
+                                                      Alignment.centerRight,
+                                                  child: trailing,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        )
+                                      : ListTile(
+                                          leading: leading,
+                                          title: title,
+                                          subtitle: subtitle,
+                                          trailing: trailing,
+                                          onTap: openNested,
+                                        ),
                                 ),
                               ),
-                            ],
-                          )
-                        : Text('Kit · Open BOM · ${line.section}');
-                    final trailing = Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '× ${_formatBomQuantity(line.quantity)}',
-                          style: TextStyle(
-                            color: missing
-                                ? colors.onErrorContainer
-                                : colors.onSurface,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                          ),
+                            );
+                          },
                         ),
-                        if (nestedKit == null &&
-                            missing &&
-                            widget.onAddShortage != null) ...[
-                          const SizedBox(width: 6),
-                          IconButton(
-                            key: Key('shop-kit-line-$index'),
-                            tooltip: 'Add shortage to shopping list',
-                            onPressed: () => widget.onAddShortage!(
-                              kit,
-                              line,
-                              lineStock!.missing,
-                            ),
-                            icon: const _ShoppingCartIcon(
-                              key: Key('bom-shopping-cart-glyph'),
-                            ),
-                            color: colors.error,
-                          ),
-                        ],
-                        if (nestedKit == null &&
-                            missing &&
-                            widget.canMatchInventory &&
-                            widget.onMatchInventory != null) ...[
-                          const SizedBox(width: 6),
-                          IconButton(
-                            key: Key('match-kit-line-$index'),
-                            tooltip: matchedInventory == null
-                                ? 'Match to existing inventory'
-                                : 'Change inventory match',
-                            onPressed: () => _matchBomLine(context, index),
-                            icon: const Icon(Icons.link_rounded),
-                            color: colors.error,
-                          ),
-                        ],
-                        if (nestedKit != null) ...[
-                          const SizedBox(width: 8),
-                          const Icon(Icons.chevron_right_rounded),
-                        ],
-                      ],
-                    );
-                    final VoidCallback? openNested = nestedKit == null
-                        ? null
-                        : () => showDialog<void>(
-                            context: context,
-                            builder: (_) => KitDetailsDialog(
-                              kit: nestedKit,
-                              kits: kits,
-                              products: products,
-                              inventory: inventory,
-                              availableQuantity: availableQuantity,
-                              onMatchInventory: widget.onMatchInventory,
-                              canMatchInventory: widget.canMatchInventory,
-                              onAddShortage: widget.onAddShortage,
-                              onBuild: onBuild,
-                              canBuild: canBuild,
-                              buildDisabledReason: buildDisabledReason,
-                            ),
-                          );
-                    return Card(
-                      key: Key(
-                        duplicate
-                            ? 'kit-detail-line-${line.productId}-$index'
-                            : 'kit-detail-line-${line.productId}',
-                      ),
-                      color: missing
-                          ? Color.lerp(colors.errorContainer, Colors.black, .15)
-                          : null,
-                      clipBehavior: Clip.antiAlias,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        side: BorderSide(
-                          color: missing ? colors.error : colors.outlineVariant,
-                        ),
-                      ),
-                      child: compact
-                          ? InkWell(
-                              onTap: openNested,
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  8,
-                                  8,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 2,
-                                          ),
-                                          child: leading,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [title, subtitle],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Align(
-                                      alignment: Alignment.centerRight,
-                                      child: trailing,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            )
-                          : ListTile(
-                              leading: leading,
-                              title: title,
-                              subtitle: subtitle,
-                              trailing: trailing,
-                              onTap: openNested,
-                            ),
-                    );
-                  },
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -31618,23 +32524,31 @@ class BuildQueueDialog extends StatefulWidget {
     required this.kit,
     required this.kits,
     required this.products,
+    this.inventory = const [],
     required this.availableQuantity,
     required this.onAdjust,
+    this.onSubstitute,
     required this.canUse,
     required this.canShare,
     required this.onSharedChanged,
     required this.onCompletedChanged,
+    this.tileView = false,
+    this.onTileViewChanged,
   });
   final BuildRecord build;
   final KitRecord kit;
   final List<KitRecord> kits;
   final List<CatalogProduct> products;
+  final List<InventoryItem> inventory;
   final double Function(String productId, String name) availableQuantity;
   final Future<bool> Function(String lineId, bool use) onAdjust;
+  final Future<bool> Function(String lineId, InventoryItem item)? onSubstitute;
   final bool canUse;
   final bool canShare;
   final Future<bool> Function(bool shared) onSharedChanged;
   final Future<bool> Function(bool completed) onCompletedChanged;
+  final bool tileView;
+  final ValueChanged<bool>? onTileViewChanged;
 
   @override
   State<BuildQueueDialog> createState() => _BuildQueueDialogState();
@@ -31643,6 +32557,15 @@ class BuildQueueDialog extends StatefulWidget {
 class _BuildQueueDialogState extends State<BuildQueueDialog>
     with SingleTickerProviderStateMixin {
   bool showKit = false;
+  late bool tileView = widget.tileView;
+  bool initialLoading = true;
+  bool switchingView = false;
+  bool preparingRows = true;
+  int preparedLineCount = 0;
+  final Map<String, _LineStockStatus> preparedStock = {};
+  late final Map<String, InventoryItem> tileInventory;
+  String buildSearch = '';
+  InventoryType? buildTypeFilter;
   late final AnimationController completionCelebration = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 2400),
@@ -31654,19 +32577,20 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
     super.dispose();
   }
 
-  String _kitLineName(KitBomEntry line) =>
-      line.name ??
-      widget.products
-          .where((product) => product.id == line.productId)
-          .firstOrNull
-          ?.name ??
-      widget.kits.where((kit) => kit.id == line.productId).firstOrNull?.name ??
-      'Missing item';
+  @override
+  void initState() {
+    super.initState();
+    tileInventory = _tileInventoryIndex(widget.inventory);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_prepareRows()),
+    );
+  }
 
-  Map<String, _LineStockStatus> _stockStatus() {
+  Future<void> _prepareRows() async {
     final reserved = <String, double>{};
-    final result = <String, _LineStockStatus>{};
-    for (final line in widget.build.lines) {
+    const chunkSize = 8;
+    for (var index = 0; index < widget.build.lines.length; index++) {
+      final line = widget.build.lines[index];
       final needed = (line.requiredQuantity - line.usedQuantity).clamp(
         0,
         line.requiredQuantity,
@@ -31683,13 +32607,44 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
         needed,
       );
       reserved[key] = (reserved[key] ?? 0) + needed;
-      result[line.id] = _LineStockStatus(
+      preparedStock[line.id] = _LineStockStatus(
         available: available.toDouble(),
         missing: (needed - available).clamp(0, needed).toDouble(),
       );
+      if ((index + 1) % chunkSize == 0 ||
+          index + 1 == widget.build.lines.length) {
+        if (!mounted) return;
+        setState(() {
+          preparedLineCount = index + 1;
+          initialLoading = false;
+        });
+        await WidgetsBinding.instance.endOfFrame;
+      }
     }
-    return result;
+    if (mounted) setState(() => preparingRows = false);
   }
+
+  Future<void> _setTileView(bool value) async {
+    if (tileView == value) return;
+    setState(() => switchingView = true);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 140));
+    if (!mounted) return;
+    setState(() => tileView = value);
+    widget.onTileViewChanged?.call(value);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (mounted) setState(() => switchingView = false);
+  }
+
+  String _kitLineName(KitBomEntry line) =>
+      line.name ??
+      widget.products
+          .where((product) => product.id == line.productId)
+          .firstOrNull
+          ?.name ??
+      widget.kits.where((kit) => kit.id == line.productId).firstOrNull?.name ??
+      'Missing item';
 
   Map<int, _LineStockStatus> _kitStockStatus() {
     final reserved = <String, double>{};
@@ -31722,16 +32677,270 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
     completionCelebration.forward(from: 0);
   }
 
+  Future<void> _substitute(BuildLine line) async {
+    final onSubstitute = widget.onSubstitute;
+    if (onSubstitute == null) return;
+    var query = '';
+    final selected = await showDialog<InventoryItem>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) {
+          final needle = _normalizedStockName(query);
+          final matches = widget.inventory
+              .where(
+                (item) =>
+                    !item.archived &&
+                    _normalizedStockName(
+                      '${item.name} ${item.typeLabel} ${item.materialName}',
+                    ).contains(needle),
+              )
+              .toList();
+          return AlertDialog(
+            title: const Text('Substitute selection'),
+            content: SizedBox(
+              width: 560,
+              height: 500,
+              child: Column(
+                children: [
+                  TextField(
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      labelText: 'Search inventory',
+                    ),
+                    onChanged: (value) => refresh(() => query = value),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: matches.length,
+                      itemBuilder: (_, index) {
+                        final item = matches[index];
+                        return ListTile(
+                          key: Key('build-substitute-item-${item.id}'),
+                          leading: Icon(item.icon),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.typeLabel}${item.materialName.isEmpty ? '' : ' · ${item.materialName}'} · ${_formatBomQuantity(item.quantity)} available',
+                          ),
+                          onTap: () => Navigator.pop(dialogContext, item),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (selected != null && await onSubstitute(line.id, selected) && mounted) {
+      setState(() {});
+    }
+  }
+
+  Widget _buildPhotoTile(BuildLine line, _LineStockStatus stock) {
+    final item = tileInventory[line.productId];
+    final image = item?.thumbnailBytes ?? item?.imageBytes;
+    final technical = _isInventoryCraft(context);
+    final complete = line.usedQuantity >= line.requiredQuantity;
+    final disabled = !widget.canUse || widget.build.completedAt != null;
+    final colors = Theme.of(context).colorScheme;
+    final tileCard = Card(
+      key: Key('build-tile-line-${line.id}'),
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      color: stock.isMissing && !technical ? colors.errorContainer : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(12),
+        side: BorderSide(
+          color: stock.isMissing
+              ? (technical ? Colors.transparent : colors.error)
+              : colors.outlineVariant,
+        ),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (image != null)
+            Image.memory(image, fit: BoxFit.cover, cacheWidth: 420),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: .86),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 48),
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    line.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${_formatBomQuantity(line.usedQuantity)} / ${_formatBomQuantity(line.requiredQuantity)} USED',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: .82),
+                border: Border(
+                  top: BorderSide(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Tooltip(
+                      message: 'Use',
+                      child: IconButton(
+                        key: Key('tile-use-build-line-${line.id}'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: disabled || complete || stock.available <= 0
+                            ? null
+                            : () async {
+                                final wasFullyUsed = _allBuildLinesUsed;
+                                if (await widget.onAdjust(line.id, true) &&
+                                    mounted) {
+                                  setState(() {});
+                                  if (!wasFullyUsed && _allBuildLinesUsed) {
+                                    _celebrateCompletion();
+                                  }
+                                }
+                              },
+                        icon: const Icon(Icons.check_circle_outline, size: 20),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Tooltip(
+                      message: 'Unuse',
+                      child: IconButton(
+                        key: Key('tile-unuse-build-line-${line.id}'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: disabled || line.usedQuantity <= 0
+                            ? null
+                            : () async {
+                                if (await widget.onAdjust(line.id, false) &&
+                                    mounted) {
+                                  setState(() {});
+                                }
+                              },
+                        icon: const Icon(Icons.undo_rounded, size: 20),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Tooltip(
+                      message: 'Substitute',
+                      child: IconButton(
+                        key: Key('tile-substitute-build-line-${line.id}'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed:
+                            disabled ||
+                                widget.onSubstitute == null ||
+                                line.usedQuantity > 0
+                            ? null
+                            : () => _substitute(line),
+                        icon: const Icon(Icons.swap_horiz_rounded, size: 20),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!stock.isMissing || !technical) return tileCard;
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xffc4474e), Color(0xff9a2c33), Color(0xff351014)],
+          stops: [0, .56, 1],
+        ),
+      ),
+      child: Padding(padding: const EdgeInsets.all(1), child: tileCard),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final technical = _isInventoryCraft(context);
     final grouped = <String, List<BuildLine>>{};
-    for (final line in widget.build.lines) {
+    final searchNeedle = _normalizedStockName(buildSearch);
+    for (final line in widget.build.lines.take(preparedLineCount)) {
+      if (searchNeedle.isNotEmpty &&
+          !_normalizedStockName('${line.name} ${line.section}')
+              .contains(searchNeedle)) {
+        continue;
+      }
+      final lineType = buildTypeFilter == null
+          ? null
+          : widget.inventory
+                .where(
+                  (item) =>
+                      item.id == line.productId ||
+                      item.catalogProductId == line.productId ||
+                      _normalizedStockName(item.name) ==
+                          _normalizedStockName(line.name),
+                )
+                .firstOrNull
+                ?.type;
+      if (buildTypeFilter != null && lineType != buildTypeFilter) continue;
       grouped.putIfAbsent(line.section, () => []).add(line);
     }
     final allLinesUsed = _allBuildLinesUsed;
+    final visibleLines = grouped.values.expand((lines) => lines).toList();
+    final lazyRows = <({String? section, BuildLine? line})>[
+      for (final section in grouped.entries) ...[
+        (section: section.key, line: null),
+        for (final line in section.value) (section: null, line: line),
+      ],
+    ];
     final completed = widget.build.completedAt != null;
-    final stock = _stockStatus();
-    final kitStock = _kitStockStatus();
+    final stock = preparedStock;
+    final kitStock = showKit ? _kitStockStatus() : <int, _LineStockStatus>{};
     final narrow = MediaQuery.sizeOf(context).width < 700;
     final mobileHeight = math.min(
       MediaQuery.sizeOf(context).height * .88,
@@ -31747,15 +32956,111 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
           child: _buildHeader(allLinesUsed, completed),
         ),
         const Divider(height: 1),
-        Expanded(
-          child: ListView(
-            padding: EdgeInsets.all(narrow ? 12 : 16),
+        Padding(
+          padding: EdgeInsets.fromLTRB(narrow ? 16 : 22, 10, 16, 4),
+          child: TextField(
+            key: const Key('build-details-search'),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search_rounded),
+              labelText: 'Search build parts',
+            ),
+            onChanged: (value) => setState(() => buildSearch = value),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(narrow ? 16 : 22, 0, 16, 8),
+          child: Wrap(
+            spacing: 8,
             children: [
-              ...grouped.entries.map(
-                (section) => _buildSection(section, stock),
-              ),
+              for (final entry in const <(InventoryType, String)>[
+                (InventoryType.printedPart, 'Printed parts'),
+                (InventoryType.fastener, 'Fasteners'),
+                (InventoryType.electronics, 'Electronics'),
+              ])
+                FilterChip(
+                  key: Key('build-type-filter-${entry.$1.name}'),
+                  label: Text(entry.$2),
+                  selected: buildTypeFilter == entry.$1,
+                  onSelected: (selected) => setState(
+                    () => buildTypeFilter = selected ? entry.$1 : null,
+                  ),
+                ),
             ],
           ),
+        ),
+        if (preparingRows && !initialLoading)
+          Padding(
+            padding: EdgeInsets.fromLTRB(narrow ? 16 : 22, 0, 16, 8),
+            child: Row(
+              children: [
+                SizedBox.square(
+                  dimension: 14,
+                  child: CircularProgressIndicator(
+                    color: Theme.of(context).colorScheme.primary,
+                    strokeWidth: 2,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: widget.build.lines.isEmpty
+                        ? 1
+                        : preparedLineCount / widget.build.lines.length,
+                    color: Theme.of(context).colorScheme.primary,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .outlineVariant
+                        .withValues(alpha: .36),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text('$preparedLineCount / ${widget.build.lines.length}'),
+              ],
+            ),
+          ),
+        Expanded(
+          child: initialLoading || switchingView
+              ? _ViewSwitchingIndicator(
+                  label: initialLoading ? 'Loading build…' : 'Switching view…',
+                  completed: initialLoading ? preparedLineCount : null,
+                  total: initialLoading ? widget.build.lines.length : null,
+                )
+              : tileView
+              ? GridView.builder(
+                  key: const Key('build-details-tile-grid'),
+                  padding: EdgeInsets.all(narrow ? 12 : 16),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 210,
+                    mainAxisExtent: 180,
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
+                  ),
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(300),
+                  itemCount: visibleLines.length,
+                  itemBuilder: (context, index) {
+                    final line = visibleLines[index];
+                    return RepaintBoundary(
+                      child: _buildPhotoTile(line, stock[line.id]!),
+                    );
+                  },
+                )
+              : ListView.builder(
+                  padding: EdgeInsets.all(narrow ? 12 : 16),
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(420),
+                  itemCount: lazyRows.length,
+                  itemBuilder: (context, index) {
+                    final row = lazyRows[index];
+                    if (row.line == null) {
+                      return _buildSectionHeader(
+                        row.section!,
+                        grouped[row.section!]!,
+                      );
+                    }
+                    return RepaintBoundary(
+                      child: _buildLine(row.line!, stock[row.line!.id]!),
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -31797,23 +33102,56 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
               final lineStock = kitStock[index]!;
               final available = lineStock.available;
               final missing = lineStock.missing;
-              return Card(
-                color: missing > 0.0001
-                    ? Theme.of(context).colorScheme.errorContainer
-                    : null,
-                child: ListTile(
-                  dense: true,
-                  leading: missing > 0.0001
-                      ? const Icon(
-                          Icons.error_outline_rounded,
-                          color: Color(0xffff7b8e),
-                        )
+              const shortageRed = Color(0xffff3939);
+              return _InventoryCraftShortageFrame(
+                enabled: missing > 0.0001 && technical,
+                child: Card(
+                  color: missing > 0.0001 && !technical
+                      ? Theme.of(context).colorScheme.errorContainer
+                      : technical
+                      ? (missing > 0.0001
+                            ? Colors.transparent
+                            : Theme.of(context).colorScheme.surfaceContainerLow)
                       : null,
-                  title: Text(name),
-                  subtitle: Text(
-                    '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
+                  shape: RoundedRectangleBorder(
+                    borderRadius: technical
+                        ? BorderRadius.zero
+                        : BorderRadius.circular(12),
+                    side: BorderSide(
+                      color: missing > 0.0001
+                          ? (technical
+                                ? Colors.transparent
+                                : Theme.of(context).colorScheme.error)
+                          : Theme.of(context).colorScheme.outlineVariant,
+                    ),
                   ),
-                  trailing: Text('× ${_formatBomQuantity(line.quantity)}'),
+                  child: DecoratedBox(
+                    decoration: missing > 0.0001 && technical
+                        ? const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xff481116), Color(0xff1b1012)],
+                            ),
+                          )
+                        : const BoxDecoration(),
+                    child: ListTile(
+                      dense: true,
+                      leading: missing > 0.0001
+                          ? Icon(
+                              Icons.error_outline_rounded,
+                              color: technical
+                                  ? shortageRed
+                                  : Color(0xffff7b8e),
+                            )
+                          : null,
+                      title: Text(name),
+                      subtitle: Text(
+                        '${line.section}\nRequired ${_formatBomQuantity(line.quantity)} · Available ${_formatBomQuantity(available.clamp(0, line.quantity))}${missing > 0.0001 ? ' · Missing ${_formatBomQuantity(missing)}' : ''}',
+                      ),
+                      trailing: Text('× ${_formatBomQuantity(line.quantity)}'),
+                    ),
+                  ),
                 ),
               );
             },
@@ -31823,55 +33161,70 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
     );
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Stack(
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 900),
-            child: SizedBox(
-              height: narrow ? mobileHeight : null,
-              child: Row(
-                children: [
-                  if (!narrow || !showKit) Expanded(child: queuePanel),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    width: showKit
-                        ? narrow
-                              ? MediaQuery.sizeOf(context).width - 32
-                              : 360
-                        : 0,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerLow,
-                      border: Border(
-                        left: BorderSide(
-                          color: Theme.of(context).colorScheme.outlineVariant,
+      backgroundColor: technical ? Theme.of(context).colorScheme.surface : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(28),
+        side: BorderSide(
+          color: technical
+              ? Theme.of(context).colorScheme.outlineVariant
+              : Colors.transparent,
+        ),
+      ),
+      child: _ArtCraftCornerFrame(
+        outline: Theme.of(context).colorScheme.outlineVariant,
+        accent: Theme.of(context).colorScheme.primary,
+        child: Stack(
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 900),
+              child: SizedBox(
+                height: narrow ? mobileHeight : null,
+                child: Row(
+                  children: [
+                    if (!narrow || !showKit) Expanded(child: queuePanel),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      width: showKit
+                          ? narrow
+                                ? MediaQuery.sizeOf(context).width - 32
+                                : 360
+                          : 0,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerLow,
+                        border: Border(
+                          left: BorderSide(
+                            color: Theme.of(context).colorScheme.outlineVariant,
+                          ),
                         ),
                       ),
+                      child: showKit ? kitPanel : const SizedBox.shrink(),
                     ),
-                    child: showKit ? kitPanel : const SizedBox.shrink(),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: AnimatedBuilder(
-                animation: completionCelebration,
-                builder: (context, _) =>
-                    completionCelebration.value == 0 ||
-                        completionCelebration.isCompleted
-                    ? const SizedBox.shrink()
-                    : CustomPaint(
-                        key: const Key('build-completion-confetti'),
-                        painter: _BuildCompletionConfettiPainter(
-                          completionCelebration.value,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedBuilder(
+                  animation: completionCelebration,
+                  builder: (context, _) =>
+                      completionCelebration.value == 0 ||
+                          completionCelebration.isCompleted
+                      ? const SizedBox.shrink()
+                      : CustomPaint(
+                          key: const Key('build-completion-confetti'),
+                          painter: _BuildCompletionConfettiPainter(
+                            completionCelebration.value,
+                          ),
                         ),
-                      ),
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -31893,7 +33246,7 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
           ),
         ],
       );
-      final actions = <Widget>[
+      final secondaryActions = <Widget>[
         FilterChip(
           key: const Key('share-build'),
           selected: widget.build.shared,
@@ -31943,256 +33296,283 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
         onPressed: () => Navigator.of(context).pop(),
         icon: const Icon(Icons.close_rounded),
       );
-      if (constraints.maxWidth < 720) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.construction_rounded,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(child: title),
-                close,
-              ],
-            ),
-            const SizedBox(height: 10),
-            Wrap(
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.construction_rounded,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: title),
+              _KitBuildViewToggle(tileView: tileView, onChanged: _setTileView),
+              const SizedBox(width: 8),
+              close,
+            ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
               alignment: WrapAlignment.end,
               spacing: 8,
               runSpacing: 8,
-              children: actions.where((widget) => widget is! SizedBox).toList(),
+              children: secondaryActions
+                  .where((widget) => widget is! SizedBox)
+                  .toList(),
             ),
-          ],
-        );
-      }
-      return Row(
-        children: [
-          Icon(
-            Icons.construction_rounded,
-            color: Theme.of(context).colorScheme.primary,
           ),
-          const SizedBox(width: 10),
-          Expanded(child: title),
-          ...actions,
-          const SizedBox(width: 8),
-          close,
         ],
       );
     },
   );
 
-  Widget _buildSection(
-    MapEntry<String, List<BuildLine>> section,
-    Map<String, _LineStockStatus> stock,
-  ) {
-    final used = section.value.fold<double>(
+  Widget _buildSectionHeader(String sectionName, List<BuildLine> lines) {
+    final used = lines.fold<double>(
       0,
       (total, line) => total + line.usedQuantity,
     );
-    final required = section.value.fold<double>(
+    final required = lines.fold<double>(
       0,
       (total, line) => total + line.requiredQuantity,
     );
     final complete = used >= required;
-    return Container(
-      key: Key('build-section-${section.key}'),
-      margin: const EdgeInsets.only(bottom: 14),
+    final technical = _isInventoryCraft(context);
+    final colors = Theme.of(context).colorScheme;
+    final header = Container(
+      key: Key('build-section-$sectionName'),
+      margin: const EdgeInsets.fromLTRB(0, 6, 0, 6),
       decoration: BoxDecoration(
-        color: const Color(0xff131824),
-        borderRadius: BorderRadius.circular(20),
+        color: technical ? colors.surfaceContainerLow : const Color(0xff131824),
+        borderRadius: technical ? BorderRadius.zero : BorderRadius.circular(20),
         border: Border.all(
           color: complete
               ? const Color(0xff42d8c7).withValues(alpha: .72)
+              : technical
+              ? colors.outlineVariant
               : const Color(0xff5f527f),
-          width: 1.3,
+          width: technical ? 1 : 1.3,
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x26000000),
-            blurRadius: 16,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 14, 12),
-            child: Row(
-              children: [
-                Icon(
-                  complete
-                      ? Icons.check_circle_rounded
-                      : Icons.account_tree_outlined,
-                  color: complete
-                      ? const Color(0xff42d8c7)
-                      : Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    section.key.toUpperCase(),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.1,
-                    ),
-                  ),
-                ),
-                Text(
-                  '${_formatBomQuantity(used)} / ${_formatBomQuantity(required)}',
-                  style: const TextStyle(
-                    color: Color(0xff929aac),
-                    fontWeight: FontWeight.w700,
-                  ),
+        boxShadow: technical
+            ? const []
+            : const [
+                BoxShadow(
+                  color: Color(0x26000000),
+                  blurRadius: 16,
+                  offset: Offset(0, 8),
                 ),
               ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 14, 12),
+        child: Row(
+          children: [
+            Icon(
+              complete
+                  ? Icons.check_circle_rounded
+                  : Icons.account_tree_outlined,
+              color: complete ? const Color(0xff42d8c7) : colors.primary,
             ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              children: section.value
-                  .map((line) => _buildLine(line, stock[line.id]!))
-                  .toList(),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                sectionName.toUpperCase(),
+                style: TextStyle(
+                  color: colors.primary,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
             ),
-          ),
-        ],
+            Text(
+              '${_formatBomQuantity(used)} / ${_formatBomQuantity(required)}',
+              style: const TextStyle(
+                color: Color(0xff929aac),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
+    return technical
+        ? _ArtCraftCornerFrame(
+            outline: colors.outlineVariant,
+            accent: colors.primary,
+            child: header,
+          )
+        : header;
   }
 
   Widget _buildLine(BuildLine line, _LineStockStatus stock) {
     final complete = line.usedQuantity >= line.requiredQuantity;
     final multiple = line.requiredQuantity > 1;
     final colors = Theme.of(context).colorScheme;
+    final technical = _isInventoryCraft(context);
+    const shortageRed = Color(0xffff3939);
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 180),
       opacity: complete ? .42 : 1,
-      child: Card(
-        key: Key('build-stock-${line.id}'),
-        color: stock.isMissing ? colors.errorContainer : null,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(
-            color: stock.isMissing ? colors.error : colors.outlineVariant,
+      child: _InventoryCraftShortageFrame(
+        enabled: stock.isMissing && technical,
+        child: Card(
+          key: Key('build-stock-${line.id}'),
+          color: stock.isMissing && !technical
+              ? colors.errorContainer
+              : technical
+              ? (stock.isMissing ? Colors.transparent : colors.surface)
+              : null,
+          shape: RoundedRectangleBorder(
+            borderRadius: technical
+                ? BorderRadius.zero
+                : BorderRadius.circular(14),
+            side: BorderSide(
+              color: stock.isMissing
+                  ? (technical ? Colors.transparent : colors.error)
+                  : colors.outlineVariant,
+            ),
           ),
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final narrow = constraints.maxWidth < 560;
-            final statusIcon = Icon(
-              complete
-                  ? Icons.check_circle_rounded
-                  : stock.isMissing
-                  ? Icons.error_outline_rounded
-                  : Icons.radio_button_unchecked,
-              color: complete
-                  ? const Color(0xff42d8c7)
-                  : stock.isMissing
-                  ? colors.error
-                  : null,
-            );
-            final details = Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text:
-                        '${_formatBomQuantity(line.usedQuantity)} / ${_formatBomQuantity(line.requiredQuantity)} used · ${_formatBomQuantity(stock.available)} available',
-                  ),
-                  if (stock.isMissing)
-                    TextSpan(
-                      text: ' · ${_formatBomQuantity(stock.missing)} missing',
-                      style: TextStyle(
-                        color: colors.onErrorContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
+          child: DecoratedBox(
+            decoration: stock.isMissing && technical
+                ? const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xff481116), Color(0xff1b1012)],
                     ),
-                ],
-              ),
-            );
-            final actions = Wrap(
-              spacing: 6,
-              children: [
-                OutlinedButton(
-                  onPressed:
-                      !widget.canUse ||
-                          widget.build.completedAt != null ||
-                          line.usedQuantity <= 0
-                      ? null
-                      : () async {
-                          if (await widget.onAdjust(line.id, false) &&
-                              mounted) {
-                            setState(() {});
-                          }
-                        },
-                  child: const Text('Unuse'),
-                ),
-                FilledButton(
-                  onPressed:
-                      !widget.canUse ||
-                          widget.build.completedAt != null ||
-                          complete ||
-                          stock.available <= 0
-                      ? null
-                      : () async {
-                          final wasFullyUsed = _allBuildLinesUsed;
-                          if (await widget.onAdjust(line.id, true) && mounted) {
-                            setState(() {});
-                            if (!wasFullyUsed && _allBuildLinesUsed) {
-                              _celebrateCompletion();
-                            }
-                          }
-                        },
-                  child: Text(multiple ? 'Use 1' : 'Use'),
-                ),
-              ],
-            );
-            if (narrow) {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 10, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        statusIcon,
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                line.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              details,
-                            ],
+                  )
+                : const BoxDecoration(),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final narrow = constraints.maxWidth < 560;
+                final statusIcon = Icon(
+                  complete
+                      ? Icons.check_circle_rounded
+                      : stock.isMissing
+                      ? Icons.error_outline_rounded
+                      : Icons.radio_button_unchecked,
+                  color: complete
+                      ? const Color(0xff42d8c7)
+                      : stock.isMissing
+                      ? (technical ? shortageRed : colors.error)
+                      : null,
+                );
+                final details = Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text:
+                            '${_formatBomQuantity(line.usedQuantity)} / ${_formatBomQuantity(line.requiredQuantity)} used · ${_formatBomQuantity(stock.available)} available',
+                      ),
+                      if (stock.isMissing)
+                        TextSpan(
+                          text:
+                              ' · ${_formatBomQuantity(stock.missing)} missing',
+                          style: TextStyle(
+                            color: technical
+                                ? shortageRed
+                                : colors.onErrorContainer,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
+                    ],
+                  ),
+                );
+                final actions = Wrap(
+                  spacing: 6,
+                  children: [
+                    OutlinedButton(
+                      onPressed:
+                          !widget.canUse ||
+                              widget.build.completedAt != null ||
+                              line.usedQuantity <= 0
+                          ? null
+                          : () async {
+                              if (await widget.onAdjust(line.id, false) &&
+                                  mounted) {
+                                setState(() {});
+                              }
+                            },
+                      child: const Text('Unuse'),
+                    ),
+                    FilledButton(
+                      onPressed:
+                          !widget.canUse ||
+                              widget.build.completedAt != null ||
+                              complete ||
+                              stock.available <= 0
+                          ? null
+                          : () async {
+                              final wasFullyUsed = _allBuildLinesUsed;
+                              if (await widget.onAdjust(line.id, true) &&
+                                  mounted) {
+                                setState(() {});
+                                if (!wasFullyUsed && _allBuildLinesUsed) {
+                                  _celebrateCompletion();
+                                }
+                              }
+                            },
+                      child: Text(multiple ? 'Use 1' : 'Use'),
+                    ),
+                    OutlinedButton.icon(
+                      key: Key('substitute-build-line-${line.id}'),
+                      onPressed:
+                          !widget.canUse ||
+                              widget.build.completedAt != null ||
+                              widget.onSubstitute == null ||
+                              line.usedQuantity > 0
+                          ? null
+                          : () => _substitute(line),
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: const Text('Substitute'),
+                    ),
+                  ],
+                );
+                if (narrow) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 10, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            statusIcon,
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    line.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  details,
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Align(alignment: Alignment.centerRight, child: actions),
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    Align(alignment: Alignment.centerRight, child: actions),
-                  ],
-                ),
-              );
-            }
-            return ListTile(
-              leading: statusIcon,
-              title: Text(line.name),
-              subtitle: details,
-              trailing: actions,
-            );
-          },
+                  );
+                }
+                return ListTile(
+                  leading: statusIcon,
+                  title: Text(line.name),
+                  subtitle: details,
+                  trailing: actions,
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -32284,6 +33664,7 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.typeIconOverrides,
     required this.typeDepletionSettings,
     required this.typeStatusSettings,
+    required this.typeMaterialListingSettings,
     required this.typeTimerDisplaySettings,
     required this.deletedTypeKeys,
     required this.builtInTypeOrder,
@@ -32312,6 +33693,7 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.onBuiltInTypeIconChanged,
     required this.onBuiltInTypeDepletionChanged,
     required this.onBuiltInTypeStatusChanged,
+    required this.onBuiltInTypeMaterialListingChanged,
     required this.onBuiltInTypeTimerDisplayChanged,
     required this.onBuiltInTypeDeleted,
     required this.onBuiltInTypeRestored,
@@ -32335,6 +33717,7 @@ class CatalogManagerDialog extends StatefulWidget {
   final Map<String, String> typeIconOverrides;
   final Map<String, bool> typeDepletionSettings;
   final Map<String, bool> typeStatusSettings;
+  final Map<String, bool> typeMaterialListingSettings;
   final Map<String, String> typeTimerDisplaySettings;
   final Set<String> deletedTypeKeys;
   final List<String> builtInTypeOrder;
@@ -32363,6 +33746,8 @@ class CatalogManagerDialog extends StatefulWidget {
   final ValueChanged<MapEntry<String, String>> onBuiltInTypeIconChanged;
   final ValueChanged<MapEntry<String, bool>> onBuiltInTypeDepletionChanged;
   final ValueChanged<MapEntry<String, bool>> onBuiltInTypeStatusChanged;
+  final ValueChanged<MapEntry<String, bool>>
+  onBuiltInTypeMaterialListingChanged;
   final ValueChanged<MapEntry<String, String?>>
   onBuiltInTypeTimerDisplayChanged;
   final ValueChanged<String> onBuiltInTypeDeleted;
@@ -32422,6 +33807,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   late final Map<String, bool> typeStatusSettings = {
     ...widget.typeStatusSettings,
   };
+  late final Map<String, bool> typeMaterialListingSettings = {
+    ...widget.typeMaterialListingSettings,
+  };
   late final Map<String, String> typeTimerDisplaySettings = {
     ...widget.typeTimerDisplaySettings,
   };
@@ -32456,6 +33844,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   String customTypeIconKey = 'tune';
   bool customTypeCanMarkDepleted = false;
   bool customTypeShowsStatus = false;
+  bool customTypeListsMaterial = false;
   String customTypeLinkKey = '';
   String materialTypeKey = 'type:filament';
 
@@ -34173,6 +35562,17 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           onChanged: (value) => setState(() => customTypeShowsStatus = value),
         ),
         const SizedBox(height: 10),
+        SwitchListTile.adaptive(
+          key: const Key('new-custom-type-lists-material'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('List material'),
+          subtitle: const Text(
+            'Show the Material selector for this item type.',
+          ),
+          value: customTypeListsMaterial,
+          onChanged: (value) => setState(() => customTypeListsMaterial = value),
+        ),
+        const SizedBox(height: 10),
       ],
       Align(
         alignment: Alignment.centerRight,
@@ -34754,6 +36154,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             String iconKey,
             bool canMarkDepleted,
             bool showsStatus,
+            bool listsMaterial,
             MachineTimerDisplay? timerDisplay,
           })
         >(
@@ -34766,6 +36167,10 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               typeDepletionSettings,
             ),
             initialShowsStatus: _typeShowsStatus(type.key, typeStatusSettings),
+            initialListsMaterial: _typeListsMaterial(
+              type.key,
+              typeMaterialListingSettings,
+            ),
             initialTimerDisplay: MachineTimerDisplay.values
                 .where(
                   (display) =>
@@ -34774,6 +36179,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                 .firstOrNull,
             showDepletionSetting: type.key.startsWith('item:'),
             showStatusSetting: type.key.startsWith('item:'),
+            showMaterialListingSetting: type.key.startsWith('item:'),
             showTimerDisplaySetting: type.key.startsWith('item:'),
             existingNames: existingNames,
           ),
@@ -34785,6 +36191,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       if (type.key.startsWith('item:')) {
         typeDepletionSettings[type.key] = updated.canMarkDepleted;
         typeStatusSettings[type.key] = updated.showsStatus;
+        typeMaterialListingSettings[type.key] = updated.listsMaterial;
         if (updated.timerDisplay == null) {
           typeTimerDisplaySettings.remove(type.key);
         } else {
@@ -34800,6 +36207,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       );
       widget.onBuiltInTypeStatusChanged(
         MapEntry(type.key, updated.showsStatus),
+      );
+      widget.onBuiltInTypeMaterialListingChanged(
+        MapEntry(type.key, updated.listsMaterial),
       );
       widget.onBuiltInTypeTimerDisplayChanged(
         MapEntry(type.key, updated.timerDisplay?.name),
@@ -34902,6 +36312,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         customTypeIconKey = 'tune';
         customTypeCanMarkDepleted = false;
         customTypeShowsStatus = false;
+        customTypeListsMaterial = false;
         customTypeLinkKey = '';
       });
       widget.onBuiltInTypeRenamed(MapEntry(key, name));
@@ -34927,6 +36338,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       iconKey: customTypeIconKey,
       canMarkDepleted: customTypeCanMarkDepleted,
       showsStatus: customTypeShowsStatus,
+      listsMaterial: customTypeListsMaterial,
     );
     setState(() {
       customItemTypes.add(customType);
@@ -34936,6 +36348,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       customTypeIconKey = 'tune';
       customTypeCanMarkDepleted = false;
       customTypeShowsStatus = false;
+      customTypeListsMaterial = false;
     });
     widget.onCustomItemTypeAdded(customType);
   }
@@ -35833,9 +37246,11 @@ class _TypeNameEditorDialog extends StatefulWidget {
     required this.initialIconKey,
     required this.initialCanMarkDepleted,
     required this.initialShowsStatus,
+    required this.initialListsMaterial,
     required this.initialTimerDisplay,
     required this.showDepletionSetting,
     required this.showStatusSetting,
+    required this.showMaterialListingSetting,
     required this.showTimerDisplaySetting,
     required this.existingNames,
   });
@@ -35844,9 +37259,11 @@ class _TypeNameEditorDialog extends StatefulWidget {
   final String initialIconKey;
   final bool initialCanMarkDepleted;
   final bool initialShowsStatus;
+  final bool initialListsMaterial;
   final MachineTimerDisplay? initialTimerDisplay;
   final bool showDepletionSetting;
   final bool showStatusSetting;
+  final bool showMaterialListingSetting;
   final bool showTimerDisplaySetting;
   final Set<String> existingNames;
 
@@ -35862,6 +37279,7 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
   late String iconKey = widget.initialIconKey;
   late bool canMarkDepleted = widget.initialCanMarkDepleted;
   late bool showsStatus = widget.initialShowsStatus;
+  late bool listsMaterial = widget.initialListsMaterial;
   late MachineTimerDisplay? timerDisplay = widget.initialTimerDisplay;
 
   @override
@@ -35929,6 +37347,19 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
                 onChanged: (value) => setState(() => showsStatus = value),
               ),
             ],
+            if (widget.showMaterialListingSetting) ...[
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-built-in-type-lists-material'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('List material'),
+                subtitle: const Text(
+                  'Show the Material selector when adding or editing this item type.',
+                ),
+                value: listsMaterial,
+                onChanged: (value) => setState(() => listsMaterial = value),
+              ),
+            ],
             if (widget.showTimerDisplaySetting) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<MachineTimerDisplay?>(
@@ -35971,6 +37402,7 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
             iconKey: iconKey,
             canMarkDepleted: canMarkDepleted,
             showsStatus: showsStatus,
+            listsMaterial: listsMaterial,
             timerDisplay: timerDisplay,
           ));
         },
@@ -36007,6 +37439,7 @@ class _CustomItemTypeEditorDialogState
   late String iconKey = widget.type.iconKey;
   late bool canMarkDepleted = widget.type.canMarkDepleted;
   late bool showsStatus = widget.type.showsStatus;
+  late bool listsMaterial = widget.type.listsMaterial;
 
   @override
   void dispose() {
@@ -36051,6 +37484,17 @@ class _CustomItemTypeEditorDialogState
                 ),
                 value: canMarkDepleted,
                 onChanged: (value) => setState(() => canMarkDepleted = value),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-custom-type-lists-material'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('List material'),
+                subtitle: const Text(
+                  'Show the Material selector when adding or editing this item type.',
+                ),
+                value: listsMaterial,
+                onChanged: (value) => setState(() => listsMaterial = value),
               ),
               const SizedBox(height: 12),
               SwitchListTile.adaptive(
@@ -36108,6 +37552,7 @@ class _CustomItemTypeEditorDialogState
               iconKey: iconKey,
               canMarkDepleted: canMarkDepleted,
               showsStatus: showsStatus,
+              listsMaterial: listsMaterial,
             ),
           );
         },
@@ -36443,6 +37888,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onInventoryDragGripSizeChanged,
     required this.onIdleCursorScaleChanged,
     required this.onCustomIconAnimationModeChanged,
+    required this.onControllerGuideReplay,
   });
   final int animationDurationPercent;
   final int animationRecurrenceSeconds;
@@ -36517,6 +37963,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<double> onInventoryDragGripSizeChanged;
   final ValueChanged<double> onIdleCursorScaleChanged;
   final ValueChanged<CustomIconAnimationMode> onCustomIconAnimationModeChanged;
+  final VoidCallback onControllerGuideReplay;
 
   final LocalDatabase? database;
   @override
@@ -37505,6 +38952,20 @@ class _PersonalizationSettingsDialogState
                 widget.onSettingsChanged(durationPercent, recurrenceSeconds);
               },
             ),
+            const Divider(height: 28),
+            const Text(
+              'Controller',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            const Text('Review the connected-controller map for this device.'),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('show-controller-guide'),
+              onPressed: widget.onControllerGuideReplay,
+              icon: const Icon(Icons.sports_esports_outlined),
+              label: const Text('Show controller guide again'),
+            ),
           ],
         ),
       ),
@@ -37516,6 +38977,86 @@ class _PersonalizationSettingsDialogState
       ),
     ],
   );
+}
+
+class _ControllerGuideDialog extends StatelessWidget {
+  const _ControllerGuideDialog({required this.onHideForever});
+
+  final VoidCallback onHideForever;
+
+  @override
+  Widget build(BuildContext context) {
+    const rows = [
+      ('A', 'Open focused item'),
+      ('B', 'Close current view'),
+      ('Y', 'Edit focused item'),
+      ('X', 'Open Stockroom'),
+      ('LT / RT', 'Decrease / increase item quantity'),
+      ('LB / RB', 'Scroll one page of the inventory'),
+      ('D-pad ← / →', 'Previous / next inventory page'),
+      ('D-pad ↑', 'Open Scratch Pad'),
+      ('D-pad ↓', 'Open Catalog'),
+      ('Start', 'Open Remote / Connection settings'),
+      ('Select', 'Open Personalization'),
+      ('Right stick click', 'Add a new item'),
+    ];
+    return AlertDialog(
+      key: const Key('controller-guide-dialog'),
+      title: const Row(
+        children: [
+          Icon(Icons.sports_esports_outlined),
+          SizedBox(width: 10),
+          Expanded(child: Text('Controller controls')),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Inventorinator detected a controller. These controls work across this device.',
+              ),
+              const SizedBox(height: 14),
+              for (final row in rows)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 132,
+                        child: Text(
+                          row.$1,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                      Expanded(child: Text(row.$2)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('hide-controller-guide-forever'),
+          onPressed: onHideForever,
+          child: const Text('Hide forever on this device'),
+        ),
+        FilledButton(
+          key: const Key('close-controller-guide'),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Got it'),
+        ),
+      ],
+    );
+  }
 }
 
 class DebugPanelDialog extends StatefulWidget {
@@ -38670,6 +40211,7 @@ class AddItemDialog extends StatefulWidget {
     this.customItemTypes = const [],
     this.typeLabelOverrides = const {},
     this.typeIconOverrides = const {},
+    this.typeMaterialListingSettings = const {},
     this.products = const [],
     this.machineTypes = const [],
     this.machines = const [],
@@ -38705,6 +40247,7 @@ class AddItemDialog extends StatefulWidget {
   final List<CustomItemTypeRecord> customItemTypes;
   final Map<String, String> typeLabelOverrides;
   final Map<String, String> typeIconOverrides;
+  final Map<String, bool> typeMaterialListingSettings;
   final List<CatalogProduct> products;
   final List<MachineTypeRecord> machineTypes;
   final List<MachineRecord> machines;
@@ -40418,8 +41961,55 @@ class _AddItemDialogState extends State<AddItemDialog>
                               ),
                               const SizedBox(height: 16),
                             ],
-                            _responsiveFieldPair(
-                              compact,
+                            if (_selectedTypeListsMaterial)
+                              _responsiveFieldPair(
+                                compact,
+                                DropdownButtonFormField<String>(
+                                  key: const Key('item-type'),
+                                  isExpanded: true,
+                                  initialValue: _supplierTypeNeedsReview
+                                      ? null
+                                      : _selectedTypeChoice,
+                                  hint: const Text('Choose type'),
+                                  validator: (value) => value == null
+                                      ? 'Choose an item type'
+                                      : null,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Type',
+                                  ),
+                                  items: _typeChoices,
+                                  onChanged: (value) {
+                                    if (value != null) _setTypeChoice(value);
+                                  },
+                                ),
+                                DropdownButtonFormField<String>(
+                                  key: ValueKey(
+                                    'item-material-$_selectedTypeChoice-$materialId',
+                                  ),
+                                  isExpanded: true,
+                                  initialValue:
+                                      _availableMaterials.any(
+                                        (material) => material.id == materialId,
+                                      )
+                                      ? materialId
+                                      : null,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Material',
+                                    helperText: 'Optional subtype',
+                                  ),
+                                  items: _availableMaterials
+                                      .map(
+                                        (material) => DropdownMenuItem(
+                                          value: material.id,
+                                          child: Text(material.name),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (value) =>
+                                      setState(() => materialId = value),
+                                ),
+                              )
+                            else
                               DropdownButtonFormField<String>(
                                 key: const Key('item-type'),
                                 isExpanded: true,
@@ -40438,33 +42028,6 @@ class _AddItemDialogState extends State<AddItemDialog>
                                   if (value != null) _setTypeChoice(value);
                                 },
                               ),
-                              DropdownButtonFormField<String>(
-                                key: ValueKey(
-                                  'item-material-$_selectedTypeChoice-$materialId',
-                                ),
-                                isExpanded: true,
-                                initialValue:
-                                    _availableMaterials.any(
-                                      (material) => material.id == materialId,
-                                    )
-                                    ? materialId
-                                    : null,
-                                decoration: const InputDecoration(
-                                  labelText: 'Material',
-                                  helperText: 'Optional subtype',
-                                ),
-                                items: _availableMaterials
-                                    .map(
-                                      (material) => DropdownMenuItem(
-                                        value: material.id,
-                                        child: Text(material.name),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) =>
-                                    setState(() => materialId = value),
-                              ),
-                            ),
                             if (type == InventoryType.custom) ...[
                               for (final field
                                   in _selectedCustomType?.contextualFields ??
@@ -41739,8 +43302,10 @@ class _AddItemDialogState extends State<AddItemDialog>
             entry.key: entry.value.text.trim(),
         ..._supplierMetadata,
       },
-      materialId: materialId ?? '',
-      materialName: _selectedMaterial?.name ?? '',
+      materialId: _selectedTypeListsMaterial ? materialId ?? '' : '',
+      materialName: _selectedTypeListsMaterial
+          ? _selectedMaterial?.name ?? ''
+          : '',
       spoolMaterialId: type == InventoryType.filament
           ? spoolMaterialId ?? ''
           : '',
@@ -42325,6 +43890,13 @@ class _AddItemDialogState extends State<AddItemDialog>
       .where((material) => material.id == materialId)
       .firstOrNull;
 
+  bool get _selectedTypeListsMaterial => type == InventoryType.custom
+      ? _selectedCustomType?.listsMaterial == true
+      : _typeListsMaterial(
+          _selectedTypeChoice,
+          widget.typeMaterialListingSettings,
+        );
+
   List<MaterialRecord> _materialsFor(String typeKey) =>
       widget.materials.where((material) => material.typeKey == typeKey).toList()
         ..sort((a, b) => a.name.compareTo(b.name));
@@ -42360,6 +43932,7 @@ class _AddItemDialogState extends State<AddItemDialog>
       )) {
         materialId = null;
       }
+      if (!_selectedTypeListsMaterial) materialId = null;
       _configureCustomFields();
       productId = null;
       if (_selectedBrand?.categories.contains(next) != true) {
@@ -42409,6 +43982,7 @@ String _typeLabel(InventoryType type) => switch (type) {
   InventoryType.fastener => 'Fasteners',
   InventoryType.filament => 'Filament',
   InventoryType.printedPart => 'Printed parts',
+  InventoryType.electronics => 'Electronics',
   InventoryType.resin => 'Resin',
   InventoryType.nozzle => 'Nozzle',
   InventoryType.heatBreak => 'Heat break',
@@ -43155,6 +44729,7 @@ IconData _typeIcon(InventoryType type) => switch (type) {
   InventoryType.fastener => Icons.hardware_rounded,
   InventoryType.filament => Icons.donut_large_rounded,
   InventoryType.printedPart => Icons.view_in_ar_outlined,
+  InventoryType.electronics => Icons.memory_rounded,
   InventoryType.resin => Icons.opacity_rounded,
   InventoryType.nozzle => Icons.change_history_rounded,
   InventoryType.heatBreak => Icons.compress_rounded,
@@ -43168,6 +44743,7 @@ Color _typeColor(InventoryType type) => switch (type) {
   InventoryType.fastener => const Color(0xffc8a96b),
   InventoryType.filament => const Color(0xff7455ff),
   InventoryType.printedPart => const Color(0xffa987ff),
+  InventoryType.electronics => const Color(0xff4fa7ff),
   InventoryType.resin => const Color(0xffd15cff),
   InventoryType.nozzle => const Color(0xffffb13b),
   InventoryType.heatBreak => const Color(0xff45d2bd),
@@ -48156,6 +49732,7 @@ class InventoryCard extends StatelessWidget {
     required this.onOpen,
     required this.onAction,
     this.onQuantityChanged,
+    this.onFocusChanged,
     this.onStatusPressed,
     this.onSelect,
     this.onBulkContextMenu,
@@ -48186,6 +49763,7 @@ class InventoryCard extends StatelessWidget {
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
   final ValueChanged<double>? onQuantityChanged;
+  final ValueChanged<bool>? onFocusChanged;
   final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
   final Future<void> Function(Offset position)? onBulkContextMenu;
@@ -48231,6 +49809,7 @@ class InventoryCard extends StatelessWidget {
           Positioned.fill(
             child: InkWell(
               onTap: onOpen,
+              onFocusChange: onFocusChanged,
               hoverColor: Theme.of(context).colorScheme.primary
                   .withValues(alpha: .28),
               focusColor: Theme.of(context).colorScheme.primary
@@ -48529,6 +50108,7 @@ class InventoryRow extends StatelessWidget {
     required this.onOpen,
     required this.onAction,
     this.onQuantityChanged,
+    this.onFocusChanged,
     this.onStatusPressed,
     this.onSelect,
     this.onBulkContextMenu,
@@ -48557,6 +50137,7 @@ class InventoryRow extends StatelessWidget {
   final VoidCallback onOpen;
   final ValueChanged<ItemAction> onAction;
   final ValueChanged<double>? onQuantityChanged;
+  final ValueChanged<bool>? onFocusChanged;
   final VoidCallback? onStatusPressed;
   final VoidCallback? onSelect;
   final Future<void> Function(Offset position)? onBulkContextMenu;
@@ -48793,6 +50374,7 @@ class InventoryRow extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(_designRadius(context, 22)),
         onTap: onOpen,
+        onFocusChange: onFocusChanged,
         hoverColor: Theme.of(context).colorScheme.primary
             .withValues(alpha: .28),
         focusColor: Theme.of(context).colorScheme.primary

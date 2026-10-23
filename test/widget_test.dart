@@ -3654,58 +3654,61 @@ Bed Temperature: 80°C
     );
   });
 
-  testWidgets('photo card mode uses a cached thumbnail as its background', (
-    tester,
-  ) async {
-    final imageBytes = Uint8List.fromList(
-      img.encodePng(img.Image(width: 2, height: 2)),
-    );
-    final item = sampleInventory.first.copyWith(
-      id: 'INV-PHOTO-CARD',
-      name: 'Cookiecad Blue Ombre TPU 95A',
-      thumbnailBytes: imageBytes,
-      clearImageBytes: true,
-      itemColorName: '#7455FF',
-      itemColorLabel: 'Blue Ombre',
-      materialId: 'MAT-FIL-TPU',
-      materialName: 'TPU',
-    );
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 230,
-            height: 286,
-            child: InventoryCard(
-              item: item,
-              photoCard: true,
-              onQuantityChanged: (_) {},
-              onOpen: () {},
-              onAction: (_) {},
+  testWidgets(
+    'printed parts use a cached thumbnail as a photo-card background',
+    (tester) async {
+      final imageBytes = Uint8List.fromList(
+        img.encodePng(img.Image(width: 2, height: 2)),
+      );
+      final item = sampleInventory.first.copyWith(
+        id: 'INV-PHOTO-CARD',
+        name: 'Positron Extruder Main Body',
+        type: InventoryType.printedPart,
+        thumbnailBytes: imageBytes,
+        clearImageBytes: true,
+        itemColorName: '',
+        itemColorLabel: '',
+        materialId: '',
+        materialName: '',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 230,
+              height: 286,
+              child: InventoryCard(
+                item: item,
+                photoCard: true,
+                onQuantityChanged: (_) {},
+                onOpen: () {},
+                onAction: (_) {},
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('photo-card-INV-PHOTO-CARD')), findsOneWidget);
-    expect(
-      find.byKey(const Key('photo-card-background-INV-PHOTO-CARD')),
-      findsOneWidget,
-    );
-    expect(find.text('Blue Ombre'), findsOneWidget);
-    expect(find.text('TPU'), findsWidgets);
-    expect(
-      find.byKey(const Key('decrease-quantity-INV-PHOTO-CARD')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('increase-quantity-INV-PHOTO-CARD')),
-      findsOneWidget,
-    );
-    expect(tester.takeException(), isNull);
-  });
+      expect(
+        find.byKey(const Key('photo-card-INV-PHOTO-CARD')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('photo-card-background-INV-PHOTO-CARD')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('decrease-quantity-INV-PHOTO-CARD')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('increase-quantity-INV-PHOTO-CARD')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('compact square photo cards do not overflow', (tester) async {
     final thumbnail = Uint8List.fromList(
@@ -10893,5 +10896,50 @@ Bed Temperature: 80°C
     expect(find.byKey(const Key('printing-instructions')), findsOneWidget);
     expect(find.byKey(const Key('drying-temperature')), findsNothing);
     expect(find.byKey(const Key('moisture-lifespan')), findsNothing);
+  });
+
+  testWidgets('material selector follows the selected type capability', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1000, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final nozzle = sampleInventory.first.copyWith(
+      type: InventoryType.nozzle,
+      materialId: '',
+      materialName: '',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AddItemDialog(
+            initialItem: nozzle,
+            typeMaterialListingSettings: const {'type:nozzle': false},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('item-material-type:nozzle-null')),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AddItemDialog(
+            initialItem: nozzle,
+            typeMaterialListingSettings: const {'type:nozzle': true},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('item-material-type:nozzle-null')),
+      findsOneWidget,
+    );
   });
 }

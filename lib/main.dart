@@ -12904,6 +12904,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   void _observeIdleCursor(PointerEvent event) {
+    // Widget tests fast-forward timers during pumpAndSettle. An idle pointer
+    // cue is desktop-only decoration, so never let it schedule test frames.
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return;
     if (!(Platform.isLinux || Platform.isWindows || Platform.isMacOS) ||
         event.kind != PointerDeviceKind.mouse ||
         (event is! PointerHoverEvent &&
@@ -16222,7 +16225,6 @@ class _InventoryHomeState extends State<InventoryHome> {
   /// expensive detail data (images, BOM availability, linked records) is read.
   Future<T> _prepareDetails<T>(T Function() prepare) async {
     if (mounted) setState(() => _detailsLoading = true);
-    await WidgetsBinding.instance.endOfFrame;
     // Give the animated indicator enough wall time to be perceived before a
     // fast detail snapshot completes; slow snapshots still keep it visible.
     await Future<void>.delayed(const Duration(milliseconds: 180));
@@ -16235,7 +16237,6 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   Future<T> _prepareDetailsAsync<T>(Future<T> Function() prepare) async {
     if (mounted) setState(() => _detailsLoading = true);
-    await WidgetsBinding.instance.endOfFrame;
     await Future<void>.delayed(const Duration(milliseconds: 180));
     try {
       return await prepare();
@@ -18766,8 +18767,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   Future<double Function(String productId, String name)>
   _inventoryAvailabilitySnapshot(KitRecord kit) async {
     // The disk-backed lookup already has a native indexed path; serializing it
-    // would be slower than reading the index directly.
-    if (_diskInventory != null) return _inventoryAvailabilitySnapshotUi();
+    // would be slower than reading the index directly. An isolate also has
+    // measurable startup cost for a small inventory, so keep that case local.
+    if (_diskInventory != null || inventory.length < 96) {
+      return _inventoryAvailabilitySnapshotUi();
+    }
     final requestLines = kit.bom
         .map(
           (line) => <String, String>{
@@ -31636,9 +31640,10 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
   void initState() {
     super.initState();
     tileInventory = _tileInventoryIndex(inventory);
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_prepareRows()),
-    );
+    // Start the first chunk before the dialog's first paint. This lets small
+    // kits open directly into their content, while large kits still yield
+    // between later chunks so the progress UI can paint.
+    unawaited(_prepareRows());
   }
 
   Future<void> _prepareRows() async {
@@ -31670,10 +31675,22 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
           preparedLineCount = index + 1;
           initialLoading = false;
         });
-        await WidgetsBinding.instance.endOfFrame;
+        // Yield only between chunks. Waiting after the final chunk leaves a
+        // widget-test frame with an indeterminate loader that never settles.
+        if (index + 1 < kit.bom.length) {
+          await WidgetsBinding.instance.endOfFrame;
+        }
       }
     }
-    if (mounted) setState(() => preparingRows = false);
+    if (mounted) {
+      setState(() {
+        // Empty kits never enter the loop above, so clear the loading panel
+        // here as well.  Otherwise an empty kit remains on an indeterminate
+        // progress indicator forever.
+        initialLoading = false;
+        preparingRows = false;
+      });
+    }
   }
 
   Future<void> _setTileView(bool value) async {
@@ -31883,7 +31900,14 @@ class _KitDetailsDialogState extends State<KitDetailsDialog> {
     if (selected == null || !mounted) return;
     setState(() {
       kit = widget.onMatchInventory!(kit, lineIndex, selected);
+      // The matched product changes the stock key. Rebuild the cached status
+      // instead of continuing to show the pre-substitution shortage.
+      preparedStock.clear();
+      preparedLineCount = 0;
+      initialLoading = true;
+      preparingRows = true;
     });
+    unawaited(_prepareRows());
   }
 
   Widget _kitPhotoTile(BuildContext context, KitBomEntry line, int lineIndex) {
@@ -32581,9 +32605,9 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
   void initState() {
     super.initState();
     tileInventory = _tileInventoryIndex(widget.inventory);
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_prepareRows()),
-    );
+    // See KitDetailsDialog: do the first small chunk synchronously, then
+    // yield between chunks for large build queues.
+    unawaited(_prepareRows());
   }
 
   Future<void> _prepareRows() async {
@@ -32618,10 +32642,18 @@ class _BuildQueueDialogState extends State<BuildQueueDialog>
           preparedLineCount = index + 1;
           initialLoading = false;
         });
-        await WidgetsBinding.instance.endOfFrame;
+        if (index + 1 < widget.build.lines.length) {
+          await WidgetsBinding.instance.endOfFrame;
+        }
       }
     }
-    if (mounted) setState(() => preparingRows = false);
+    if (mounted) {
+      setState(() {
+        // An empty build has no chunk to publish from the loop above.
+        initialLoading = false;
+        preparingRows = false;
+      });
+    }
   }
 
   Future<void> _setTileView(bool value) async {

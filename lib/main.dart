@@ -908,15 +908,18 @@ class _EdgeLitSearchFieldState extends State<_EdgeLitSearchField> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final palette = theme.extension<InventorinatorColors>();
+    final basePalette =
+        theme.extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    // This is intentionally the only dynamic value in the field. The scan
+    // remains a local repaint and never makes the inventory/theme rebuild.
+    final palette = _RgbAccentScope.palette(context, basePalette);
     final technical = _isInventoryCraft(context);
     // InventoryCraft keeps primary monochrome for its structural controls;
     // search scanning instead follows the user's chosen accent color.
-    final accent = technical
-        ? palette?.accent ?? theme.colorScheme.primary
-        : theme.colorScheme.primary;
+    final accent = palette.accent;
     final light = theme.brightness == Brightness.light;
-    final input = palette?.input ?? theme.colorScheme.surfaceContainerLow;
+    final input = basePalette.input;
 
     final field = TextField(
       key: widget.fieldKey,
@@ -1791,6 +1794,32 @@ class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
       outline: const Color(0xff5c5e63),
       outlineVariant: const Color(0xff34363b),
       rim: accent(.75, .66),
+    );
+  }
+
+  /// Keeps surfaces and media neutral while moving only the theme's accent
+  /// family through RGB hues.
+  InventorinatorColors withFlowingAccent(Color color) {
+    final source = HSVColor.fromColor(color);
+    Color tone(double saturationScale, double value) => HSVColor.fromAHSV(
+      1,
+      source.hue,
+      (source.saturation * saturationScale).clamp(0.0, 1.0),
+      value,
+    ).toColor();
+    return InventorinatorColors(
+      canvas: canvas,
+      surface: surface,
+      panel: panel,
+      input: input,
+      accent: tone(.96, .96),
+      base: tone(.80, .68),
+      container: tone(.72, .34),
+      flash: tone(.92, .80),
+      flashDark: tone(.78, .46),
+      outline: outline,
+      outlineVariant: outlineVariant,
+      rim: tone(.76, .70),
     );
   }
 
@@ -7933,46 +7962,65 @@ class _WallpaperBackdrop extends StatelessWidget {
           ColoredBox(color: palette.canvas.withValues(alpha: dark ? .58 : .32)),
         if (gridEnabled)
           Positioned.fill(
-            child: IgnorePointer(
-              child: RepaintBoundary(
-                child: CustomPaint(
-                  painter: _BackgroundOverlayPainter(
-                    overlay: BackgroundOverlay.grid,
-                    color:
-                        (gridUsesAccent
-                                ? Color.lerp(
-                                    palette.outline,
-                                    palette.accent,
-                                    .20,
-                                  )!
-                                : palette.outlineVariant)
-                            .withValues(alpha: dark ? .58 : .42),
-                  ),
-                  child: const SizedBox.expand(),
-                ),
-              ),
+            child: _BackgroundOverlayLayer(
+              overlay: BackgroundOverlay.grid,
+              usesAccent: gridUsesAccent,
+              dark: dark,
+              fallbackPalette: palette,
             ),
           ),
         if (dotMatrixEnabled)
           Positioned.fill(
-            child: IgnorePointer(
-              child: RepaintBoundary(
-                child: CustomPaint(
-                  painter: _BackgroundOverlayPainter(
-                    overlay: BackgroundOverlay.dotMatrix,
-                    color:
-                        (dotMatrixUsesAccent
-                                ? palette.accent
-                                : palette.outlineVariant)
-                            .withValues(alpha: dark ? .62 : .48),
-                  ),
-                  child: const SizedBox.expand(),
-                ),
-              ),
+            child: _BackgroundOverlayLayer(
+              overlay: BackgroundOverlay.dotMatrix,
+              usesAccent: dotMatrixUsesAccent,
+              dark: dark,
+              fallbackPalette: palette,
             ),
           ),
         child,
       ],
+    );
+  }
+}
+
+class _BackgroundOverlayLayer extends StatelessWidget {
+  const _BackgroundOverlayLayer({
+    required this.overlay,
+    required this.usesAccent,
+    required this.dark,
+    required this.fallbackPalette,
+  });
+
+  final BackgroundOverlay overlay;
+  final bool usesAccent;
+  final bool dark;
+  final InventorinatorColors fallbackPalette;
+
+  @override
+  Widget build(BuildContext context) {
+    // Non-accent overlays remain completely static. Accent overlays subscribe
+    // only at this paint layer, keeping wallpaper and inventory content still.
+    final palette = usesAccent
+        ? _RgbAccentScope.palette(context, fallbackPalette)
+        : fallbackPalette;
+    final isGrid = overlay == BackgroundOverlay.grid;
+    final color =
+        (usesAccent
+                ? isGrid
+                      ? Color.lerp(palette.outline, palette.accent, .20)!
+                      : palette.accent
+                : palette.outlineVariant)
+            .withValues(
+              alpha: dark ? (isGrid ? .58 : .62) : (isGrid ? .42 : .48),
+            );
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: CustomPaint(
+          painter: _BackgroundOverlayPainter(overlay: overlay, color: color),
+          child: const SizedBox.expand(),
+        ),
+      ),
     );
   }
 }
@@ -8046,9 +8094,10 @@ class _InventoryCraftScrollRuler extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette =
+    final basePalette =
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final palette = _RgbAccentScope.palette(context, basePalette);
     return Positioned(
       key: const Key('inventorycraft-scroll-ruler'),
       right: 0,
@@ -8496,6 +8545,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   late AppDesignTheme designTheme;
   late Color customThemeColor;
   late final AppLockController _appLock;
+  bool rgbAccentMode = false;
 
   @override
   void initState() {
@@ -8539,6 +8589,19 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
               '#8E75FF',
         ) ??
         const Color(0xff8e75ff);
+    rgbAccentMode =
+        widget.database?.loadBoolPreference(
+          'rgb_accent_mode_enabled',
+          fallback: false,
+        ) ??
+        false;
+    _applySystemColors();
+  }
+
+  void _setRgbAccentMode(bool value) {
+    if (value == rgbAccentMode) return;
+    setState(() => rgbAccentMode = value);
+    widget.database?.saveBoolPreference('rgb_accent_mode_enabled', value);
     _applySystemColors();
   }
 
@@ -8763,7 +8826,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         child: DesktopTouchKeyboardBridge(
           child: AppLockGate(
             controller: _appLock,
-            child: child ?? const SizedBox.shrink(),
+            child: _RgbAccentThemeCycle(
+              enabled: rgbAccentMode,
+              palette: palette,
+              designTheme: designTheme,
+              child: child ?? const SizedBox.shrink(),
+            ),
           ),
         ),
       ),
@@ -9067,8 +9135,112 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         onBrightnessModeChanged: _setBrightnessMode,
         onDesignThemeChanged: _setDesignTheme,
         onCustomThemeColorChanged: _setCustomThemeColor,
+        rgbAccentMode: rgbAccentMode,
+        onRgbAccentModeChanged: _setRgbAccentMode,
       ),
     );
+  }
+}
+
+/// Supplies RGB values only to controls that explicitly opt in. It never
+/// replaces the global Theme, keeping unrelated animations untouched.
+class _RgbAccentThemeCycle extends StatefulWidget {
+  const _RgbAccentThemeCycle({
+    required this.enabled,
+    required this.palette,
+    required this.designTheme,
+    required this.child,
+  });
+
+  final bool enabled;
+  final InventorinatorColors palette;
+  final AppDesignTheme designTheme;
+  final Widget child;
+
+  @override
+  State<_RgbAccentThemeCycle> createState() => _RgbAccentThemeCycleState();
+}
+
+class _RgbAccentThemeCycleState extends State<_RgbAccentThemeCycle> {
+  Timer? _timer;
+  late final ValueNotifier<InventorinatorColors?> _flowingPalette =
+      ValueNotifier(null);
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RgbAccentThemeCycle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.enabled != oldWidget.enabled ||
+        widget.palette != oldWidget.palette) {
+      _sync();
+    }
+  }
+
+  void _sync() {
+    _timer?.cancel();
+    _timer = null;
+    if (!widget.enabled) {
+      _flowingPalette.value = null;
+      return;
+    }
+    void tick() {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _flowingPalette.value = widget.palette.withFlowingAccent(
+        HSVColor.fromAHSV(1, (now % 120000) / 120000 * 360, .82, .96).toColor(),
+      );
+    }
+
+    tick();
+    // Only explicitly subscribed accent painters receive this notification.
+    _timer = Timer.periodic(const Duration(milliseconds: 120), (_) => tick());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _flowingPalette.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _RgbAccentScope(notifier: _flowingPalette, child: widget.child);
+  }
+}
+
+class _RgbAccentScope
+    extends InheritedNotifier<ValueNotifier<InventorinatorColors?>> {
+  const _RgbAccentScope({required super.notifier, required super.child});
+
+  static InventorinatorColors palette(
+    BuildContext context,
+    InventorinatorColors fallback,
+  ) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_RgbAccentScope>()
+          ?.notifier
+          ?.value ??
+      fallback;
+}
+
+/// A small, opt-in accent consumer. Using it instead of Theme.of() keeps an
+/// RGB update bounded to the icon that actually displays the accent.
+class _RgbAccentIcon extends StatelessWidget {
+  const _RgbAccentIcon(this.icon);
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    return Icon(icon, color: _RgbAccentScope.palette(context, fallback).accent);
   }
 }
 
@@ -9543,6 +9715,8 @@ class InventoryHome extends StatefulWidget {
     this.onBrightnessModeChanged,
     this.onDesignThemeChanged,
     this.onCustomThemeColorChanged,
+    this.rgbAccentMode = false,
+    this.onRgbAccentModeChanged,
   });
   final LocalDatabase? database;
   final String? persistedState;
@@ -9556,6 +9730,8 @@ class InventoryHome extends StatefulWidget {
   final ValueChanged<AppBrightnessMode>? onBrightnessModeChanged;
   final ValueChanged<AppDesignTheme>? onDesignThemeChanged;
   final ValueChanged<Color>? onCustomThemeColorChanged;
+  final bool rgbAccentMode;
+  final ValueChanged<bool>? onRgbAccentModeChanged;
   @override
   State<InventoryHome> createState() => _InventoryHomeState();
 }
@@ -9844,6 +10020,9 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool stockroomFullscreen = false;
   static const _audioChannel = MethodChannel('inventorinator/audio');
   static const _deviceChannel = MethodChannel('inventorinator/device');
+  static const _windowChannel = MethodChannel(
+    'media.everlasting.inventorinator/window',
+  );
 
   @override
   void initState() {
@@ -9852,6 +10031,13 @@ class _InventoryHomeState extends State<InventoryHome> {
       const Duration(seconds: 15),
       (_) => _runSliderEdgeChevronSweep(),
     );
+    _windowChannel.setMethodCallHandler((call) async {
+      if (call.method == 'openControllerKeyboard') {
+        _openControllerKeyboard(fallbackToInventorySearch: true);
+        return;
+      }
+      throw MissingPluginException('Unknown window method: ${call.method}');
+    });
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
     _gamepadSubscription = Gamepads.normalizedEvents.listen(
       _handleGamepadEvent,
@@ -10786,6 +10972,7 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   @override
   void dispose() {
+    _windowChannel.setMethodCallHandler(null);
     HardwareKeyboard.instance.removeHandler(_handleInventoryShortcut);
     _gamepadSubscription?.cancel();
     _gamepadHoldTimer?.cancel();
@@ -10874,8 +11061,15 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   bool _handleInventoryShortcut(KeyEvent event) {
     if (event is! KeyDownEvent ||
-        !(ModalRoute.of(context)?.isCurrent ?? false) ||
         AppLockScope.maybeOf(context, listen: false)?.locked == true) {
+      return false;
+    }
+    if (_controllerKeyboardController != null &&
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      _closeControllerKeyboard();
+      return true;
+    }
+    if (!(ModalRoute.of(context)?.isCurrent ?? false)) {
       return false;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyF &&
@@ -11249,7 +11443,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     _controllerKeyboardSymbolsMode.value = false;
     showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       barrierColor: Colors.transparent,
       builder: (dialogContext) => _ControllerKeyboardDialog(
         selection: _controllerKeyboardSelection,
@@ -11261,7 +11455,8 @@ class _InventoryHomeState extends State<InventoryHome> {
         },
       ),
     ).whenComplete(() {
-      if (mounted) setState(() => _controllerKeyboardController = null);
+      if (!mounted) return;
+      setState(() => _controllerKeyboardController = null);
     });
   }
 
@@ -20393,6 +20588,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       brightnessMode: widget.brightnessMode,
       designTheme: widget.designTheme,
       customThemeColor: widget.customThemeColor,
+      rgbAccentMode: widget.rgbAccentMode,
       alertSoundsEnabled: alertSoundsEnabled,
       lowStockAlertsEnabled: lowStockAlertsEnabled,
       hideZeroQuantityItems: hideZeroQuantityItems,
@@ -20416,6 +20612,7 @@ class _InventoryHomeState extends State<InventoryHome> {
       onBrightnessModeChanged: widget.onBrightnessModeChanged ?? (_) {},
       onDesignThemeChanged: widget.onDesignThemeChanged ?? (_) {},
       onCustomThemeColorChanged: widget.onCustomThemeColorChanged ?? (_) {},
+      onRgbAccentModeChanged: widget.onRgbAccentModeChanged ?? (_) {},
       onAlertSoundsChanged: (value) {
         setState(() => alertSoundsEnabled = value);
         widget.database?.saveBoolPreference('alert_sounds_enabled', value);
@@ -24957,36 +25154,39 @@ class _InventoryHomeState extends State<InventoryHome> {
           : null;
       final slider = ValueListenableBuilder<double?>(
         valueListenable: _sliderEdgeChevronProgress,
-        builder: (context, sweep, _) => SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackShape: _NotchedSliderTrackShape(
-              palette,
-              technical: technical,
-              edgeChevronProgress: edgeFromStart == null ? null : sweep,
-              edgeChevronFromStart: edgeFromStart,
+        builder: (context, sweep, _) {
+          final rgbPalette = _RgbAccentScope.palette(context, palette);
+          return SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackShape: _NotchedSliderTrackShape(
+                rgbPalette,
+                technical: technical,
+                edgeChevronProgress: edgeFromStart == null ? null : sweep,
+                edgeChevronFromStart: edgeFromStart,
+              ),
+              trackHeight: 26,
+              thumbShape: technical
+                  ? const _RulerSliderThumbShape()
+                  : _notchedSliderThumbShape,
+              thumbColor: technical
+                  ? rgbPalette.accent
+                  : Theme.of(context).colorScheme.onSurface,
+              activeTrackColor: rgbPalette.accent,
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+              overlayColor: rgbPalette.accent.withValues(alpha: .16),
+              showValueIndicator: ShowValueIndicator.onDrag,
             ),
-            trackHeight: 26,
-            thumbShape: technical
-                ? const _RulerSliderThumbShape()
-                : _notchedSliderThumbShape,
-            thumbColor: technical
-                ? palette.accent
-                : Theme.of(context).colorScheme.onSurface,
-            activeTrackColor: palette.accent,
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
-            overlayColor: palette.accent.withValues(alpha: .16),
-            showValueIndicator: ShowValueIndicator.onDrag,
-          ),
-          child: Slider(
-            key: const Key('page-size-slider'),
-            value: previewValue,
-            min: 0,
-            max: (_pageSizes.length - 1).toDouble(),
-            divisions: _pageSizes.length - 1,
-            label: '${_pageSizes[previewIndex]}',
-            onChanged: _previewPageSize,
-          ),
-        ),
+            child: Slider(
+              key: const Key('page-size-slider'),
+              value: previewValue,
+              min: 0,
+              max: (_pageSizes.length - 1).toDouble(),
+              divisions: _pageSizes.length - 1,
+              label: '${_pageSizes[previewIndex]}',
+              onChanged: _previewPageSize,
+            ),
+          );
+        },
       );
       final sliderField = technical && matchControlHeight
           ? SizedBox(height: _inventorySquareControlSize, child: slider)
@@ -25165,35 +25365,38 @@ class _InventoryHomeState extends State<InventoryHome> {
           : null;
       final slider = ValueListenableBuilder<double?>(
         valueListenable: _sliderEdgeChevronProgress,
-        builder: (context, sweep, _) => SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackShape: _NotchedSliderTrackShape(
-              palette,
-              technical: technical,
-              edgeChevronProgress: edgeFromStart == null ? null : sweep,
-              edgeChevronFromStart: edgeFromStart,
+        builder: (context, sweep, _) {
+          final rgbPalette = _RgbAccentScope.palette(context, palette);
+          return SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackShape: _NotchedSliderTrackShape(
+                rgbPalette,
+                technical: technical,
+                edgeChevronProgress: edgeFromStart == null ? null : sweep,
+                edgeChevronFromStart: edgeFromStart,
+              ),
+              trackHeight: 26,
+              thumbShape: technical
+                  ? const _RulerSliderThumbShape()
+                  : _notchedSliderThumbShape,
+              thumbColor: technical
+                  ? rgbPalette.accent
+                  : Theme.of(context).colorScheme.onSurface,
+              activeTrackColor: rgbPalette.accent,
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+              overlayColor: rgbPalette.accent.withValues(alpha: .16),
+              showValueIndicator: ShowValueIndicator.onDrag,
             ),
-            trackHeight: 26,
-            thumbShape: technical
-                ? const _RulerSliderThumbShape()
-                : _notchedSliderThumbShape,
-            thumbColor: technical
-                ? palette.accent
-                : Theme.of(context).colorScheme.onSurface,
-            activeTrackColor: palette.accent,
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
-            overlayColor: palette.accent.withValues(alpha: .16),
-            showValueIndicator: ShowValueIndicator.onDrag,
-          ),
-          child: Slider(
-            key: const Key('card-size-slider'),
-            value: previewValue,
-            min: _minimumCardSizePercent,
-            max: _maximumCardSizePercent,
-            label: '${previewValue.round()}%',
-            onChanged: _previewCardSize,
-          ),
-        ),
+            child: Slider(
+              key: const Key('card-size-slider'),
+              value: previewValue,
+              min: _minimumCardSizePercent,
+              max: _maximumCardSizePercent,
+              label: '${previewValue.round()}%',
+              onChanged: _previewCardSize,
+            ),
+          );
+        },
       );
       final sliderField = technical && matchControlHeight
           ? SizedBox(height: _inventorySquareControlSize, child: slider)
@@ -29720,14 +29923,6 @@ class _InventoryHomeState extends State<InventoryHome> {
                     );
                   },
                 ),
-                _configBlockDivider(),
-                _configBlockButton(
-                  key: const Key('controller-keyboard'),
-                  tooltip: 'Open controller keyboard',
-                  onPressed: () =>
-                      _openControllerKeyboard(fallbackToInventorySearch: true),
-                  icon: Icons.keyboard_alt_outlined,
-                ),
               ],
             ),
           ),
@@ -30146,15 +30341,12 @@ class _InventoryHomeState extends State<InventoryHome> {
               behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => gridView = value),
               child: Center(
-                child: Icon(
-                  icon,
-                  color: gridView == value
-                      ? (Theme.of(context).extension<InventorinatorColors>() ??
-                                InventorinatorColors.palettes[AppColorTheme
-                                    .darkPurple]!)
-                            .accent
-                      : Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+                child: gridView == value
+                    ? _RgbAccentIcon(icon)
+                    : Icon(
+                        icon,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
               ),
             ),
           ),
@@ -30203,7 +30395,9 @@ class _InventoryHomeState extends State<InventoryHome> {
                           );
                         },
                   icon: const Icon(Icons.visibility_outlined),
-                  selectedIcon: const Icon(Icons.visibility_off_outlined),
+                  selectedIcon: const _RgbAccentIcon(
+                    Icons.visibility_off_outlined,
+                  ),
                   padding: EdgeInsets.zero,
                   style: ButtonStyle(
                     minimumSize: const WidgetStatePropertyAll(
@@ -38454,6 +38648,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.brightnessMode,
     required this.designTheme,
     required this.customThemeColor,
+    required this.rgbAccentMode,
     required this.alertSoundsEnabled,
     required this.lowStockAlertsEnabled,
     required this.hideZeroQuantityItems,
@@ -38473,6 +38668,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
     required this.onBrightnessModeChanged,
     required this.onDesignThemeChanged,
     required this.onCustomThemeColorChanged,
+    required this.onRgbAccentModeChanged,
     required this.onAlertSoundsChanged,
     required this.onLowStockAlertsChanged,
     required this.onHideZeroQuantityItemsChanged,
@@ -38528,6 +38724,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final AppBrightnessMode brightnessMode;
   final AppDesignTheme designTheme;
   final Color customThemeColor;
+  final bool rgbAccentMode;
   final bool alertSoundsEnabled;
   final bool lowStockAlertsEnabled;
   final bool hideZeroQuantityItems;
@@ -38548,6 +38745,7 @@ class PersonalizationSettingsDialog extends StatefulWidget {
   final ValueChanged<AppBrightnessMode> onBrightnessModeChanged;
   final ValueChanged<AppDesignTheme> onDesignThemeChanged;
   final ValueChanged<Color> onCustomThemeColorChanged;
+  final ValueChanged<bool> onRgbAccentModeChanged;
   final ValueChanged<bool> onAlertSoundsChanged;
   final ValueChanged<bool> onLowStockAlertsChanged;
   final ValueChanged<bool> onHideZeroQuantityItemsChanged;
@@ -38613,6 +38811,7 @@ class _PersonalizationSettingsDialogState
   late AppBrightnessMode brightnessMode = widget.brightnessMode;
   late AppDesignTheme designTheme = widget.designTheme;
   late Color customThemeColor = widget.customThemeColor;
+  late bool rgbAccentMode = widget.rgbAccentMode;
   late bool alertSoundsEnabled = widget.alertSoundsEnabled;
   late bool lowStockAlertsEnabled = widget.lowStockAlertsEnabled;
   late bool hideZeroQuantityItems = widget.hideZeroQuantityItems;
@@ -38894,6 +39093,19 @@ class _PersonalizationSettingsDialogState
                       ),
                   ],
                 );
+              },
+            ),
+            SwitchListTile(
+              key: const Key('rgb-accent-mode-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('RGB accent cycle'),
+              subtitle: const Text(
+                'Flow every accent through the color spectrum on this device.',
+              ),
+              value: rgbAccentMode,
+              onChanged: (value) {
+                setState(() => rgbAccentMode = value);
+                widget.onRgbAccentModeChanged(value);
               },
             ),
             const Divider(height: 28),
@@ -52090,136 +52302,146 @@ class _ControllerKeyboardDialog extends StatelessWidget {
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
     final technical = _isInventoryCraft(context);
-    return SafeArea(
-      top: false,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          width: math.min(MediaQuery.sizeOf(context).width - 16, 640),
-          margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
-          decoration: BoxDecoration(
-            color: palette.surface.withValues(alpha: .98),
-            border: Border.all(color: palette.outline),
-            borderRadius: BorderRadius.circular(technical ? 0 : 10),
-            boxShadow: technical
-                ? const []
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: .38),
-                      blurRadius: 26,
-                      offset: const Offset(0, -8),
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.escape) {
+          Navigator.of(context).maybePop();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: SafeArea(
+        top: false,
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Container(
+            width: math.min(MediaQuery.sizeOf(context).width - 16, 640),
+            margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+            decoration: BoxDecoration(
+              color: palette.surface.withValues(alpha: .98),
+              border: Border.all(color: palette.outline),
+              borderRadius: BorderRadius.circular(technical ? 0 : 10),
+              boxShadow: technical
+                  ? const []
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .38),
+                        blurRadius: 26,
+                        offset: const Offset(0, -8),
+                      ),
+                    ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.gamepad_outlined,
+                      size: 14,
+                      color: colorScheme.primary,
                     ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Controller keyboard',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Pixelify Sans',
+                        color: colorScheme.onSurface,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (MediaQuery.sizeOf(context).width >= 560)
+                      Text(
+                        'A type  •  X delete  •  Y space  •  B close',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontFamily: 'Pixelify Sans',
+                          color: colorScheme.onSurfaceVariant,
+                          decoration: TextDecoration.none,
+                        ),
+                      )
+                    else
+                      Text(
+                        'A type  •  B close',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontFamily: 'Pixelify Sans',
+                          color: colorScheme.onSurfaceVariant,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
                   ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.gamepad_outlined,
-                    size: 14,
-                    color: colorScheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Controller keyboard',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      fontFamily: 'Pixelify Sans',
-                      color: colorScheme.onSurface,
-                      decoration: TextDecoration.none,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (MediaQuery.sizeOf(context).width >= 560)
-                    Text(
-                      'A type  •  X delete  •  Y space  •  B close',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontFamily: 'Pixelify Sans',
-                        color: colorScheme.onSurfaceVariant,
-                        decoration: TextDecoration.none,
-                      ),
-                    )
-                  else
-                    Text(
-                      'A type  •  B close',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontFamily: 'Pixelify Sans',
-                        color: colorScheme.onSurfaceVariant,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              ValueListenableBuilder<int>(
-                valueListenable: selection,
-                builder: (context, selectedIndex, _) =>
-                    ValueListenableBuilder<bool>(
-                      valueListenable: shift,
-                      builder: (context, shifted, _) =>
-                          ValueListenableBuilder<bool>(
-                            valueListenable: symbols,
-                            builder: (context, symbolMode, _) {
-                              final rows = symbolMode
-                                  ? _controllerKeyboardSymbolRows
-                                  : _controllerKeyboardLetters;
-                              var index = 0;
-                              return Column(
-                                children: [
-                                  for (final row in rows) ...[
-                                    Row(
-                                      children: [
-                                        for (final key in row)
-                                          Builder(
-                                            builder: (context) {
-                                              final keyIndex = index++;
-                                              return Expanded(
-                                                flex: _controllerKeyboardFlex(
-                                                  key,
-                                                ),
-                                                child: Padding(
-                                                  padding: const EdgeInsets.all(
-                                                    2,
+                ),
+                const SizedBox(height: 4),
+                ValueListenableBuilder<int>(
+                  valueListenable: selection,
+                  builder: (context, selectedIndex, _) =>
+                      ValueListenableBuilder<bool>(
+                        valueListenable: shift,
+                        builder: (context, shifted, _) =>
+                            ValueListenableBuilder<bool>(
+                              valueListenable: symbols,
+                              builder: (context, symbolMode, _) {
+                                final rows = symbolMode
+                                    ? _controllerKeyboardSymbolRows
+                                    : _controllerKeyboardLetters;
+                                var index = 0;
+                                return Column(
+                                  children: [
+                                    for (final row in rows) ...[
+                                      Row(
+                                        children: [
+                                          for (final key in row)
+                                            Builder(
+                                              builder: (context) {
+                                                final keyIndex = index++;
+                                                return Expanded(
+                                                  flex: _controllerKeyboardFlex(
+                                                    key,
                                                   ),
-                                                  child: _ControllerKeyboardKey(
-                                                    label:
-                                                        _controllerKeyboardLabel(
-                                                          key,
-                                                          shifted,
-                                                        ),
-                                                    selected:
-                                                        keyIndex ==
-                                                        selectedIndex,
-                                                    colorScheme: colorScheme,
-                                                    palette: palette,
-                                                    technical: technical,
-                                                    onPressed: () =>
-                                                        onKeyPressed(
-                                                          keyIndex,
-                                                          key,
-                                                        ),
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(2),
+                                                    child: _ControllerKeyboardKey(
+                                                      label:
+                                                          _controllerKeyboardLabel(
+                                                            key,
+                                                            shifted,
+                                                          ),
+                                                      selected:
+                                                          keyIndex ==
+                                                          selectedIndex,
+                                                      colorScheme: colorScheme,
+                                                      palette: palette,
+                                                      technical: technical,
+                                                      onPressed: () =>
+                                                          onKeyPressed(
+                                                            keyIndex,
+                                                            key,
+                                                          ),
+                                                    ),
                                                   ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                      ],
-                                    ),
+                                                );
+                                              },
+                                            ),
+                                        ],
+                                      ),
+                                    ],
                                   ],
-                                ],
-                              );
-                            },
-                          ),
-                    ),
-              ),
-            ],
+                                );
+                              },
+                            ),
+                      ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

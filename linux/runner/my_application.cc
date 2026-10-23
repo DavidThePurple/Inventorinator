@@ -289,6 +289,18 @@ static void theme_method_call_cb(FlMethodChannel* channel,
   fl_method_call_respond(method_call, response, nullptr);
 }
 
+static void open_controller_keyboard_cb(GtkButton* button, gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  FlBinaryMessenger* messenger =
+      fl_engine_get_binary_messenger(fl_view_get_engine(self->view));
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_autoptr(FlMethodChannel) channel = fl_method_channel_new(
+      messenger, "media.everlasting.inventorinator/window",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_invoke_method(channel, "openControllerKeyboard", nullptr,
+                                  nullptr, nullptr, nullptr);
+}
+
 static void minimize_window_cb(GtkButton* button, gpointer user_data) {
   MyApplication* self = MY_APPLICATION(user_data);
   gtk_window_iconify(self->window);
@@ -299,6 +311,7 @@ enum WindowControlIcon {
   kWindowControlMaximize = 2,
   kWindowControlRestore = 3,
   kWindowControlClose = 4,
+  kWindowControlKeyboard = 5,
 };
 
 static gboolean draw_window_control_icon_cb(GtkWidget* widget, cairo_t* cr,
@@ -346,6 +359,17 @@ static gboolean draw_window_control_icon_cb(GtkWidget* widget, cairo_t* cr,
       cairo_line_to(cr, 12.5, 12.5);
       cairo_move_to(cr, 12.5, 3.5);
       cairo_line_to(cr, 3.5, 12.5);
+      break;
+    case kWindowControlKeyboard:
+      cairo_rectangle(cr, 2.5, 4.5, 11.0, 7.0);
+      cairo_move_to(cr, 4.5, 7.0);
+      cairo_line_to(cr, 4.5, 7.0);
+      cairo_move_to(cr, 7.5, 7.0);
+      cairo_line_to(cr, 7.5, 7.0);
+      cairo_move_to(cr, 10.5, 7.0);
+      cairo_line_to(cr, 10.5, 7.0);
+      cairo_move_to(cr, 4.5, 9.5);
+      cairo_line_to(cr, 10.5, 9.5);
       break;
   }
   cairo_stroke(cr);
@@ -422,7 +446,7 @@ static GtkWidget* create_window_button(WindowControlIcon icon,
 }
 
 static GtkWidget* create_custom_titlebar(MyApplication* self) {
-  GtkWidget* titlebar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget* titlebar = gtk_overlay_new();
   gtk_widget_set_name(titlebar, "inventorinator-titlebar");
   gtk_widget_set_size_request(titlebar, -1, 40);
 
@@ -431,11 +455,18 @@ static GtkWidget* create_custom_titlebar(MyApplication* self) {
   gtk_widget_add_events(drag_area, GDK_BUTTON_PRESS_MASK);
   g_signal_connect(drag_area, "button-press-event",
                    G_CALLBACK(titlebar_button_press_cb), self);
-  gtk_box_pack_start(GTK_BOX(titlebar), drag_area, TRUE, TRUE, 0);
+  gtk_container_add(GTK_CONTAINER(titlebar), drag_area);
 
   GtkWidget* minimize = create_window_button(
       kWindowControlMinimize, "Minimize", "inventorinator-window-button",
       G_CALLBACK(minimize_window_cb), self);
+  GtkWidget* keyboard = create_window_button(
+      kWindowControlKeyboard, "Open controller keyboard",
+      "inventorinator-window-button", G_CALLBACK(open_controller_keyboard_cb),
+      self);
+  gtk_widget_set_halign(keyboard, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(keyboard, GTK_ALIGN_FILL);
+  gtk_overlay_add_overlay(GTK_OVERLAY(titlebar), keyboard);
   GtkWidget* maximize = create_window_button(
       kWindowControlMaximize, "Maximize or restore",
       "inventorinator-window-button",
@@ -445,9 +476,13 @@ static GtkWidget* create_custom_titlebar(MyApplication* self) {
       kWindowControlClose, "Close", "inventorinator-close-button",
       G_CALLBACK(close_window_cb), self);
   gtk_widget_set_margin_end(close, 4);
-  gtk_box_pack_start(GTK_BOX(titlebar), minimize, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(titlebar), maximize, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(titlebar), close, FALSE, FALSE, 0);
+  GtkWidget* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_halign(controls, GTK_ALIGN_END);
+  gtk_widget_set_valign(controls, GTK_ALIGN_FILL);
+  gtk_box_pack_start(GTK_BOX(controls), minimize, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(controls), maximize, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(controls), close, FALSE, FALSE, 0);
+  gtk_overlay_add_overlay(GTK_OVERLAY(titlebar), controls);
   return titlebar;
 }
 

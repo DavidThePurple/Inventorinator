@@ -3348,6 +3348,7 @@ Bed Temperature: 80°C
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const InventorinatorApp());
+    await tester.pumpAndSettle();
 
     final scrollbar = find.byKey(const Key('main-inventory-scrollbar'));
     final initialScrollbar = tester.widget<Scrollbar>(scrollbar);
@@ -3372,7 +3373,9 @@ Bed Temperature: 80°C
       isFalse,
       reason: 'D-pad navigation must leave the Android on-screen keyboard off.',
     );
-    await tester.tap(find.byKey(const Key('personalization-settings')));
+    tester
+        .widget<IconButton>(find.byKey(const Key('personalization-settings')))
+        .onPressed!();
     await tester.pumpAndSettle();
     final widthSlider = find.byKey(const Key('main-scrollbar-width'));
     await tester.ensureVisible(widthSlider);

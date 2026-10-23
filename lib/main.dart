@@ -43925,7 +43925,7 @@ class _AddItemDialogState extends State<AddItemDialog>
   bool get _selectedTypeListsMaterial => type == InventoryType.custom
       ? _selectedCustomType?.listsMaterial == true
       : _typeListsMaterial(
-          _selectedTypeChoice,
+          _inventoryTypeDefinitionKey(type),
           widget.typeMaterialListingSettings,
         );
 

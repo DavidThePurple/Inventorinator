@@ -2727,10 +2727,18 @@ const _defaultTypeStatusSettings = <String, bool>{'item:filament': true};
 bool _typeShowsStatus(String key, Map<String, bool> settings) =>
     settings[key] ?? _defaultTypeStatusSettings[key] ?? false;
 
-/// Existing built-in types historically exposed their Material picker. Keep
-/// that behavior for saved workspaces; Catalog can disable it per type.
-bool _typeListsMaterial(String key, Map<String, bool> settings) =>
-    settings[key] ?? key.startsWith('item:');
+/// Material selection is opt-in per type. Filament keeps its long-standing
+/// default, while both persisted key formats remain readable after upgrades.
+bool _typeListsMaterial(String key, Map<String, bool> settings) {
+  final legacyKey = key.startsWith('item:')
+      ? 'type:${key.substring('item:'.length)}'
+      : key.startsWith('type:')
+      ? 'item:${key.substring('type:'.length)}'
+      : key;
+  return settings[key] ??
+      settings[legacyKey] ??
+      (key == 'item:filament' || key == 'type:filament');
+}
 
 const typeIconChoices = <String, IconData>{
   'inventory': Icons.inventory_2_outlined,

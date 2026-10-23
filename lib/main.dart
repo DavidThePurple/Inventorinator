@@ -19,6 +19,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
+import 'package:gamepads/gamepads.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
@@ -66,6 +67,20 @@ import 'visual_effect_preferences.dart' as visual_effect_preferences;
 // A single explicit very-dark violet canvas across every platform. Keeping the
 // green channel lowest prevents the background from drifting teal/green.
 const Color _appCanvasColor = Color(0xff120d1c);
+
+const _controllerKeyboardLetters = <List<String>>[
+  ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+  ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+  ['shift', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'backspace'],
+  ['symbols', ',', 'space', '.', 'done'],
+];
+
+const _controllerKeyboardSymbolRows = <List<String>>[
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['@', '#', r'$', '_', '&', '-', '+', '(', ')', '/'],
+  ['*', '"', "'", ':', ';', '!', '?', ','],
+  ['letters', 'space', '.', 'done'],
+];
 
 class _DraftActionIcon extends StatelessWidget {
   const _DraftActionIcon({this.edit = false});
@@ -9663,6 +9678,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   String? filamentPurposeTagFilter;
   final TextEditingController inventorySearchController =
       TextEditingController();
+  StreamSubscription<NormalizedGamepadEvent>? _gamepadSubscription;
+  Timer? _gamepadHoldTimer;
+  bool _gamepadAHeld = false;
+  DateTime _lastGamepadFocusMove = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastGamepadScroll = DateTime.fromMillisecondsSinceEpoch(0);
   final FocusNode inventorySearchFocusNode = FocusNode(
     debugLabel: 'Inventory search',
     skipTraversal: true,
@@ -9680,7 +9700,17 @@ class _InventoryHomeState extends State<InventoryHome> {
   final Set<String> selectedKitIds = {};
   final Set<String> selectedMachineIds = {};
   String? _controllerFocusedItemId;
+  final Map<String, GlobalKey> _controllerItemKeys = {};
+  bool _controllerBottomActionsFocused = false;
+  int _controllerBottomActionIndex = 0;
   bool _controllerGuideShowing = false;
+  bool _controllerGuidePromptedThisSession = false;
+  TextEditingController? _controllerKeyboardController;
+  final ValueNotifier<int> _controllerKeyboardSelection = ValueNotifier(0);
+  final ValueNotifier<bool> _controllerKeyboardShift = ValueNotifier(false);
+  final ValueNotifier<bool> _controllerKeyboardSymbolsMode = ValueNotifier(
+    false,
+  );
   InventorySort sort = InventorySort.type;
   bool sortAscending = true;
   Set<String> _similarItemIds = <String>{};
@@ -9823,6 +9853,12 @@ class _InventoryHomeState extends State<InventoryHome> {
       (_) => _runSliderEdgeChevronSweep(),
     );
     HardwareKeyboard.instance.addHandler(_handleInventoryShortcut);
+    _gamepadSubscription = Gamepads.normalizedEvents.listen(
+      _handleGamepadEvent,
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Gamepad input unavailable: $error');
+      },
+    );
     GestureBinding.instance.pointerRouter.addGlobalRoute(_observeIdleCursor);
     _inventoryIsScrolling.addListener(_syncCountdownClockPause);
     if (kProfileMode && _profileScrollProbe) {
@@ -10751,6 +10787,11 @@ class _InventoryHomeState extends State<InventoryHome> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleInventoryShortcut);
+    _gamepadSubscription?.cancel();
+    _gamepadHoldTimer?.cancel();
+    _controllerKeyboardSelection.dispose();
+    _controllerKeyboardShift.dispose();
+    _controllerKeyboardSymbolsMode.dispose();
     GestureBinding.instance.pointerRouter.removeGlobalRoute(_observeIdleCursor);
     _idleCursorTimer?.cancel();
     _idleCursorOverlay?.remove();
@@ -10924,6 +10965,502 @@ class _InventoryHomeState extends State<InventoryHome> {
     return false;
   }
 
+  void _handleGamepadEvent(NormalizedGamepadEvent event) {
+    if (!mounted) return;
+    if (AppLockScope.maybeOf(context, listen: false)?.locked == true) {
+      return;
+    }
+    if (_controllerKeyboardController != null) {
+      _handleControllerKeyboardEvent(event);
+      return;
+    }
+    // The listener belongs to the inventory shell, so its own route is no
+    // longer current while a detail dialog is above it. Handle B before that
+    // guard so the controller can always dismiss the topmost view.
+    if (event.button == GamepadButton.b && event.value >= .5) {
+      _dismissControllerView();
+      return;
+    }
+    if (!(ModalRoute.of(context)?.isCurrent ?? false)) {
+      _handleControllerViewInput(event);
+      return;
+    }
+    if (event.button != null &&
+        event.value >= .5 &&
+        _maybeShowControllerGuide()) {
+      return;
+    }
+    if (event.axis != null) {
+      _handleGamepadAxis(event);
+      return;
+    }
+    if (event.button == GamepadButton.a) {
+      if (event.value >= .5) {
+        _gamepadAHeld = false;
+        _gamepadHoldTimer?.cancel();
+        // Bottom-rail actions are single-press commands, never bulk-select
+        // the card that was focused before entering this mode.
+        if (_controllerBottomActionsFocused) return;
+        _gamepadHoldTimer = Timer(const Duration(milliseconds: 550), () {
+          final item = _controllerTargetItem;
+          if (item == null || !mounted) return;
+          _gamepadAHeld = true;
+          setState(() => selectedInventoryIds.add(item.id));
+        });
+      } else {
+        _gamepadHoldTimer?.cancel();
+        if (!_gamepadAHeld) {
+          if (_controllerBottomActionsFocused) {
+            _activateControllerBottomAction();
+            return;
+          }
+          final item = _controllerTargetItem;
+          if (item != null) unawaited(_openDetails(item));
+        }
+      }
+      return;
+    }
+    if (event.value < .5 || event.button == null) return;
+    final item = _controllerTargetItem;
+    switch (event.button!) {
+      case GamepadButton.b:
+        _dismissControllerView();
+        break;
+      case GamepadButton.y:
+        if (item != null) unawaited(_handleAction(item, ItemAction.edit));
+        break;
+      case GamepadButton.x:
+        unawaited(_openStockroom());
+        break;
+      case GamepadButton.leftBumper:
+        _scrollInventoryBy(-MediaQuery.sizeOf(context).height * .8);
+        break;
+      case GamepadButton.rightBumper:
+        _scrollInventoryBy(MediaQuery.sizeOf(context).height * .8);
+        break;
+      case GamepadButton.leftTrigger:
+        if (item != null) setState(() => selectedInventoryIds.add(item.id));
+        break;
+      case GamepadButton.rightTrigger:
+        if (item != null) unawaited(_handleAction(item, ItemAction.edit));
+        break;
+      case GamepadButton.start:
+        unawaited(_openCloudSync());
+        break;
+      case GamepadButton.back:
+        unawaited(_openAnimationControls());
+        break;
+      case GamepadButton.rightStick:
+        setState(() => _controllerBottomActionsFocused = true);
+        break;
+      case GamepadButton.dpadUp:
+        unawaited(_openCatalog());
+        break;
+      case GamepadButton.dpadDown:
+        unawaited(_openStockroom());
+        break;
+      case GamepadButton.dpadLeft:
+        unawaited(_openScratchPad());
+        break;
+      case GamepadButton.dpadRight:
+        _changeInventoryPage(1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  List<List<String>> get _activeControllerKeyboardRows =>
+      _controllerKeyboardSymbolsMode.value
+      ? _controllerKeyboardSymbolRows
+      : _controllerKeyboardLetters;
+
+  List<String> get _activeControllerKeyboardKeys =>
+      _activeControllerKeyboardRows.expand((row) => row).toList();
+
+  void _handleControllerKeyboardEvent(NormalizedGamepadEvent event) {
+    if (event.axis == GamepadAxis.leftStickX ||
+        event.axis == GamepadAxis.leftStickY) {
+      final now = DateTime.now();
+      if (event.value.abs() < .7 ||
+          now.difference(_lastGamepadFocusMove).inMilliseconds < 150) {
+        return;
+      }
+      _lastGamepadFocusMove = now;
+      if (event.axis == GamepadAxis.leftStickX) {
+        _moveControllerKeyboardHorizontal(event.value > 0 ? 1 : -1);
+      } else {
+        _moveControllerKeyboardVertical(event.value > 0 ? -1 : 1);
+      }
+      return;
+    }
+    if (event.value < .5 || event.button == null) return;
+    switch (event.button!) {
+      case GamepadButton.a:
+        _activateControllerKeyboardKey();
+        break;
+      case GamepadButton.b:
+        _closeControllerKeyboard();
+        break;
+      case GamepadButton.x:
+        _deleteControllerKeyboardCharacter();
+        break;
+      case GamepadButton.y:
+        _insertControllerKeyboardText(' ');
+        break;
+      case GamepadButton.dpadLeft:
+        _moveControllerKeyboardHorizontal(-1);
+        break;
+      case GamepadButton.dpadRight:
+        _moveControllerKeyboardHorizontal(1);
+        break;
+      case GamepadButton.dpadUp:
+        _moveControllerKeyboardVertical(-1);
+        break;
+      case GamepadButton.dpadDown:
+        _moveControllerKeyboardVertical(1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  (int row, int column) _controllerKeyboardCoordinates() {
+    var index = _controllerKeyboardSelection.value;
+    final rows = _activeControllerKeyboardRows;
+    for (var row = 0; row < rows.length; row++) {
+      if (index < rows[row].length) return (row, index);
+      index -= rows[row].length;
+    }
+    return (0, 0);
+  }
+
+  void _setControllerKeyboardCoordinates(int row, int column) {
+    final rows = _activeControllerKeyboardRows;
+    final safeRow = row.clamp(0, rows.length - 1);
+    final safeColumn = column.clamp(0, rows[safeRow].length - 1);
+    _controllerKeyboardSelection.value =
+        rows.take(safeRow).fold<int>(0, (total, row) => total + row.length) +
+        safeColumn;
+  }
+
+  void _moveControllerKeyboardHorizontal(int delta) {
+    final (row, column) = _controllerKeyboardCoordinates();
+    _setControllerKeyboardCoordinates(row, column + delta);
+  }
+
+  void _moveControllerKeyboardVertical(int delta) {
+    final (row, column) = _controllerKeyboardCoordinates();
+    _setControllerKeyboardCoordinates(row + delta, column);
+  }
+
+  void _activateControllerKeyboardKey([String? requestedKey]) {
+    final key =
+        requestedKey ??
+        _activeControllerKeyboardKeys[_controllerKeyboardSelection.value];
+    switch (key) {
+      case 'shift':
+        _controllerKeyboardShift.value = !_controllerKeyboardShift.value;
+        return;
+      case 'symbols':
+        _controllerKeyboardSymbolsMode.value = true;
+        _controllerKeyboardSelection.value = 0;
+        return;
+      case 'letters':
+        _controllerKeyboardSymbolsMode.value = false;
+        _controllerKeyboardSelection.value = 0;
+        return;
+      case 'space':
+        _insertControllerKeyboardText(' ');
+        return;
+      case 'backspace':
+        _deleteControllerKeyboardCharacter();
+        return;
+      case 'done':
+        _closeControllerKeyboard();
+        return;
+      default:
+        final value = _controllerKeyboardShift.value ? key.toUpperCase() : key;
+        _insertControllerKeyboardText(value);
+        _controllerKeyboardShift.value = false;
+    }
+  }
+
+  void _insertControllerKeyboardText(String text) {
+    final controller = _controllerKeyboardController;
+    if (controller == null) return;
+    final selection = controller.selection;
+    final start = selection.start < 0
+        ? controller.text.length
+        : selection.start;
+    final end = selection.end < 0 ? start : selection.end;
+    final updated = controller.text.replaceRange(start, end, text);
+    controller.value = controller.value.copyWith(
+      text: updated,
+      selection: TextSelection.collapsed(offset: start + text.length),
+      composing: TextRange.empty,
+    );
+  }
+
+  void _deleteControllerKeyboardCharacter() {
+    final controller = _controllerKeyboardController;
+    if (controller == null) return;
+    final selection = controller.selection;
+    final end = selection.end < 0 ? controller.text.length : selection.end;
+    final start = selection.start < 0 ? end : selection.start;
+    if (start == end && start == 0) return;
+    final deleteStart = start == end ? start - 1 : start;
+    final updated = controller.text.replaceRange(deleteStart, end, '');
+    controller.value = controller.value.copyWith(
+      text: updated,
+      selection: TextSelection.collapsed(offset: deleteStart),
+      composing: TextRange.empty,
+    );
+  }
+
+  void _openControllerKeyboard({bool fallbackToInventorySearch = false}) {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    final editor = focusContext?.findAncestorStateOfType<EditableTextState>();
+    if (_controllerKeyboardController != null) return;
+    if (editor == null) {
+      if (!fallbackToInventorySearch) return;
+      inventorySearchFocusNode.requestFocus();
+      inventorySearchController.selection = TextSelection.collapsed(
+        offset: inventorySearchController.text.length,
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openControllerKeyboard();
+      });
+      return;
+    }
+    if (focusContext != null) {
+      unawaited(
+        Scrollable.ensureVisible(
+          focusContext,
+          alignment: .18,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+    _controllerKeyboardController = editor.widget.controller;
+    _controllerKeyboardSelection.value = 0;
+    _controllerKeyboardShift.value = false;
+    _controllerKeyboardSymbolsMode.value = false;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.transparent,
+      builder: (dialogContext) => _ControllerKeyboardDialog(
+        selection: _controllerKeyboardSelection,
+        shift: _controllerKeyboardShift,
+        symbols: _controllerKeyboardSymbolsMode,
+        onKeyPressed: (index, key) {
+          _controllerKeyboardSelection.value = index;
+          _activateControllerKeyboardKey(key);
+        },
+      ),
+    ).whenComplete(() {
+      if (mounted) setState(() => _controllerKeyboardController = null);
+    });
+  }
+
+  void _closeControllerKeyboard() {
+    if (_controllerKeyboardController == null) return;
+    Navigator.of(context, rootNavigator: true).maybePop();
+  }
+
+  void _handleGamepadAxis(NormalizedGamepadEvent event) {
+    final now = DateTime.now();
+    if (event.axis == GamepadAxis.leftStickX ||
+        event.axis == GamepadAxis.leftStickY) {
+      if (event.value.abs() < .7 ||
+          now.difference(_lastGamepadFocusMove).inMilliseconds < 180) {
+        return;
+      }
+      _lastGamepadFocusMove = now;
+      if (_controllerBottomActionsFocused) {
+        _moveControllerBottomAction(event.value > 0 ? 1 : -1);
+        return;
+      }
+      final isHorizontal = event.axis == GamepadAxis.leftStickX;
+      final columnStep = gridView ? _controllerGridColumnCount() : 1;
+      _moveControllerFocus(
+        isHorizontal
+            ? (event.value > 0 ? 1 : -1)
+            : (event.value > 0 ? -columnStep : columnStep),
+      );
+    }
+    if (event.axis == GamepadAxis.rightStickX ||
+        event.axis == GamepadAxis.rightStickY) {
+      if (event.value.abs() < .18 ||
+          now.difference(_lastGamepadScroll).inMilliseconds < 45) {
+        return;
+      }
+      _lastGamepadScroll = now;
+      final delta = event.axis == GamepadAxis.rightStickY
+          ? -event.value * 42
+          : event.value * 42;
+      _scrollInventoryBy(delta);
+    }
+  }
+
+  void _handleControllerViewInput(NormalizedGamepadEvent event) {
+    if (event.axis == GamepadAxis.leftStickX ||
+        event.axis == GamepadAxis.leftStickY) {
+      final now = DateTime.now();
+      if (event.value.abs() < .7 ||
+          now.difference(_lastGamepadFocusMove).inMilliseconds < 180) {
+        return;
+      }
+      _lastGamepadFocusMove = now;
+      final direction = switch (event.axis) {
+        GamepadAxis.leftStickX =>
+          event.value > 0 ? TraversalDirection.right : TraversalDirection.left,
+        GamepadAxis.leftStickY =>
+          event.value > 0 ? TraversalDirection.up : TraversalDirection.down,
+        _ => TraversalDirection.down,
+      };
+      FocusManager.instance.primaryFocus?.focusInDirection(direction);
+      return;
+    }
+    if (event.button == GamepadButton.a && event.value < .5) {
+      _activateFocusedViewControl();
+    }
+  }
+
+  bool _isFocusedEditor() {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    return focusContext != null &&
+        focusContext.findAncestorStateOfType<EditableTextState>() != null;
+  }
+
+  void _activateFocusedViewControl() {
+    if (_isFocusedEditor()) {
+      _openControllerKeyboard();
+      return;
+    }
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    if (focusContext != null && focusContext.mounted) {
+      Actions.maybeInvoke(focusContext, const ActivateIntent());
+    }
+  }
+
+  void _moveControllerFocus(int delta) {
+    if (visibleItems.isEmpty) return;
+    final current = visibleItems.indexWhere(
+      (item) => item.id == _controllerFocusedItemId,
+    );
+    final next = (current < 0 ? 0 : current + delta).clamp(
+      0,
+      visibleItems.length - 1,
+    );
+    final targetId = visibleItems[next].id;
+    _controllerItemKey(targetId);
+    setState(() => _controllerFocusedItemId = targetId);
+    unawaited(_centerControllerFocus(targetId, delta));
+  }
+
+  GlobalKey _controllerItemKey(String itemId) =>
+      _controllerItemKeys.putIfAbsent(
+        itemId,
+        () => GlobalKey(debugLabel: 'controller-item-$itemId'),
+      );
+
+  Future<void> _centerControllerFocus(String itemId, int delta) async {
+    // A destination one row outside the cache has no render object yet. Bring
+    // it into the cache first, then make the second pass center it precisely.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || _controllerFocusedItemId != itemId) return;
+      final targetContext = _controllerItemKeys[itemId]?.currentContext;
+      if (targetContext != null && targetContext.mounted) {
+        await Scrollable.ensureVisible(
+          targetContext,
+          alignment: .5,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      _scrollInventoryBy(delta.sign * _controllerFocusStride());
+      await Future<void>.delayed(const Duration(milliseconds: 190));
+    }
+  }
+
+  double _controllerFocusStride() {
+    if (!gridView) return 106;
+    final columns = _controllerGridColumnCount();
+    const spacing = 14.0;
+    final technicalRail = _isInventoryCraft(context) ? 64.0 : 0.0;
+    final crossAxisExtent = math.max(
+      1.0,
+      MediaQuery.sizeOf(context).width - 40 - technicalRail,
+    );
+    final cardExtent = (crossAxisExtent - ((columns - 1) * spacing)) / columns;
+    return cardExtent + spacing;
+  }
+
+  int _controllerGridColumnCount() {
+    final technicalRail = _isInventoryCraft(context) ? 64.0 : 0.0;
+    final crossAxisExtent = math.max(
+      1.0,
+      MediaQuery.sizeOf(context).width - 40 - technicalRail,
+    );
+    const spacing = 14.0;
+    final preferredExtent = 274.0 * (_cardSizeSliderValue.value / 100);
+    return math.max(
+      1,
+      ((crossAxisExtent + spacing) /
+              (math.min(preferredExtent, crossAxisExtent) + spacing))
+          .floor(),
+    );
+  }
+
+  void _dismissControllerView() {
+    _gamepadHoldTimer?.cancel();
+    if (_controllerBottomActionsFocused) {
+      setState(() => _controllerBottomActionsFocused = false);
+      return;
+    }
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (navigator.canPop()) navigator.pop();
+  }
+
+  void _moveControllerBottomAction(int delta) {
+    setState(
+      () => _controllerBottomActionIndex =
+          (_controllerBottomActionIndex + delta).clamp(0, 3),
+    );
+  }
+
+  void _activateControllerBottomAction() {
+    switch (_controllerBottomActionIndex) {
+      case 0:
+        unawaited(_openScanner());
+      case 1:
+        unawaited(_addItem());
+      case 2:
+        unawaited(_importInventoryFile());
+      case 3:
+        unawaited(exportInventory());
+    }
+  }
+
+  Widget _controllerBottomActionFocus(Widget child, int index) => Container(
+    foregroundDecoration: BoxDecoration(
+      border: Border.all(
+        color:
+            _controllerBottomActionsFocused &&
+                _controllerBottomActionIndex == index
+            ? Theme.of(context).colorScheme.primary
+            : Colors.transparent,
+        width: 2,
+      ),
+    ),
+    child: child,
+  );
+
   bool _isControllerKey(LogicalKeyboardKey key) =>
       key.keyId >= LogicalKeyboardKey.gameButton1.keyId &&
       key.keyId <= LogicalKeyboardKey.gameButtonZ.keyId;
@@ -10959,6 +11496,7 @@ class _InventoryHomeState extends State<InventoryHome> {
   bool _maybeShowControllerGuide() {
     final database = widget.database;
     if (_controllerGuideShowing ||
+        _controllerGuidePromptedThisSession ||
         database?.loadBoolPreference(
               'controller_guide_hidden',
               fallback: false,
@@ -10966,6 +11504,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             true) {
       return false;
     }
+    _controllerGuidePromptedThisSession = true;
     _showControllerGuide();
     return true;
   }
@@ -10975,6 +11514,7 @@ class _InventoryHomeState extends State<InventoryHome> {
     if (_controllerGuideShowing || !mounted) return;
     if (resetHidden) {
       database?.saveBoolPreference('controller_guide_hidden', false);
+      _controllerGuidePromptedThisSession = true;
     }
     _controllerGuideShowing = true;
     await showDialog<void>(
@@ -13056,6 +13596,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onBulkContextMenu: (position) =>
             _openBulkItemContextMenu(record, position),
+        controllerFocused:
+            _controllerFocusedItemId == record.id &&
+            !_controllerBottomActionsFocused,
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
         onFocusChanged: (focused) {
@@ -13095,6 +13638,9 @@ class _InventoryHomeState extends State<InventoryHome> {
         onSelect: () => _selectInventoryItem(record),
         onBulkContextMenu: (position) =>
             _openBulkItemContextMenu(record, position),
+        controllerFocused:
+            _controllerFocusedItemId == record.id &&
+            !_controllerBottomActionsFocused,
         onAction: (action) => _handleAction(record, action),
         onQuantityChanged: (delta) => _adjustItemQuantity(record, delta),
         onFocusChanged: (focused) {
@@ -13115,33 +13661,36 @@ class _InventoryHomeState extends State<InventoryHome> {
           );
     // Keep card controls free for normal taps and finger scrolling. Dragging
     // inventory is deliberately initiated from its configurable center area.
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        glowingCard,
-        Positioned.fill(child: _inventoryDragGrip(record, list: list)),
-        // This sits above the drag affordance as a separate, direct action.
-        // The status indicator must never be treated as a decorative part of
-        // the card or as a drag handle.
-        if (!list &&
-            common.showStatus &&
-            !record.archived &&
-            record.quantity > 0)
-          Positioned(
-            top: 12,
-            right: 12,
-            child: _CardStatusButton(
-              item: record,
-              onPressed: currentRole.canEditInventory
-                  ? () => _chooseCardStatus(record)
-                  : null,
-              child: CountdownRing(
-                key: Key('inventory-card-timer-${record.id}'),
+    return KeyedSubtree(
+      key: _controllerItemKey(record.id),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          glowingCard,
+          Positioned.fill(child: _inventoryDragGrip(record, list: list)),
+          // This sits above the drag affordance as a separate, direct action.
+          // The status indicator must never be treated as a decorative part of
+          // the card or as a drag handle.
+          if (!list &&
+              common.showStatus &&
+              !record.archived &&
+              record.quantity > 0)
+            Positioned(
+              top: 12,
+              right: 12,
+              child: _CardStatusButton(
                 item: record,
+                onPressed: currentRole.canEditInventory
+                    ? () => _chooseCardStatus(record)
+                    : null,
+                child: CountdownRing(
+                  key: Key('inventory-card-timer-${record.id}'),
+                  item: record,
+                ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -28714,28 +29263,37 @@ class _InventoryHomeState extends State<InventoryHome> {
                           disabledMessage: disabledActionMessage,
                         );
                         final rightActions = <Widget>[
-                          _scanButton(
-                            iconOnly: iconOnly,
-                            iconOnlyWidth: iconOnlyWidth,
-                            tight: tightDesktop,
-                            enabled: bottomActionsEnabled,
-                            disabledMessage: disabledActionMessage,
+                          _controllerBottomActionFocus(
+                            _scanButton(
+                              iconOnly: iconOnly,
+                              iconOnlyWidth: iconOnlyWidth,
+                              tight: tightDesktop,
+                              enabled: bottomActionsEnabled,
+                              disabledMessage: disabledActionMessage,
+                            ),
+                            0,
                           ),
                           const SizedBox(width: 12),
-                          addItem,
+                          _controllerBottomActionFocus(addItem, 1),
                           const SizedBox(width: 12),
-                          _inventoryJsonButton(
-                            iconOnly: iconOnly,
-                            iconOnlyWidth: iconOnlyWidth,
-                            tight: tightDesktop,
-                            enabled: bottomActionsEnabled,
-                            disabledMessage: disabledActionMessage,
+                          _controllerBottomActionFocus(
+                            _inventoryJsonButton(
+                              iconOnly: iconOnly,
+                              iconOnlyWidth: iconOnlyWidth,
+                              tight: tightDesktop,
+                              enabled: bottomActionsEnabled,
+                              disabledMessage: disabledActionMessage,
+                            ),
+                            2,
                           ),
                           const SizedBox(width: 12),
-                          _exportInventoryButton(
-                            iconOnly: iconOnly,
-                            iconOnlyWidth: iconOnlyWidth,
-                            tight: tightDesktop,
+                          _controllerBottomActionFocus(
+                            _exportInventoryButton(
+                              iconOnly: iconOnly,
+                              iconOnlyWidth: iconOnlyWidth,
+                              tight: tightDesktop,
+                            ),
+                            3,
                           ),
                         ];
                         if (iconOnly) {
@@ -28792,25 +29350,39 @@ class _InventoryHomeState extends State<InventoryHome> {
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      _scanButton(
-                                        iconOnly: true,
-                                        iconOnlyWidth: fittedIconWidth,
-                                        enabled: bottomActionsEnabled,
-                                        disabledMessage: disabledActionMessage,
+                                      _controllerBottomActionFocus(
+                                        _scanButton(
+                                          iconOnly: true,
+                                          iconOnlyWidth: fittedIconWidth,
+                                          enabled: bottomActionsEnabled,
+                                          disabledMessage:
+                                              disabledActionMessage,
+                                        ),
+                                        0,
                                       ),
                                       const SizedBox(width: compactGap),
-                                      compactAddItem,
-                                      const SizedBox(width: compactGap),
-                                      _inventoryJsonButton(
-                                        iconOnly: true,
-                                        iconOnlyWidth: fittedIconWidth,
-                                        enabled: bottomActionsEnabled,
-                                        disabledMessage: disabledActionMessage,
+                                      _controllerBottomActionFocus(
+                                        compactAddItem,
+                                        1,
                                       ),
                                       const SizedBox(width: compactGap),
-                                      _exportInventoryButton(
-                                        iconOnly: true,
-                                        iconOnlyWidth: fittedIconWidth,
+                                      _controllerBottomActionFocus(
+                                        _inventoryJsonButton(
+                                          iconOnly: true,
+                                          iconOnlyWidth: fittedIconWidth,
+                                          enabled: bottomActionsEnabled,
+                                          disabledMessage:
+                                              disabledActionMessage,
+                                        ),
+                                        2,
+                                      ),
+                                      const SizedBox(width: compactGap),
+                                      _controllerBottomActionFocus(
+                                        _exportInventoryButton(
+                                          iconOnly: true,
+                                          iconOnlyWidth: fittedIconWidth,
+                                        ),
+                                        3,
                                       ),
                                     ],
                                   ),
@@ -29147,6 +29719,14 @@ class _InventoryHomeState extends State<InventoryHome> {
                       ],
                     );
                   },
+                ),
+                _configBlockDivider(),
+                _configBlockButton(
+                  key: const Key('controller-keyboard'),
+                  tooltip: 'Open controller keyboard',
+                  onPressed: () =>
+                      _openControllerKeyboard(fallbackToInventorySearch: true),
+                  icon: Icons.keyboard_alt_outlined,
                 ),
               ],
             ),
@@ -49716,12 +50296,14 @@ class _ScrollingInventoryCard extends StatelessWidget {
   const _ScrollingInventoryCard({
     required this.itemId,
     required this.selected,
+    required this.controllerFocused,
     required this.scrolling,
     required this.child,
   });
 
   final String itemId;
   final bool selected;
+  final bool controllerFocused;
   final ValueListenable<bool>? scrolling;
   final Widget child;
 
@@ -49731,12 +50313,12 @@ class _ScrollingInventoryCard extends StatelessWidget {
       color: selected
           ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
           : null,
-      shape: selected
+      shape: selected || controllerFocused
           ? RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(_designRadius(context, 22)),
               side: BorderSide(
                 color: Theme.of(context).colorScheme.primary,
-                width: 2,
+                width: controllerFocused ? 3 : 2,
               ),
             )
           : null,
@@ -49777,6 +50359,7 @@ class InventoryCard extends StatelessWidget {
     this.onSelect,
     this.onBulkContextMenu,
     this.selected = false,
+    this.controllerFocused = false,
     this.typeLabel,
     this.typeIcon,
     this.typeIconImageBytes,
@@ -49808,6 +50391,7 @@ class InventoryCard extends StatelessWidget {
   final VoidCallback? onSelect;
   final Future<void> Function(Offset position)? onBulkContextMenu;
   final bool selected;
+  final bool controllerFocused;
   final String? typeLabel;
   final IconData? typeIcon;
   final Uint8List? typeIconImageBytes;
@@ -49843,6 +50427,7 @@ class InventoryCard extends StatelessWidget {
     child: _ScrollingInventoryCard(
       itemId: item.id,
       selected: selected,
+      controllerFocused: controllerFocused,
       scrolling: scrollingListenable,
       child: Stack(
         children: [
@@ -50153,6 +50738,7 @@ class InventoryRow extends StatelessWidget {
     this.onSelect,
     this.onBulkContextMenu,
     this.selected = false,
+    this.controllerFocused = false,
     this.typeLabel,
     this.typeIcon,
     this.typeIconImageBytes,
@@ -50182,6 +50768,7 @@ class InventoryRow extends StatelessWidget {
   final VoidCallback? onSelect;
   final Future<void> Function(Offset position)? onBulkContextMenu;
   final bool selected;
+  final bool controllerFocused;
   final String? typeLabel;
   final IconData? typeIcon;
   final Uint8List? typeIconImageBytes;
@@ -50402,12 +50989,12 @@ class InventoryRow extends StatelessWidget {
       color: selected
           ? Theme.of(context).colorScheme.primary.withValues(alpha: .16)
           : null,
-      shape: selected
+      shape: selected || controllerFocused
           ? RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(_designRadius(context, 22)),
               side: BorderSide(
                 color: Theme.of(context).colorScheme.primary,
-                width: 2,
+                width: controllerFocused ? 3 : 2,
               ),
             )
           : null,
@@ -51481,6 +52068,242 @@ class _PinnedActionBarDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(covariant _PinnedActionBarDelegate oldDelegate) => true;
+}
+
+class _ControllerKeyboardDialog extends StatelessWidget {
+  const _ControllerKeyboardDialog({
+    required this.selection,
+    required this.shift,
+    required this.symbols,
+    required this.onKeyPressed,
+  });
+
+  final ValueListenable<int> selection;
+  final ValueListenable<bool> shift;
+  final ValueListenable<bool> symbols;
+  final void Function(int index, String key) onKeyPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final palette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final technical = _isInventoryCraft(context);
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          width: math.min(MediaQuery.sizeOf(context).width - 16, 640),
+          margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+          decoration: BoxDecoration(
+            color: palette.surface.withValues(alpha: .98),
+            border: Border.all(color: palette.outline),
+            borderRadius: BorderRadius.circular(technical ? 0 : 10),
+            boxShadow: technical
+                ? const []
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: .38),
+                      blurRadius: 26,
+                      offset: const Offset(0, -8),
+                    ),
+                  ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.gamepad_outlined,
+                    size: 14,
+                    color: colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Controller keyboard',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'Pixelify Sans',
+                      color: colorScheme.onSurface,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (MediaQuery.sizeOf(context).width >= 560)
+                    Text(
+                      'A type  •  X delete  •  Y space  •  B close',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontFamily: 'Pixelify Sans',
+                        color: colorScheme.onSurfaceVariant,
+                        decoration: TextDecoration.none,
+                      ),
+                    )
+                  else
+                    Text(
+                      'A type  •  B close',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontFamily: 'Pixelify Sans',
+                        color: colorScheme.onSurfaceVariant,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              ValueListenableBuilder<int>(
+                valueListenable: selection,
+                builder: (context, selectedIndex, _) =>
+                    ValueListenableBuilder<bool>(
+                      valueListenable: shift,
+                      builder: (context, shifted, _) =>
+                          ValueListenableBuilder<bool>(
+                            valueListenable: symbols,
+                            builder: (context, symbolMode, _) {
+                              final rows = symbolMode
+                                  ? _controllerKeyboardSymbolRows
+                                  : _controllerKeyboardLetters;
+                              var index = 0;
+                              return Column(
+                                children: [
+                                  for (final row in rows) ...[
+                                    Row(
+                                      children: [
+                                        for (final key in row)
+                                          Builder(
+                                            builder: (context) {
+                                              final keyIndex = index++;
+                                              return Expanded(
+                                                flex: _controllerKeyboardFlex(
+                                                  key,
+                                                ),
+                                                child: Padding(
+                                                  padding: const EdgeInsets.all(
+                                                    2,
+                                                  ),
+                                                  child: _ControllerKeyboardKey(
+                                                    label:
+                                                        _controllerKeyboardLabel(
+                                                          key,
+                                                          shifted,
+                                                        ),
+                                                    selected:
+                                                        keyIndex ==
+                                                        selectedIndex,
+                                                    colorScheme: colorScheme,
+                                                    palette: palette,
+                                                    technical: technical,
+                                                    onPressed: () =>
+                                                        onKeyPressed(
+                                                          keyIndex,
+                                                          key,
+                                                        ),
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              );
+                            },
+                          ),
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+int _controllerKeyboardFlex(String key) => switch (key) {
+  'shift' || 'backspace' || 'symbols' || 'letters' || 'done' => 2,
+  'space' => 5,
+  _ => 1,
+};
+
+String _controllerKeyboardLabel(String key, bool shifted) => switch (key) {
+  'shift' => shifted ? '⇧' : '⇧',
+  'symbols' => '?123',
+  'letters' => 'ABC',
+  'space' => 'space',
+  'backspace' => '⌫',
+  'done' => '✓',
+  _ => shifted ? key.toUpperCase() : key,
+};
+
+class _ControllerKeyboardKey extends StatelessWidget {
+  const _ControllerKeyboardKey({
+    required this.label,
+    required this.selected,
+    required this.colorScheme,
+    required this.palette,
+    required this.technical,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final ColorScheme colorScheme;
+  final InventorinatorColors palette;
+  final bool technical;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: selected ? palette.container : palette.panel,
+      border: Border.all(
+        color: selected ? palette.accent : palette.outline,
+        width: 1,
+      ),
+      borderRadius: BorderRadius.circular(technical ? 0 : 5),
+    ),
+    child: Semantics(
+      button: true,
+      label: label,
+      onTap: onPressed,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onPressed,
+          mouseCursor: SystemMouseCursors.click,
+          borderRadius: BorderRadius.circular(technical ? 0 : 5),
+          overlayColor: WidgetStatePropertyAll(
+            palette.accent.withValues(alpha: .16),
+          ),
+          child: SizedBox(
+            height: 30,
+            child: Center(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.1,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Pixelify Sans',
+                  color: colorScheme.onSurface,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 String _age(DateTime added) {

@@ -13198,6 +13198,10 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   @override
   Widget build(BuildContext context) {
+    final isTouchMobile = Platform.isAndroid || Platform.isIOS;
+    final systemBottomInset = isTouchMobile
+        ? MediaQuery.paddingOf(context).bottom
+        : 0.0;
     final showingCatalog = catalogFilter != null;
     if (showingCatalog && _diskInventory != null) _readInventoryPage(0, 0);
     final allItems = showingCatalog || _diskInventory != null
@@ -13303,7 +13307,7 @@ class _InventoryHomeState extends State<InventoryHome> {
                           // instead of reserving an opaque black strip.
                           bottom:
                               reserveQuickActionSpace &&
-                                  !_isInventoryCraft(context)
+                                  (!_isInventoryCraft(context) || isTouchMobile)
                               ? 82
                               : 0,
                         ),
@@ -13484,8 +13488,8 @@ class _InventoryHomeState extends State<InventoryHome> {
                         bottomInset:
                             !_hasCatalogSelection &&
                                 selectedInventoryIds.isEmpty
-                            ? 82
-                            : 0,
+                            ? 82 + systemBottomInset
+                            : systemBottomInset,
                       ),
                     Positioned.fill(
                       child: ValueListenableBuilder<InventoryItem?>(
@@ -13502,8 +13506,23 @@ class _InventoryHomeState extends State<InventoryHome> {
                             ? const SizedBox.shrink()
                             : Stack(
                                 children: [
-                                  _pinnedSidebarHoverRail(machinesSide: false),
-                                  _pinnedSidebarHoverRail(machinesSide: true),
+                                  if (isTouchMobile) ...[
+                                    _pinnedSidebarTouchRail(
+                                      machinesSide: false,
+                                      bottomActionVisible:
+                                          reserveQuickActionSpace,
+                                    ),
+                                    _pinnedSidebarTouchRail(
+                                      machinesSide: true,
+                                      bottomActionVisible:
+                                          reserveQuickActionSpace,
+                                    ),
+                                  ] else ...[
+                                    _pinnedSidebarHoverRail(
+                                      machinesSide: false,
+                                    ),
+                                    _pinnedSidebarHoverRail(machinesSide: true),
+                                  ],
                                 ],
                               ),
                       ),
@@ -13515,7 +13534,10 @@ class _InventoryHomeState extends State<InventoryHome> {
                         // The vertical ruler owns the final 64 px, just as it
                         // does for the header and page content.
                         right: _isInventoryCraft(context) ? 64 : 0,
-                        bottom: 0,
+                        // The Android navigation bar belongs to the OS. Keep
+                        // the persistent actions above it in portrait rather
+                        // than letting Back/Home/Recents cover their targets.
+                        bottom: systemBottomInset,
                         child: SizedBox(
                           width: double.infinity,
                           child: _bottomActionBar(),
@@ -18070,6 +18092,194 @@ class _InventoryHomeState extends State<InventoryHome> {
     } else {
       _leftPinnedSidebarOpenTimer = opener;
     }
+  }
+
+  /// Hover rails have no usable affordance on touch devices. Keep the same
+  /// pinned-kit/machine destinations there as compact edge handles that open
+  /// on tap, with an explicit close target once the panel is open.
+  Widget _pinnedSidebarTouchRail({
+    required bool machinesSide,
+    required bool bottomActionVisible,
+  }) {
+    final open = machinesSide
+        ? _rightPinnedSidebarOpen
+        : _leftPinnedSidebarOpen;
+    final entries =
+        (machinesSide
+                ? machines.where(
+                    (machine) => _pinnedMachineIds.contains(machine.id),
+                  )
+                : kits.where((kit) => _pinnedKitIds.contains(kit.id)))
+            .toList();
+    final technical = _isInventoryCraft(context);
+    final panelWidth = math.min(MediaQuery.sizeOf(context).width * .78, 312.0);
+    final edgeInset = machinesSide && technical ? 64.0 : 0.0;
+    final radius = BorderRadius.horizontal(
+      left: Radius.circular(machinesSide || technical ? 0 : 18),
+      right: Radius.circular(!machinesSide || technical ? 0 : 18),
+    );
+
+    void setOpen(bool value) {
+      setState(() {
+        if (machinesSide) {
+          _rightPinnedSidebarOpen = value;
+        } else {
+          _leftPinnedSidebarOpen = value;
+        }
+      });
+    }
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(
+          right: edgeInset,
+          bottom: bottomActionVisible ? 82 : 0,
+        ),
+        child: Align(
+          alignment: machinesSide
+              ? Alignment.centerRight
+              : Alignment.centerLeft,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: open ? panelWidth : 42,
+            height: open
+                ? math.min(MediaQuery.sizeOf(context).height * .62, 460)
+                : 72,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface
+                  .withValues(alpha: open ? .96 : .82),
+              borderRadius: technical ? BorderRadius.zero : radius,
+              border: Border.all(
+                color: open
+                    ? Theme.of(context).colorScheme.outlineVariant
+                    : Theme.of(context).colorScheme.primary
+                          .withValues(alpha: .72),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: .28),
+                  blurRadius: 16,
+                  offset: Offset(machinesSide ? -2 : 2, 4),
+                ),
+              ],
+            ),
+            child: open
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 6, 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              machinesSide
+                                  ? Icons.precision_manufacturing_outlined
+                                  : Icons.inventory_2_outlined,
+                              size: 19,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                machinesSide
+                                    ? 'Pinned machines'
+                                    : 'Pinned kits',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Close pinned panel',
+                              onPressed: () => setOpen(false),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: entries.isEmpty
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(20),
+                                  child: Text(
+                                    'Nothing pinned yet.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Color(0xff9da5b7)),
+                                  ),
+                                ),
+                              )
+                            : ListView.builder(
+                                itemCount: entries.length,
+                                itemBuilder: (context, index) {
+                                  final entry = entries[index];
+                                  final name = switch (entry) {
+                                    MachineRecord value => value.name,
+                                    KitRecord value => value.name,
+                                    _ => '',
+                                  };
+                                  return ListTile(
+                                    dense: true,
+                                    leading: Icon(switch (entry) {
+                                      MachineRecord value =>
+                                        _isPrinter(value)
+                                            ? Icons.print_outlined
+                                            : Icons.handyman_outlined,
+                                      KitRecord _ => Icons.inventory_2_outlined,
+                                      _ => Icons.push_pin_outlined,
+                                    }),
+                                    title: Text(
+                                      name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onTap: () {
+                                      setOpen(false);
+                                      switch (entry) {
+                                        case MachineRecord value:
+                                          unawaited(_openMachineDetails(value));
+                                        case KitRecord value:
+                                          unawaited(_openKitDetails(value));
+                                      }
+                                    },
+                                    trailing: IconButton(
+                                      tooltip: 'Unpin $name',
+                                      icon: const Icon(Icons.push_pin_outlined),
+                                      onPressed: () {
+                                        switch (entry) {
+                                          case MachineRecord value:
+                                            _togglePinnedDragMachine(value.id);
+                                          case KitRecord value:
+                                            _togglePinnedDragKit(value.id);
+                                        }
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  )
+                : Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => setOpen(true),
+                      child: Center(
+                        child: Icon(
+                          machinesSide
+                              ? Icons.precision_manufacturing_outlined
+                              : Icons.inventory_2_outlined,
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _pinnedSidebarHoverRail({required bool machinesSide}) {

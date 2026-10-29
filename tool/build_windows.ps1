@@ -13,7 +13,7 @@ flutter analyze
 flutter test
 $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
 $buildHash = (git rev-parse --short=12 HEAD).Trim()
-flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
+flutter build windows --release --no-tree-shake-icons "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
 
 $bundle = Join-Path $PWD 'build\windows\x64\runner\Release'
 & (Join-Path $PSScriptRoot 'verify_windows_ocr.ps1') -Bundle $bundle

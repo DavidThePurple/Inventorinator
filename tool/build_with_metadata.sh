@@ -23,6 +23,7 @@ if [ -n "$(git status --porcelain -- . ':!dist' ':!build' 2>/dev/null)" ]; then
 fi
 
 exec flutter build "$@" \
+  --no-tree-shake-icons \
   "--dart-define=INVENTORINATOR_VERSION=$version" \
   "--dart-define=INVENTORINATOR_BUILD_HASH=$build_hash" \
   "--dart-define=INVENTORINATOR_LOCAL_CHANGES=$local_changes"

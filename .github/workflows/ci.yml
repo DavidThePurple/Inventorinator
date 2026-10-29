@@ -138,6 +138,7 @@ jobs:
           fi
           test -x build/linux/x64/release/bundle/data/ocr/linux_x64/tesseract
           test -s build/linux/x64/release/bundle/data/ocr/linux_x64/tessdata/eng.traineddata
+          test "$(stat -c%s build/linux/x64/release/bundle/data/flutter_assets/fonts/MaterialIcons-Regular.otf)" -gt 1000000
       - name: Verify installer launcher and icon
         run: ./tool/check_linux_install.sh
       - name: Exercise native Code 128 decoder
@@ -254,7 +255,7 @@ jobs:
         run: |
           $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
           $buildHash = $env:GITHUB_SHA.Substring(0, 12)
-          flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
+          flutter build windows --release --no-tree-shake-icons "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
       - name: Verify bundled label OCR engine
         shell: pwsh
         run: ./tool/verify_windows_ocr.ps1

@@ -1823,12 +1823,83 @@ class InventorinatorColors extends ThemeExtension<InventorinatorColors> {
     );
   }
 
+  /// Exposes the flowing accent family through live [Color] values. The theme
+  /// itself remains stable; the render layer can repaint these values without
+  /// rebuilding the inventory tree on every hue tick.
+  InventorinatorColors withLiveAccent(
+    ValueListenable<InventorinatorColors?> source,
+  ) => InventorinatorColors(
+    canvas: canvas,
+    surface: surface,
+    panel: panel,
+    input: input,
+    accent: _LiveAccentColor(source, this, (palette) => palette.accent),
+    base: _LiveAccentColor(source, this, (palette) => palette.base),
+    container: _LiveAccentColor(source, this, (palette) => palette.container),
+    flash: _LiveAccentColor(source, this, (palette) => palette.flash),
+    flashDark: _LiveAccentColor(source, this, (palette) => palette.flashDark),
+    outline: outline,
+    outlineVariant: outlineVariant,
+    rim: _LiveAccentColor(source, this, (palette) => palette.rim),
+  );
+
   @override
   InventorinatorColors copyWith() => this;
 
   @override
   InventorinatorColors lerp(InventorinatorColors? other, double t) =>
       other ?? this;
+}
+
+class _LiveAccentColor extends Color {
+  _LiveAccentColor(this.source, this.fallback, this.pick, [this.transform])
+    : super(0xff8e75ff);
+
+  final ValueListenable<InventorinatorColors?> source;
+  final InventorinatorColors fallback;
+  final Color Function(InventorinatorColors palette) pick;
+  final Color Function(Color color)? transform;
+
+  Color get _resolved =>
+      (transform ?? (color) => color)(pick(source.value ?? fallback));
+
+  @override
+  double get a => _resolved.a;
+
+  @override
+  double get r => _resolved.r;
+
+  @override
+  double get g => _resolved.g;
+
+  @override
+  double get b => _resolved.b;
+
+  @override
+  Color withValues({
+    double? alpha,
+    double? red,
+    double? green,
+    double? blue,
+    ui.ColorSpace? colorSpace,
+  }) => _LiveAccentColor(
+    source,
+    fallback,
+    pick,
+    (color) => (transform ?? (value) => value)(color).withValues(
+      alpha: alpha,
+      red: red,
+      green: green,
+      blue: blue,
+      colorSpace: colorSpace,
+    ),
+  );
+
+  @override
+  Color withAlpha(int alpha) => withValues(alpha: alpha / 255);
+
+  @override
+  Color withOpacity(double opacity) => withValues(alpha: opacity);
 }
 
 @immutable
@@ -2703,6 +2774,7 @@ class BrandRecord {
     required this.name,
     required this.vendorIds,
     required this.categories,
+    this.customTypeIds = const {},
     this.logoBytes,
     this.archived = false,
   });
@@ -2710,6 +2782,10 @@ class BrandRecord {
   final String name;
   final Set<String> vendorIds;
   final Set<InventoryType> categories;
+
+  /// Specific custom item types this brand makes. Keeping these IDs avoids
+  /// treating every custom type as interchangeable in catalog selection.
+  final Set<String> customTypeIds;
   final Uint8List? logoBytes;
   final bool archived;
 }
@@ -3517,6 +3593,7 @@ class CatalogProduct {
     required this.id,
     required this.brandId,
     required this.category,
+    this.customTypeId = '',
     required this.name,
     this.defaultCost = 0,
     this.dryingMinutes,
@@ -3529,6 +3606,7 @@ class CatalogProduct {
   final String id;
   final String brandId;
   final InventoryType category;
+  final String customTypeId;
   final String name;
   final double defaultCost;
   final int? dryingMinutes;
@@ -6336,6 +6414,7 @@ String encodeWorkshopState({
           'name': brand.name,
           'vendorIds': brand.vendorIds.toList(),
           'categories': brand.categories.map((type) => type.name).toList(),
+          'customTypeIds': brand.customTypeIds.toList(),
           'logo': _bytesToJson(brand.logoBytes),
           'archived': brand.archived,
         },
@@ -6365,6 +6444,7 @@ String encodeWorkshopState({
           'id': product.id,
           'brandId': product.brandId,
           'category': product.category.name,
+          'customTypeId': product.customTypeId,
           'name': product.name,
           'defaultCost': product.defaultCost,
           'dryingMinutes': product.dryingMinutes,
@@ -6664,6 +6744,10 @@ WorkshopState? decodeWorkshopState(String? source) {
                 .cast<String>()
                 .map(InventoryType.values.byName)
                 .toSet(),
+            customTypeIds:
+                (brand['customTypeIds'] as List<dynamic>? ?? const [])
+                    .cast<String>()
+                    .toSet(),
             logoBytes: _bytesFromJson(brand['logo']),
             archived: brand['archived'] as bool? ?? false,
           ),
@@ -6679,6 +6763,7 @@ WorkshopState? decodeWorkshopState(String? source) {
               product['category'] as String,
               product['name'] as String,
             ),
+            customTypeId: product['customTypeId'] as String? ?? '',
             name: product['name'] as String,
             defaultCost: (product['defaultCost'] as num).toDouble(),
             dryingMinutes: product['dryingMinutes'] as int?,
@@ -7105,9 +7190,10 @@ class _GlassButtonSurfaceState extends State<_GlassButtonSurface> {
 
   @override
   Widget build(BuildContext context) {
-    final palette =
+    final fallbackPalette =
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final palette = _RgbAccentScope.palette(context, fallbackPalette);
     final inventoryCraft = _isInventoryCraft(context);
     final light = Theme.of(context).brightness == Brightness.light;
     final disabled = widget.states.contains(WidgetState.disabled);
@@ -7467,9 +7553,10 @@ class _KitBuildViewToggle extends StatelessWidget {
   final ValueChanged<bool>? onChanged;
 
   Widget _mode(BuildContext context, bool value, IconData icon, String label) {
-    final accent =
-        Theme.of(context).extension<InventorinatorColors>()?.accent ??
-        Theme.of(context).colorScheme.primary;
+    final fallback =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final accent = _RgbAccentScope.palette(context, fallback).accent;
     return Tooltip(
       message: label,
       child: SizedBox.square(
@@ -7999,28 +8086,34 @@ class _BackgroundOverlayLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Non-accent overlays remain completely static. Accent overlays subscribe
-    // only at this paint layer, keeping wallpaper and inventory content still.
-    final palette = usesAccent
-        ? _RgbAccentScope.palette(context, fallbackPalette)
-        : fallbackPalette;
-    final isGrid = overlay == BackgroundOverlay.grid;
-    final color =
-        (usesAccent
-                ? isGrid
-                      ? Color.lerp(palette.outline, palette.accent, .20)!
-                      : palette.accent
-                : palette.outlineVariant)
-            .withValues(
-              alpha: dark ? (isGrid ? .58 : .62) : (isGrid ? .42 : .48),
-            );
-    return IgnorePointer(
-      child: RepaintBoundary(
-        child: CustomPaint(
-          painter: _BackgroundOverlayPainter(overlay: overlay, color: color),
-          child: const SizedBox.expand(),
+    Widget paint(InventorinatorColors palette) {
+      final isGrid = overlay == BackgroundOverlay.grid;
+      final color =
+          (usesAccent
+                  ? isGrid
+                        ? Color.lerp(palette.outline, palette.accent, .20)!
+                        : palette.accent
+                  : palette.outlineVariant)
+              .withValues(
+                alpha: dark ? (isGrid ? .58 : .62) : (isGrid ? .42 : .48),
+              );
+      return IgnorePointer(
+        child: RepaintBoundary(
+          child: CustomPaint(
+            painter: _BackgroundOverlayPainter(overlay: overlay, color: color),
+            child: const SizedBox.expand(),
+          ),
         ),
-      ),
+      );
+    }
+
+    if (!usesAccent) return paint(fallbackPalette);
+    final notifier = _RgbAccentScope.notifierOf(context);
+    if (notifier == null) return paint(fallbackPalette);
+    return ValueListenableBuilder<InventorinatorColors?>(
+      valueListenable: notifier,
+      builder: (context, flowingPalette, _) =>
+          paint(flowingPalette ?? fallbackPalette),
     );
   }
 }
@@ -8546,6 +8639,9 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   late Color customThemeColor;
   late final AppLockController _appLock;
   bool rgbAccentMode = false;
+  final ValueNotifier<InventorinatorColors?> _flowingAccentPalette =
+      ValueNotifier(null);
+  Timer? _rgbAccentTimer;
 
   @override
   void initState() {
@@ -8595,13 +8691,42 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
           fallback: false,
         ) ??
         false;
+    _syncRgbAccentPalette();
     _applySystemColors();
+  }
+
+  void _syncRgbAccentPalette() {
+    _rgbAccentTimer?.cancel();
+    _rgbAccentTimer = null;
+    if (!rgbAccentMode) {
+      _flowingAccentPalette.value = null;
+      return;
+    }
+    void tick() {
+      final palette = InventorinatorColors.forTheme(
+        colorTheme,
+        customColor: customThemeColor,
+        brightness: brightnessMode,
+        designTheme: designTheme,
+      );
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _flowingAccentPalette.value = palette.withFlowingAccent(
+        HSVColor.fromAHSV(1, (now % 120000) / 120000 * 360, .82, .96).toColor(),
+      );
+    }
+
+    tick();
+    _rgbAccentTimer = Timer.periodic(
+      const Duration(milliseconds: 120),
+      (_) => tick(),
+    );
   }
 
   void _setRgbAccentMode(bool value) {
     if (value == rgbAccentMode) return;
     setState(() => rgbAccentMode = value);
     widget.database?.saveBoolPreference('rgb_accent_mode_enabled', value);
+    _syncRgbAccentPalette();
     _applySystemColors();
   }
 
@@ -8656,9 +8781,14 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   }
 
   void _setColorTheme(AppColorTheme value) {
-    if (value == colorTheme) return;
-    setState(() => colorTheme = value);
+    if (value == colorTheme && !rgbAccentMode) return;
+    setState(() {
+      colorTheme = value;
+      rgbAccentMode = false;
+    });
     widget.database?.saveStringPreference('app_color_theme', value.name);
+    widget.database?.saveBoolPreference('rgb_accent_mode_enabled', false);
+    _syncRgbAccentPalette();
     _applySystemColors();
   }
 
@@ -8666,6 +8796,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     if (value == brightnessMode) return;
     setState(() => brightnessMode = value);
     widget.database?.saveStringPreference('app_brightness_mode', value.name);
+    _syncRgbAccentPalette();
     _applySystemColors();
   }
 
@@ -8673,6 +8804,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     if (value == designTheme) return;
     setState(() => designTheme = value);
     widget.database?.saveStringPreference('app_design_theme', value.name);
+    _syncRgbAccentPalette();
     _applySystemColors();
   }
 
@@ -8680,6 +8812,7 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
     setState(() {
       customThemeColor = value;
       colorTheme = AppColorTheme.custom;
+      rgbAccentMode = false;
     });
     widget.database?.saveStringPreference(
       'app_custom_theme_color',
@@ -8689,23 +8822,30 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
       'app_color_theme',
       AppColorTheme.custom.name,
     );
+    widget.database?.saveBoolPreference('rgb_accent_mode_enabled', false);
+    _syncRgbAccentPalette();
     _applySystemColors();
   }
 
   @override
   void dispose() {
+    _rgbAccentTimer?.cancel();
+    _flowingAccentPalette.dispose();
     _appLock.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final palette = InventorinatorColors.forTheme(
+    final basePalette = InventorinatorColors.forTheme(
       colorTheme,
       customColor: customThemeColor,
       brightness: brightnessMode,
       designTheme: designTheme,
     );
+    final palette = rgbAccentMode
+        ? basePalette.withLiveAccent(_flowingAccentPalette)
+        : basePalette;
     final light = brightnessMode == AppBrightnessMode.light;
     final inventoryCraft = designTheme == AppDesignTheme.inventoryCraft;
     final brightness = light ? Brightness.light : Brightness.dark;
@@ -8826,11 +8966,12 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
         child: DesktopTouchKeyboardBridge(
           child: AppLockGate(
             controller: _appLock,
-            child: _RgbAccentThemeCycle(
-              enabled: rgbAccentMode,
-              palette: palette,
-              designTheme: designTheme,
-              child: child ?? const SizedBox.shrink(),
+            child: _AccentRepaintLayer(
+              repaint: _flowingAccentPalette,
+              child: _RgbAccentScope(
+                notifier: _flowingAccentPalette,
+                child: child ?? const SizedBox.shrink(),
+              ),
             ),
           ),
         ),
@@ -9142,8 +9283,9 @@ class _InventorinatorAppState extends State<InventorinatorApp> {
   }
 }
 
-/// Supplies RGB values only to controls that explicitly opt in. It never
-/// replaces the global Theme, keeping unrelated animations untouched.
+/// Replaces only the active accent family. Neutral surfaces, wallpaper, and
+/// content colors stay untouched while every themed control reads the same
+/// flowing accent.
 class _RgbAccentThemeCycle extends StatefulWidget {
   const _RgbAccentThemeCycle({
     required this.enabled,
@@ -9196,7 +9338,8 @@ class _RgbAccentThemeCycleState extends State<_RgbAccentThemeCycle> {
     }
 
     tick();
-    // Only explicitly subscribed accent painters receive this notification.
+    // Only accent painters subscribe to this timer. Inventory layout and
+    // photo/content widgets do not rebuild while the hue changes.
     _timer = Timer.periodic(const Duration(milliseconds: 120), (_) => tick());
   }
 
@@ -9220,12 +9363,68 @@ class _RgbAccentScope
   static InventorinatorColors palette(
     BuildContext context,
     InventorinatorColors fallback,
-  ) =>
-      context
-          .dependOnInheritedWidgetOfExactType<_RgbAccentScope>()
-          ?.notifier
-          ?.value ??
-      fallback;
+  ) => fallback;
+
+  static ValueListenable<InventorinatorColors?>? notifierOf(
+    BuildContext context,
+  ) {
+    final element = context
+        .getElementForInheritedWidgetOfExactType<_RgbAccentScope>();
+    return element?.widget is _RgbAccentScope
+        ? (element!.widget as _RgbAccentScope).notifier
+        : null;
+  }
+}
+
+/// Requests paint only when the live accent advances. This deliberately avoids
+/// an inherited-widget rebuild across inventory layout, cards, and dialogs.
+class _AccentRepaintLayer extends SingleChildRenderObjectWidget {
+  const _AccentRepaintLayer({required this.repaint, required super.child});
+
+  final Listenable repaint;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _AccentRepaintRenderBox(repaint);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _AccentRepaintRenderBox renderObject,
+  ) {
+    renderObject.repaint = repaint;
+  }
+}
+
+class _AccentRepaintRenderBox extends RenderProxyBox {
+  _AccentRepaintRenderBox(Listenable repaint) : _repaint = repaint {
+    _repaint.addListener(_repaintAccentSubtree);
+  }
+
+  Listenable _repaint;
+
+  set repaint(Listenable value) {
+    if (identical(value, _repaint)) return;
+    _repaint.removeListener(_repaintAccentSubtree);
+    _repaint = value;
+    _repaint.addListener(_repaintAccentSubtree);
+  }
+
+  void _repaintAccentSubtree() {
+    if (!attached) return;
+    void mark(RenderObject object) {
+      if (object.attached) object.markNeedsPaint();
+      object.visitChildren(mark);
+    }
+
+    mark(this);
+  }
+
+  @override
+  void dispose() {
+    _repaint.removeListener(_repaintAccentSubtree);
+    super.dispose();
+  }
 }
 
 /// A small, opt-in accent consumer. Using it instead of Theme.of() keeps an
@@ -9240,7 +9439,13 @@ class _RgbAccentIcon extends StatelessWidget {
     final fallback =
         Theme.of(context).extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
-    return Icon(icon, color: _RgbAccentScope.palette(context, fallback).accent);
+    final notifier = _RgbAccentScope.notifierOf(context);
+    if (notifier == null) return Icon(icon, color: fallback.accent);
+    return ValueListenableBuilder<InventorinatorColors?>(
+      valueListenable: notifier,
+      builder: (context, flowingPalette, _) =>
+          Icon(icon, color: (flowingPalette ?? fallback).accent),
+    );
   }
 }
 
@@ -15300,6 +15505,7 @@ class _InventoryHomeState extends State<InventoryHome> {
         spoolTypes: spoolTypes,
         materials: materials,
         customItemTypes: customItemTypes,
+        deletedTypeKeys: deletedTypeKeys,
         typeLabelOverrides: typeLabelOverrides,
         typeIconOverrides: typeIconOverrides,
         typeMaterialListingSettings: typeMaterialListingSettings,
@@ -17275,6 +17481,7 @@ class _InventoryHomeState extends State<InventoryHome> {
             spoolTypes: spoolTypes,
             materials: materials,
             customItemTypes: customItemTypes,
+            deletedTypeKeys: deletedTypeKeys,
             typeLabelOverrides: typeLabelOverrides,
             typeIconOverrides: typeIconOverrides,
             typeMaterialListingSettings: typeMaterialListingSettings,
@@ -17687,6 +17894,21 @@ class _InventoryHomeState extends State<InventoryHome> {
             (candidate) => candidate.id == vendor.id,
           );
           if (index >= 0) vendors[index] = vendor;
+        });
+        _persist();
+      },
+      onVendorDeleted: (vendorId) {
+        setState(() {
+          _queueExplicitEntityDelete('vendors', vendorId);
+          vendors.removeWhere((candidate) => candidate.id == vendorId);
+        });
+        _persist();
+      },
+      onVendorOrderChanged: (orderedVendors) {
+        setState(() {
+          vendors
+            ..clear()
+            ..addAll(orderedVendors);
         });
         _persist();
       },
@@ -24585,9 +24807,10 @@ class _InventoryHomeState extends State<InventoryHome> {
   Widget _inventoryControlBand(Widget child) {
     if (!_isInventoryCraft(context)) return child;
     final theme = Theme.of(context);
-    final palette =
+    final fallbackPalette =
         theme.extension<InventorinatorColors>() ??
         InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final palette = _RgbAccentScope.palette(context, fallbackPalette);
     return _ArtCraftCornerFrame(
       outline: theme.colorScheme.outlineVariant,
       accent: palette.accent,
@@ -25057,6 +25280,10 @@ class _InventoryHomeState extends State<InventoryHome> {
 
   BoxDecoration _floatingActionBarDecoration({bool reduceEffects = false}) {
     final technical = _isInventoryCraft(context);
+    final fallbackPalette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final palette = _RgbAccentScope.palette(context, fallbackPalette);
     if (technical) {
       return BoxDecoration(
         // The action rails sit over the InventoryCraft canvas. Keep their
@@ -25070,9 +25297,6 @@ class _InventoryHomeState extends State<InventoryHome> {
     return BoxDecoration(
       color: () {
         final theme = Theme.of(context);
-        final palette =
-            theme.extension<InventorinatorColors>() ??
-            InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
         if (theme.brightness != Brightness.light) {
           return theme.colorScheme.surface.withValues(alpha: .42);
         }
@@ -25087,14 +25311,13 @@ class _InventoryHomeState extends State<InventoryHome> {
         color: Theme.of(context).brightness == Brightness.light
             ? Theme.of(context).colorScheme.outlineVariant
                   .withValues(alpha: .86)
-            : Theme.of(context).colorScheme.primary.withValues(alpha: .55),
+            : palette.accent.withValues(alpha: .55),
       ),
       boxShadow: reduceEffects
           ? const []
           : [
               BoxShadow(
-                color: Theme.of(context).colorScheme.primary
-                    .withValues(alpha: .18),
+                color: palette.accent.withValues(alpha: .18),
                 blurRadius: 18,
                 spreadRadius: 1,
               ),
@@ -25112,23 +25335,23 @@ class _InventoryHomeState extends State<InventoryHome> {
   }
 
   Widget _withFloatingActionBarGlow({required Widget child}) {
+    final fallbackPalette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final palette = _RgbAccentScope.palette(context, fallbackPalette);
     if (_isInventoryCraft(context)) {
-      final palette =
-          Theme.of(context).extension<InventorinatorColors>() ??
-          InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
       return _ArtCraftCornerFrame(
         outline: Theme.of(context).colorScheme.outlineVariant,
         accent: palette.accent,
         child: child,
       );
     }
-    final colors = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: colors.primary.withValues(alpha: .28),
+            color: palette.accent.withValues(alpha: .28),
             blurRadius: 24,
             spreadRadius: 1.5,
           ),
@@ -26164,6 +26387,25 @@ class _InventoryHomeState extends State<InventoryHome> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
+                      ),
+                      IconButton(
+                        key: Key('rename-location-from-details-${location.id}'),
+                        tooltip: 'Edit location',
+                        onPressed: () {
+                          Navigator.pop(dialogContext);
+                          unawaited(_renameLocation(location, locationRefresh));
+                        },
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                      IconButton(
+                        key: Key('delete-location-from-details-${location.id}'),
+                        tooltip: 'Delete location',
+                        style: _destructiveIconButtonStyle(dialogContext),
+                        onPressed: () {
+                          Navigator.pop(dialogContext);
+                          unawaited(_deleteLocation(location, locationRefresh));
+                        },
+                        icon: const Icon(Icons.delete_outline_rounded),
                       ),
                       IconButton(
                         key: Key('toggle-location-fullscreen-${location.id}'),
@@ -30634,10 +30876,14 @@ class _InventoryHomeState extends State<InventoryHome> {
                       if (states.contains(WidgetState.disabled)) {
                         return const Color(0xff6f7180);
                       }
-                      final palette =
+                      final fallbackPalette =
                           Theme.of(context).extension<InventorinatorColors>() ??
                           InventorinatorColors.palettes[AppColorTheme
                               .darkPurple]!;
+                      final palette = _RgbAccentScope.palette(
+                        context,
+                        fallbackPalette,
+                      );
                       return states.contains(WidgetState.selected)
                           ? palette.accent
                           : Theme.of(context).colorScheme.onSurfaceVariant;
@@ -34704,6 +34950,8 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.kits,
     required this.onVendorAdded,
     required this.onVendorUpdated,
+    required this.onVendorDeleted,
+    required this.onVendorOrderChanged,
     required this.onBrandAdded,
     required this.onBrandUpdated,
     required this.onSpoolTypeAdded,
@@ -34757,6 +35005,8 @@ class CatalogManagerDialog extends StatefulWidget {
   final List<KitRecord> kits;
   final ValueChanged<VendorRecord> onVendorAdded;
   final ValueChanged<VendorRecord> onVendorUpdated;
+  final ValueChanged<String> onVendorDeleted;
+  final ValueChanged<List<VendorRecord>> onVendorOrderChanged;
   final ValueChanged<BrandRecord> onBrandAdded;
   final ValueChanged<BrandRecord> onBrandUpdated;
   final ValueChanged<SpoolTypeRecord> onSpoolTypeAdded;
@@ -34793,6 +35043,10 @@ class CatalogManagerDialog extends StatefulWidget {
 
 class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   final vendorName = TextEditingController();
+  final Map<String, TextEditingController> _vendorNameControllers = {};
+  final Map<String, FocusNode> _vendorNameFocusNodes = {};
+  final vendorTypeSearch = TextEditingController();
+  final vendorOtherTypeName = TextEditingController();
   final brandName = TextEditingController();
   final spoolLabel = TextEditingController();
   final spoolWeightGrams = TextEditingController();
@@ -34856,8 +35110,12 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   String? productBrandId;
   final Set<InventoryType> brandCategories = {};
   final Set<InventoryType> vendorBrandCategories = {};
+  final Set<String> brandCustomTypeIds = {};
+  final Set<String> vendorBrandCustomTypeIds = {};
   InventoryType? productCategory;
+  String? productCustomTypeId;
   bool vendorAlsoBrand = false;
+  String? _unlockedVendorId;
   bool kitSectionExpanded = false;
   bool loadingInitialKit = false;
   Uint8List? vendorLogo;
@@ -34871,6 +35129,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   bool customTypeListsMaterial = false;
   String customTypeLinkKey = '';
   String materialTypeKey = 'type:filament';
+  double vendorTypePickerHeight = 132;
 
   bool get kitOnly =>
       widget.initialKitId != null || widget.initialKitBom != null;
@@ -34912,6 +35171,60 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       return aRank == bRank ? 0 : aRank.compareTo(bRank);
     });
     return types;
+  }
+
+  List<Widget> _customTypeChips(
+    Set<String> selected, {
+    required String prefix,
+  }) => [
+    for (final customType in customItemTypes)
+      FilterChip(
+        key: Key('$prefix-${customType.id}'),
+        label: Text(customType.name),
+        selected: selected.contains(customType.id),
+        onSelected: (isSelected) => setState(() {
+          isSelected
+              ? selected.add(customType.id)
+              : selected.remove(customType.id);
+        }),
+      ),
+  ];
+
+  List<Widget> get _vendorProductTypeChips {
+    final query = vendorTypeSearch.text.trim().toLowerCase();
+    final matches = (String value) =>
+        query.isEmpty || value.toLowerCase().contains(query);
+    return [
+      for (final type in InventoryType.values)
+        if (type != InventoryType.custom &&
+            !deletedTypeKeys.contains(_inventoryTypeDefinitionKey(type)) &&
+            matches(_catalogInventoryTypeLabel(type)))
+          FilterChip(
+            key: Key('vendor-brand-category-${type.name}'),
+            label: Text(_catalogInventoryTypeLabel(type)),
+            selected: vendorBrandCategories.contains(type),
+            onSelected: (selected) => setState(() {
+              selected
+                  ? vendorBrandCategories.add(type)
+                  : vendorBrandCategories.remove(type);
+              if (type == InventoryType.other && !selected) {
+                vendorOtherTypeName.clear();
+              }
+            }),
+          ),
+      for (final customType in customItemTypes)
+        if (matches(customType.name))
+          FilterChip(
+            key: Key('vendor-brand-custom-type-${customType.id}'),
+            label: Text(customType.name),
+            selected: vendorBrandCustomTypeIds.contains(customType.id),
+            onSelected: (selected) => setState(() {
+              selected
+                  ? vendorBrandCustomTypeIds.add(customType.id)
+                  : vendorBrandCustomTypeIds.remove(customType.id);
+            }),
+          ),
+    ];
   }
 
   List<({String key, String defaultLabel, IconData icon})>
@@ -35059,6 +35372,14 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   @override
   void dispose() {
     vendorName.dispose();
+    for (final controller in _vendorNameControllers.values) {
+      controller.dispose();
+    }
+    for (final focusNode in _vendorNameFocusNodes.values) {
+      focusNode.dispose();
+    }
+    vendorTypeSearch.dispose();
+    vendorOtherTypeName.dispose();
     brandName.dispose();
     spoolLabel.dispose();
     spoolWeightGrams.dispose();
@@ -35080,6 +35401,15 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     super.dispose();
   }
 
+  TextEditingController _vendorNameController(VendorRecord vendor) =>
+      _vendorNameControllers.putIfAbsent(
+        vendor.id,
+        () => TextEditingController(text: vendor.name),
+      );
+
+  FocusNode _vendorNameFocusNode(VendorRecord vendor) => _vendorNameFocusNodes
+      .putIfAbsent(vendor.id, () => FocusNode(canRequestFocus: false));
+
   Widget _catalogFormCard({
     required String title,
     required String description,
@@ -35090,7 +35420,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(_designRadius(context, 18)),
       border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
     ),
     child: Column(
@@ -35134,70 +35464,218 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     required IconData fallbackIcon,
     required String name,
     required String details,
+    Widget? nameWidget,
+    Widget? detailsWidget,
+    VoidCallback? onLogoPressed,
     Widget? badge,
     Widget? action,
-  }) => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: const Color(0xff171c27),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 42,
-          height: 42,
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(
-            color: const Color(0xff0d1119),
-            borderRadius: BorderRadius.circular(11),
-          ),
-          child: logo == null
-              ? Icon(fallbackIcon, color: Theme.of(context).colorScheme.primary)
-              : ClipRRect(
-                  borderRadius: BorderRadius.circular(7),
-                  child: Image.memory(logo, fit: BoxFit.contain),
+  }) {
+    final technical = _isInventoryCraft(context);
+    final scheme = Theme.of(context).colorScheme;
+    final logoSize = onLogoPressed == null ? 42.0 : 64.0;
+    final card = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: technical
+            ? scheme.surface.withValues(alpha: .9)
+            : const Color(0xff171c27),
+        borderRadius: BorderRadius.circular(_designRadius(context, 14)),
+        border: Border.all(
+          color: technical
+              ? scheme.outlineVariant.withValues(alpha: .72)
+              : scheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        children: [
+          InkWell(
+            onTap: onLogoPressed,
+            child: Tooltip(
+              message: onLogoPressed == null ? '' : 'Change vendor logo',
+              child: Container(
+                width: logoSize,
+                height: logoSize,
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: technical
+                      ? scheme.surfaceContainerHighest
+                      : const Color(0xff0d1119),
+                  borderRadius: BorderRadius.circular(
+                    _designRadius(context, 11),
+                  ),
                 ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 2),
-              Text(
-                details,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xff929aac), fontSize: 12),
+                child: logo == null
+                    ? Icon(
+                        fallbackIcon,
+                        color: Theme.of(context).colorScheme.primary,
+                      )
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(7),
+                        child: Image.memory(logo, fit: BoxFit.contain),
+                      ),
               ),
-            ],
+            ),
           ),
-        ),
-        if (badge != null || action != null) ...[
-          const SizedBox(width: 10),
-          ?badge,
-          ?action,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                nameWidget ??
+                    Text(
+                      name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontFamily: technical ? 'monospace' : null,
+                      ),
+                    ),
+                if (detailsWidget != null || details.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  detailsWidget ??
+                      Text(
+                        details,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: technical
+                              ? scheme.onSurfaceVariant
+                              : const Color(0xff929aac),
+                          fontSize: 12,
+                          fontFamily: technical ? 'monospace' : null,
+                        ),
+                      ),
+                ],
+              ],
+            ),
+          ),
+          if (badge != null || action != null) ...[
+            const SizedBox(width: 10),
+            ?badge,
+            ?action,
+          ],
         ],
-      ],
+      ),
+    );
+    return technical
+        ? _ArtCraftCornerFrame(
+            outline: scheme.outlineVariant,
+            accent: scheme.primary,
+            child: card,
+          )
+        : card;
+  }
+
+  Widget _catalogStateBadge(String label) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      border: Border.all(
+        color: Theme.of(context).colorScheme.outlineVariant
+            .withValues(alpha: .8),
+      ),
+      borderRadius: BorderRadius.circular(_designRadius(context, 8)),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(
+        fontSize: 11,
+        fontFamily: _isInventoryCraft(context) ? 'monospace' : null,
+        fontWeight: FontWeight.w700,
+      ),
     ),
   );
+
+  void _applyVendorEdit(
+    VendorRecord vendor, {
+    String? name,
+    Uint8List? logoBytes,
+    bool clearLogo = false,
+    bool? isBrand,
+  }) {
+    final nextName = (name ?? vendor.name).trim();
+    if (nextName.isEmpty) return;
+    final updated = VendorRecord(
+      id: vendor.id,
+      name: nextName,
+      isBrand: isBrand ?? vendor.isBrand,
+      logoBytes: clearLogo ? null : (logoBytes ?? vendor.logoBytes),
+      archived: vendor.archived,
+    );
+    BrandRecord? newBrand;
+    final linkedBrandIndex = brands.indexWhere(
+      (brand) => brand.vendorIds.contains(vendor.id),
+    );
+    setState(() {
+      final index = vendors.indexWhere(
+        (candidate) => candidate.id == vendor.id,
+      );
+      if (index >= 0) vendors[index] = updated;
+      if (updated.isBrand && linkedBrandIndex < 0) {
+        newBrand = BrandRecord(
+          id: _newCatalogId('BR'),
+          name: updated.name,
+          vendorIds: {updated.id},
+          categories: const {},
+          logoBytes: updated.logoBytes,
+        );
+        brands.add(newBrand!);
+      } else if (linkedBrandIndex >= 0 &&
+          brands[linkedBrandIndex].name == vendor.name) {
+        final existing = brands[linkedBrandIndex];
+        brands[linkedBrandIndex] = BrandRecord(
+          id: existing.id,
+          name: updated.name,
+          vendorIds: existing.vendorIds,
+          categories: existing.categories,
+          customTypeIds: existing.customTypeIds,
+          logoBytes: updated.logoBytes,
+          archived: existing.archived,
+        );
+        newBrand = brands[linkedBrandIndex];
+      }
+    });
+    widget.onVendorUpdated(updated);
+    if (newBrand != null) {
+      final existed = linkedBrandIndex >= 0;
+      existed
+          ? widget.onBrandUpdated(newBrand!)
+          : widget.onBrandAdded(newBrand!);
+    }
+  }
+
+  void _reorderVendor(VendorRecord vendor, VendorRecord target) {
+    final index = vendors.indexWhere((candidate) => candidate.id == vendor.id);
+    var targetIndex = vendors.indexWhere(
+      (candidate) => candidate.id == target.id,
+    );
+    if (index < 0 || targetIndex < 0 || index == targetIndex) return;
+    setState(() {
+      final moved = vendors.removeAt(index);
+      if (index < targetIndex) targetIndex--;
+      vendors.insert(targetIndex, moved);
+    });
+    widget.onVendorOrderChanged(List.unmodifiable(vendors));
+  }
 
   Future<void> _toggleVendorArchived(VendorRecord vendor) async {
     final retiring = !vendor.archived;
     final linkedBrands = brands
         .where((brand) => brand.vendorIds.contains(vendor.id))
         .length;
+    final normalizedVendorName = _normalizedStockName(vendor.name);
+    final inventoryReferences = widget.inventoryItems
+        .where(
+          (item) => _normalizedStockName(item.vendor) == normalizedVendorName,
+        )
+        .length;
+    final canRemove = retiring && linkedBrands == 0 && inventoryReferences == 0;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('${retiring ? 'Retire' : 'Restore'} ${vendor.name}?'),
+        title: Text('${retiring ? 'Archive' : 'Restore'} ${vendor.name}?'),
         content: Text(
           retiring
-              ? linkedBrands == 0
-                    ? 'This vendor will be hidden from new catalog selections. Existing inventory history is preserved.'
+              ? canRemove
+                    ? 'This vendor has no linked brands or inventory history, so it will be removed from the catalog.'
                     : 'This vendor will be hidden from new catalog selections. It remains linked to $linkedBrands ${linkedBrands == 1 ? 'brand' : 'brands'} and existing inventory history.'
               : 'Restore this vendor to the active catalog selections?',
         ),
@@ -35209,12 +35687,23 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           FilledButton(
             key: Key('confirm-vendor-archive-${vendor.id}'),
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(retiring ? 'Retire vendor' : 'Restore vendor'),
+            child: Text(
+              retiring
+                  ? (canRemove ? 'Remove vendor' : 'Archive vendor')
+                  : 'Restore vendor',
+            ),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
+    if (canRemove) {
+      setState(
+        () => vendors.removeWhere((candidate) => candidate.id == vendor.id),
+      );
+      widget.onVendorDeleted(vendor.id);
+      return;
+    }
     final updated = VendorRecord(
       id: vendor.id,
       name: vendor.name,
@@ -35266,6 +35755,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       name: brand.name,
       vendorIds: brand.vendorIds,
       categories: brand.categories,
+      customTypeIds: brand.customTypeIds,
       logoBytes: brand.logoBytes,
       archived: retiring,
     );
@@ -35310,14 +35800,14 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             child: SwitchListTile(
               key: const Key('vendor-is-brand'),
               contentPadding: EdgeInsets.zero,
-              title: const Text('This vendor also makes products'),
-              subtitle: const Text(
-                'Create a matching brand with the same name and logo.',
-              ),
+              title: const Text('Manufacturer'),
               value: vendorAlsoBrand,
               onChanged: (value) => setState(() {
                 vendorAlsoBrand = value;
-                if (!value) vendorBrandCategories.clear();
+                if (!value) {
+                  vendorBrandCategories.clear();
+                  vendorBrandCustomTypeIds.clear();
+                }
               }),
             ),
           ),
@@ -35332,34 +35822,88 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
               ),
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: InventoryType.values
-                  .where((type) => type != InventoryType.custom)
-                  .map(
-                    (category) => FilterChip(
-                      key: Key('vendor-brand-category-${category.name}'),
-                      label: Text(_catalogInventoryTypeLabel(category)),
-                      selected: vendorBrandCategories.contains(category),
-                      onSelected: (selected) => setState(() {
-                        selected
-                            ? vendorBrandCategories.add(category)
-                            : vendorBrandCategories.remove(category);
-                      }),
-                    ),
-                  )
-                  .toList(),
+            TextField(
+              key: const Key('vendor-product-type-search'),
+              controller: vendorTypeSearch,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search_rounded),
+                hintText: 'Search product types',
+                isDense: true,
+              ),
             ),
+            const SizedBox(height: 8),
+            Container(
+              key: const Key('vendor-product-type-picker'),
+              height: vendorTypePickerHeight,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 18),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _vendorProductTypeChips,
+                      ),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeUpDown,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onVerticalDragUpdate: (details) => setState(() {
+                          vendorTypePickerHeight =
+                              (vendorTypePickerHeight + details.delta.dy).clamp(
+                                96.0,
+                                420.0,
+                              );
+                        }),
+                        child: Container(
+                          height: 8,
+                          alignment: Alignment.center,
+                          child: Container(
+                            width: 42,
+                            height: 2,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (vendorBrandCategories.contains(InventoryType.other)) ...[
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('vendor-other-product-type'),
+                controller: vendorOtherTypeName,
+                decoration: const InputDecoration(
+                  labelText: 'New (Other) Type Name',
+                  helperText: 'This creates a reusable custom item type.',
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
           ],
           Align(
             alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              key: const Key('add-vendor'),
-              onPressed: _addVendor,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Add vendor'),
+            child: Tooltip(
+              message: 'Save and Add Vendor',
+              child: FilledButton(
+                key: const Key('add-vendor'),
+                onPressed: _addVendor,
+                child: const Icon(Icons.save_outlined),
+              ),
             ),
           ),
         ],
@@ -35387,47 +35931,195 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           ),
         )
       else
-        ...vendors.map(
-          (vendor) => Padding(
+        ...vendors.map((vendor) {
+          return Padding(
             key: Key('vendor-summary-${vendor.id}'),
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _catalogRecordCard(
-              logo: vendor.logoBytes,
-              fallbackIcon: Icons.storefront_outlined,
-              name: vendor.name,
-              details: vendor.isBrand
-                  ? 'Purchase source · also a product brand'
-                  : 'Purchase source',
-              badge: vendor.archived || vendor.isBrand
-                  ? Wrap(
-                      spacing: 6,
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+            child: DragTarget<VendorRecord>(
+              onWillAcceptWithDetails: (details) =>
+                  details.data.id != vendor.id,
+              onAcceptWithDetails: (details) =>
+                  _reorderVendor(details.data, vendor),
+              builder: (context, candidateData, _) => Draggable<VendorRecord>(
+                data: vendor,
+                feedback: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    width: 360,
+                    padding: const EdgeInsets.all(12),
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Text(vendor.name),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: .3,
+                  child: _catalogRecordCard(
+                    logo: vendor.logoBytes,
+                    fallbackIcon: Icons.storefront_outlined,
+                    name: vendor.name,
+                    details: '',
+                  ),
+                ),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  color: candidateData.isEmpty
+                      ? Colors.transparent
+                      : Theme.of(context).colorScheme.primary
+                            .withValues(alpha: .10),
+                  child: _catalogRecordCard(
+                    logo: vendor.logoBytes,
+                    fallbackIcon: Icons.storefront_outlined,
+                    name: vendor.name,
+                    details: '',
+                    badge: vendor.archived
+                        ? _catalogStateBadge('Retired')
+                        : null,
+                    nameWidget: Builder(
+                      builder: (context) {
+                        final unlocked = _unlockedVendorId == vendor.id;
+                        final controller = _vendorNameController(vendor);
+                        final focusNode = _vendorNameFocusNode(vendor);
+                        focusNode.canRequestFocus = unlocked;
+                        return TextFormField(
+                          key: Key('vendor-name-${vendor.id}'),
+                          controller: controller,
+                          focusNode: focusNode,
+                          autofocus: unlocked,
+                          readOnly: !unlocked,
+                          enableInteractiveSelection: unlocked,
+                          showCursor: unlocked,
+                          maxLines: 1,
+                          onFieldSubmitted: (value) {
+                            _applyVendorEdit(vendor, name: value);
+                            focusNode
+                              ..unfocus()
+                              ..canRequestFocus = false;
+                            setState(() => _unlockedVendorId = null);
+                          },
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontFamily: _isInventoryCraft(context)
+                                ? 'monospace'
+                                : null,
+                          ),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.zero,
+                            suffixIconConstraints: const BoxConstraints(
+                              minWidth: 30,
+                              minHeight: 30,
+                            ),
+                            suffixIcon: IconButton(
+                              key: Key('toggle-vendor-name-lock-${vendor.id}'),
+                              tooltip: unlocked ? 'Lock name' : 'Edit name',
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () {
+                                if (unlocked) {
+                                  _applyVendorEdit(
+                                    vendor,
+                                    name: controller.text,
+                                  );
+                                  focusNode
+                                    ..unfocus()
+                                    ..canRequestFocus = false;
+                                } else {
+                                  focusNode.canRequestFocus = true;
+                                }
+                                setState(() {
+                                  _unlockedVendorId = unlocked
+                                      ? null
+                                      : vendor.id;
+                                });
+                                if (!unlocked) {
+                                  WidgetsBinding.instance.addPostFrameCallback(
+                                    (_) => focusNode.requestFocus(),
+                                  );
+                                }
+                              },
+                              icon: Icon(
+                                unlocked
+                                    ? Icons.check_rounded
+                                    : Icons.edit_outlined,
+                                size: 17,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    detailsWidget: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (vendor.archived)
-                          const Chip(
-                            visualDensity: VisualDensity.compact,
-                            label: Text('Retired'),
+                        SizedBox(
+                          width: 30,
+                          height: 17,
+                          child: FittedBox(
+                            fit: BoxFit.fill,
+                            child: Switch(
+                              key: Key('vendor-is-brand-${vendor.id}'),
+                              value: vendor.isBrand,
+                              onChanged: (value) =>
+                                  _applyVendorEdit(vendor, isBrand: value),
+                            ),
                           ),
-                        if (vendor.isBrand)
-                          const Chip(
-                            visualDensity: VisualDensity.compact,
-                            label: Text('Also a brand'),
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          'Manufacturer',
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                            fontSize: 12,
+                            fontFamily: _isInventoryCraft(context)
+                                ? 'monospace'
+                                : null,
                           ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          key: Key('toggle-vendor-archive-${vendor.id}'),
+                          tooltip: vendor.archived
+                              ? 'Restore vendor'
+                              : 'Archive vendor',
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(32, 32),
+                            padding: const EdgeInsets.all(5),
+                            backgroundColor: vendor.archived
+                                ? null
+                                : const Color(0xff3a151a),
+                            foregroundColor: vendor.archived
+                                ? null
+                                : const Color(0xffff777d),
+                            shape: const RoundedRectangleBorder(),
+                            side: BorderSide(
+                              color: vendor.archived
+                                  ? Theme.of(context).colorScheme.outlineVariant
+                                  : const Color(0xff7c3038),
+                            ),
+                          ),
+                          onPressed: () => _toggleVendorArchived(vendor),
+                          icon: Icon(
+                            vendor.archived
+                                ? Icons.unarchive_outlined
+                                : Icons.delete_outline_rounded,
+                          ),
+                        ),
                       ],
-                    )
-                  : null,
-              action: IconButton(
-                key: Key('toggle-vendor-archive-${vendor.id}'),
-                tooltip: vendor.archived ? 'Restore vendor' : 'Retire vendor',
-                onPressed: () => _toggleVendorArchived(vendor),
-                icon: Icon(
-                  vendor.archived
-                      ? Icons.unarchive_outlined
-                      : Icons.archive_outlined,
+                    ),
+                    onLogoPressed: () async {
+                      final bytes = await _pickImageBytes();
+                      if (bytes != null && mounted) {
+                        _applyVendorEdit(vendor, logoBytes: bytes);
+                      }
+                    },
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        }),
     ],
   );
 
@@ -35490,21 +36182,32 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: InventoryType.values
-                .where((type) => type != InventoryType.custom)
-                .map(
-                  (category) => FilterChip(
-                    key: Key('brand-category-${category.name}'),
-                    label: Text(_catalogInventoryTypeLabel(category)),
-                    selected: brandCategories.contains(category),
-                    onSelected: (selected) => setState(() {
-                      selected
-                          ? brandCategories.add(category)
-                          : brandCategories.remove(category);
-                    }),
+            children: <Widget>[
+              ...InventoryType.values
+                  .where(
+                    (type) =>
+                        type != InventoryType.custom &&
+                        !deletedTypeKeys.contains(
+                          _inventoryTypeDefinitionKey(type),
+                        ),
+                  )
+                  .map(
+                    (category) => FilterChip(
+                      key: Key('brand-category-${category.name}'),
+                      label: Text(_catalogInventoryTypeLabel(category)),
+                      selected: brandCategories.contains(category),
+                      onSelected: (selected) => setState(() {
+                        selected
+                            ? brandCategories.add(category)
+                            : brandCategories.remove(category);
+                      }),
+                    ),
                   ),
-                )
-                .toList(),
+              ..._customTypeChips(
+                brandCustomTypeIds,
+                prefix: 'brand-custom-type',
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           Align(
@@ -35993,28 +36696,63 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                               onChanged: (value) => setState(() {
                                 productBrandId = value;
                                 productCategory = null;
+                                productCustomTypeId = null;
                               }),
                             ),
                             if (_productBrand != null) ...[
                               const SizedBox(height: 12),
                               Wrap(
                                 spacing: 8,
-                                children: _productBrand!.categories
-                                    .map(
-                                      (category) => ChoiceChip(
-                                        key: Key(
-                                          'product-category-${category.name}',
-                                        ),
-                                        label: Text(
-                                          _catalogInventoryTypeLabel(category),
-                                        ),
-                                        selected: productCategory == category,
-                                        onSelected: (_) => setState(
-                                          () => productCategory = category,
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
+                                children:
+                                    _productBrand!.categories
+                                        .where(
+                                          (category) =>
+                                              category != InventoryType.custom,
+                                        )
+                                        .map(
+                                          (category) => ChoiceChip(
+                                            key: Key(
+                                              'product-category-${category.name}',
+                                            ),
+                                            label: Text(
+                                              _catalogInventoryTypeLabel(
+                                                category,
+                                              ),
+                                            ),
+                                            selected:
+                                                productCategory == category,
+                                            onSelected: (_) => setState(() {
+                                              productCategory = category;
+                                              productCustomTypeId = null;
+                                            }),
+                                          ),
+                                        )
+                                        .toList()
+                                      ..addAll([
+                                        for (final customType
+                                            in customItemTypes.where(
+                                              (type) => _productBrand!
+                                                  .customTypeIds
+                                                  .contains(type.id),
+                                            ))
+                                          ChoiceChip(
+                                            key: Key(
+                                              'product-custom-type-${customType.id}',
+                                            ),
+                                            label: Text(customType.name),
+                                            selected:
+                                                productCategory ==
+                                                    InventoryType.custom &&
+                                                productCustomTypeId ==
+                                                    customType.id,
+                                            onSelected: (_) => setState(() {
+                                              productCategory =
+                                                  InventoryType.custom;
+                                              productCustomTypeId =
+                                                  customType.id;
+                                            }),
+                                          ),
+                                      ]),
                               ),
                             ],
                             const SizedBox(height: 12),
@@ -36879,7 +37617,31 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   void _addVendor() {
     final name = vendorName.text.trim();
     if (name.isEmpty) return;
-    if (vendorAlsoBrand && vendorBrandCategories.isEmpty) return;
+    final wantsNewType = vendorBrandCategories.contains(InventoryType.other);
+    final otherTypeName = vendorOtherTypeName.text.trim();
+    if (vendorAlsoBrand && wantsNewType && otherTypeName.isEmpty) return;
+    if (vendorAlsoBrand &&
+        vendorBrandCategories.isEmpty &&
+        vendorBrandCustomTypeIds.isEmpty)
+      return;
+    final existingCustomType = wantsNewType
+        ? customItemTypes
+              .where(
+                (type) =>
+                    type.name.toLowerCase() == otherTypeName.toLowerCase(),
+              )
+              .firstOrNull
+        : null;
+    final createdCustomType = wantsNewType && existingCustomType == null
+        ? CustomItemTypeRecord(id: _newCatalogId('TYPE'), name: otherTypeName)
+        : null;
+    final selectedCustomTypeIds = {
+      ...vendorBrandCustomTypeIds,
+      if (existingCustomType != null) existingCustomType.id,
+      if (createdCustomType != null) createdCustomType.id,
+    };
+    final selectedCategories = {...vendorBrandCategories}
+      ..remove(InventoryType.other);
     final vendor = VendorRecord(
       id: _newCatalogId('VEN'),
       name: name,
@@ -36891,32 +37653,49 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             id: _newCatalogId('BR'),
             name: name,
             vendorIds: {vendor.id},
-            categories: {...vendorBrandCategories},
+            categories: {
+              ...selectedCategories,
+              if (selectedCustomTypeIds.isNotEmpty) InventoryType.custom,
+            },
+            customTypeIds: selectedCustomTypeIds,
             logoBytes: vendorLogo,
           )
         : null;
     setState(() {
       vendors.add(vendor);
+      if (createdCustomType != null) customItemTypes.add(createdCustomType);
       if (linkedBrand != null) brands.add(linkedBrand);
       vendorName.clear();
+      vendorTypeSearch.clear();
+      vendorOtherTypeName.clear();
       vendorLogo = null;
       vendorAlsoBrand = false;
       vendorBrandCategories.clear();
+      vendorBrandCustomTypeIds.clear();
     });
     widget.onVendorAdded(vendor);
+    if (createdCustomType != null) {
+      widget.onCustomItemTypeAdded(createdCustomType);
+    }
     if (linkedBrand != null) widget.onBrandAdded(linkedBrand);
   }
 
   void _addBrand() {
     final name = brandName.text.trim();
-    if (name.isEmpty || brandVendorId == null || brandCategories.isEmpty) {
+    if (name.isEmpty ||
+        brandVendorId == null ||
+        (brandCategories.isEmpty && brandCustomTypeIds.isEmpty)) {
       return;
     }
     final brand = BrandRecord(
       id: _newCatalogId('BR'),
       name: name,
       vendorIds: {brandVendorId!},
-      categories: {...brandCategories},
+      categories: {
+        ...brandCategories,
+        if (brandCustomTypeIds.isNotEmpty) InventoryType.custom,
+      },
+      customTypeIds: {...brandCustomTypeIds},
       logoBytes: brandLogo,
     );
     setState(() {
@@ -36924,6 +37703,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       brandName.clear();
       brandLogo = null;
       brandCategories.clear();
+      brandCustomTypeIds.clear();
     });
     widget.onBrandAdded(brand);
   }
@@ -37386,6 +38166,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       id: _newCatalogId('PROD'),
       brandId: productBrandId!,
       category: productCategory!,
+      customTypeId: productCustomTypeId ?? '',
       name: name,
       defaultCost: double.tryParse(productCost.text) ?? 0,
       dryingMinutes: productCategory!.supportsDrying
@@ -37409,6 +38190,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       drying.clear();
       storage.clear();
       productImage = null;
+      productCustomTypeId = null;
     });
     widget.onProductAdded(product);
   }
@@ -39058,7 +39840,9 @@ class _PersonalizationSettingsDialogState
     setState(() {
       customThemeColor = parsed;
       colorTheme = AppColorTheme.custom;
+      rgbAccentMode = false;
     });
+    widget.onRgbAccentModeChanged(false);
     widget.onCustomThemeColorChanged(parsed);
   }
 
@@ -39244,7 +40028,11 @@ class _PersonalizationSettingsDialogState
                               _pickCustomThemeColor();
                               return;
                             }
-                            setState(() => colorTheme = option);
+                            setState(() {
+                              colorTheme = option;
+                              rgbAccentMode = false;
+                            });
+                            widget.onRgbAccentModeChanged(false);
                             widget.onColorThemeChanged(option);
                           },
                           style: ButtonStyle(
@@ -39305,18 +40093,57 @@ class _PersonalizationSettingsDialogState
                 );
               },
             ),
-            SwitchListTile(
-              key: const Key('rgb-accent-mode-toggle'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('RGB accent cycle'),
-              subtitle: const Text(
-                'Flow every accent through the color spectrum on this device.',
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 52,
+              child: OutlinedButton(
+                key: const Key('color-theme-rgb'),
+                onPressed: () {
+                  setState(() => rgbAccentMode = true);
+                  widget.onRgbAccentModeChanged(true);
+                },
+                style: ButtonStyle(
+                  side: WidgetStatePropertyAll(
+                    BorderSide(
+                      color: rgbAccentMode
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.transparent,
+                      width: rgbAccentMode ? 2 : 1,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const SweepGradient(
+                          colors: [
+                            Color(0xffff4d5f),
+                            Color(0xffffc14a),
+                            Color(0xff55e68b),
+                            Color(0xff4ad7ff),
+                            Color(0xff8e75ff),
+                            Color(0xffff4dce),
+                            Color(0xffff4d5f),
+                          ],
+                        ),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    const Expanded(
+                      child: Text('RGB', style: TextStyle(fontSize: 12)),
+                    ),
+                    if (rgbAccentMode)
+                      const Icon(Icons.check_rounded, size: 16),
+                  ],
+                ),
               ),
-              value: rgbAccentMode,
-              onChanged: (value) {
-                setState(() => rgbAccentMode = value);
-                widget.onRgbAccentModeChanged(value);
-              },
             ),
             const Divider(height: 28),
             SwitchListTile(
@@ -41251,6 +42078,7 @@ class AddItemDialog extends StatefulWidget {
     this.spoolTypes = starterSpoolTypes,
     this.materials = starterMaterials,
     this.customItemTypes = const [],
+    this.deletedTypeKeys = const {},
     this.typeLabelOverrides = const {},
     this.typeIconOverrides = const {},
     this.typeMaterialListingSettings = const {},
@@ -41287,6 +42115,7 @@ class AddItemDialog extends StatefulWidget {
   final List<SpoolTypeRecord> spoolTypes;
   final List<MaterialRecord> materials;
   final List<CustomItemTypeRecord> customItemTypes;
+  final Set<String> deletedTypeKeys;
   final Map<String, String> typeLabelOverrides;
   final Map<String, String> typeIconOverrides;
   final Map<String, bool> typeMaterialListingSettings;
@@ -44815,7 +45644,10 @@ class _AddItemDialogState extends State<AddItemDialog>
       .where(
         (brand) =>
             (!brand.archived || brand.id == brandId) &&
-            brand.categories.contains(type),
+            brand.categories.contains(type) &&
+            (type != InventoryType.custom ||
+                brand.customTypeIds.isEmpty ||
+                brand.customTypeIds.contains(customTypeId)),
       )
       .toList();
 
@@ -44833,7 +45665,9 @@ class _AddItemDialogState extends State<AddItemDialog>
 
   List<DropdownMenuItem<String>> get _typeChoices => [
     for (final value in InventoryType.values.where(
-      (value) => value != InventoryType.custom,
+      (value) =>
+          value != InventoryType.custom &&
+          !widget.deletedTypeKeys.contains(_inventoryTypeDefinitionKey(value)),
     ))
       DropdownMenuItem(
         value: 'type:${value.name}',
@@ -44854,7 +45688,10 @@ class _AddItemDialogState extends State<AddItemDialog>
           ],
         ),
       ),
-    for (final customType in widget.customItemTypes)
+    for (final customType in widget.customItemTypes.where(
+      (customType) =>
+          !widget.deletedTypeKeys.contains('custom:${customType.id}'),
+    ))
       DropdownMenuItem(
         value: 'custom:${customType.id}',
         child: Row(
@@ -44918,7 +45755,11 @@ class _AddItemDialogState extends State<AddItemDialog>
 
   List<CatalogProduct> get _availableProducts => widget.products
       .where(
-        (product) => product.brandId == brandId && product.category == type,
+        (product) =>
+            product.brandId == brandId &&
+            product.category == type &&
+            (type != InventoryType.custom ||
+                product.customTypeId == customTypeId),
       )
       .toList();
 
@@ -44977,7 +45818,10 @@ class _AddItemDialogState extends State<AddItemDialog>
       if (!_selectedTypeListsMaterial) materialId = null;
       _configureCustomFields();
       productId = null;
-      if (_selectedBrand?.categories.contains(next) != true) {
+      if (_selectedBrand?.categories.contains(next) != true ||
+          (next == InventoryType.custom &&
+              _selectedBrand?.customTypeIds.isNotEmpty == true &&
+              !_selectedBrand!.customTypeIds.contains(customId))) {
         brandId = null;
         if (_supplierMetadata.isEmpty) brandController.clear();
         vendorId = null;
@@ -44999,6 +45843,9 @@ class _AddItemDialogState extends State<AddItemDialog>
     setState(() {
       productId = product.id;
       type = product.category;
+      customTypeId = product.category == InventoryType.custom
+          ? product.customTypeId
+          : null;
       materialId = _materialMatchingText(product.name)?.id;
       nameController.text = product.name;
       costController.text = product.defaultCost.toStringAsFixed(2);

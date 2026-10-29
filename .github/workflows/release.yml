@@ -192,7 +192,7 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
           $buildHash = $env:GITHUB_SHA.Substring(0, 12)
-          flutter build windows --release "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
+          flutter build windows --release --no-tree-shake-icons "--dart-define=INVENTORINATOR_VERSION=$version" "--dart-define=INVENTORINATOR_BUILD_HASH=$buildHash"
       - name: Verify bundled label OCR engine
         shell: pwsh
         run: ./tool/verify_windows_ocr.ps1

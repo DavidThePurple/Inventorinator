@@ -35300,7 +35300,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   List<Widget> get _vendorProductTypeChips {
     final query = vendorTypeSearch.text.trim().toLowerCase();
-    final matches = (String value) =>
+    bool matches(String value) =>
         query.isEmpty || value.toLowerCase().contains(query);
     return [
       for (final type in InventoryType.values)
@@ -37788,8 +37788,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     if (vendorAlsoBrand && wantsNewType && otherTypeName.isEmpty) return;
     if (vendorAlsoBrand &&
         vendorBrandCategories.isEmpty &&
-        vendorBrandCustomTypeIds.isEmpty)
+        vendorBrandCustomTypeIds.isEmpty) {
       return;
+    }
     final existingCustomType = wantsNewType
         ? customItemTypes
               .where(

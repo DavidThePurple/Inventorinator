@@ -7378,7 +7378,9 @@ Bed Temperature: 80°C
 
     final gesture = await tester.startGesture(tester.getCenter(typesGrip));
     await tester.pump(const Duration(milliseconds: 80));
-    await gesture.moveBy(const Offset(0, 132));
+    await gesture.moveTo(
+      tester.getCenter(materialsSection) + const Offset(0, 36),
+    );
     await tester.pump(const Duration(milliseconds: 180));
     await gesture.up();
     await tester.pumpAndSettle();
@@ -10457,7 +10459,7 @@ Bed Temperature: 80°C
       find.byKey(const Key('new-custom-type-can-mark-depleted')),
     );
     tester
-        .widget<SwitchListTile>(
+        .widget<Switch>(
           find.byKey(const Key('new-custom-type-can-mark-depleted')),
         )
         .onChanged!(true);

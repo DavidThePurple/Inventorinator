@@ -9454,11 +9454,13 @@ class _VendorLogoControl extends StatefulWidget {
     required this.logo,
     required this.onPressed,
     required this.tooltip,
+    required this.fallbackIcon,
   });
 
   final Uint8List? logo;
   final VoidCallback onPressed;
   final String tooltip;
+  final IconData fallbackIcon;
 
   @override
   State<_VendorLogoControl> createState() => _VendorLogoControlState();
@@ -9515,7 +9517,7 @@ class _VendorLogoControlState extends State<_VendorLogoControl> {
                   fit: StackFit.expand,
                   children: [
                     widget.logo == null
-                        ? Icon(Icons.storefront_outlined, color: accent)
+                        ? Icon(widget.fallbackIcon, color: accent)
                         : ClipRRect(
                             borderRadius: BorderRadius.circular(7),
                             child: Image.memory(
@@ -12424,6 +12426,17 @@ class _InventoryHomeState extends State<InventoryHome> {
           .where((type) => type.id == machine.typeId)
           .firstOrNull
           ?.timerDisplay ??
+      MachineTimerDisplay.values
+          .where(
+            (display) =>
+                display.name ==
+                typeTimerDisplaySettings[_catalogViewDefinitionKey(
+                  _isPrinter(machine)
+                      ? CatalogViewFilter.printers
+                      : CatalogViewFilter.machines,
+                )],
+          )
+          .firstOrNull ??
       machineTimerDisplay;
 
   List<Object> get visibleCatalogRecords {
@@ -18033,8 +18046,24 @@ class _InventoryHomeState extends State<InventoryHome> {
         });
         _persist();
       },
+      onBrandOrderChanged: (orderedBrands) {
+        setState(() {
+          brands
+            ..clear()
+            ..addAll(orderedBrands);
+        });
+        _persist();
+      },
       onSpoolTypeAdded: (spoolType) {
         setState(() => spoolTypes.add(spoolType));
+        _persist();
+      },
+      onSpoolTypeOrderChanged: (orderedSpoolTypes) {
+        setState(() {
+          spoolTypes
+            ..clear()
+            ..addAll(orderedSpoolTypes);
+        });
         _persist();
       },
       onMaterialAdded: (material) {
@@ -18114,6 +18143,14 @@ class _InventoryHomeState extends State<InventoryHome> {
               );
             }
           }
+        });
+        _persist();
+      },
+      onMaterialOrderChanged: (orderedMaterials) {
+        setState(() {
+          materials
+            ..clear()
+            ..addAll(orderedMaterials);
         });
         _persist();
       },
@@ -18232,6 +18269,14 @@ class _InventoryHomeState extends State<InventoryHome> {
         });
         _persist();
       },
+      onMachineOrderChanged: (orderedMachines) {
+        setState(() {
+          machines
+            ..clear()
+            ..addAll(orderedMachines);
+        });
+        _persist();
+      },
       onKitAdded: (kit) {
         setState(() => kits.add(kit));
         _persist();
@@ -18240,6 +18285,14 @@ class _InventoryHomeState extends State<InventoryHome> {
         setState(() {
           final index = kits.indexWhere((candidate) => candidate.id == kit.id);
           if (index >= 0) kits[index] = kit;
+        });
+        _persist();
+      },
+      onKitOrderChanged: (orderedKits) {
+        setState(() {
+          kits
+            ..clear()
+            ..addAll(orderedKits);
         });
         _persist();
       },
@@ -35060,6 +35113,9 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.onVendorUpdated,
     required this.onVendorDeleted,
     required this.onVendorOrderChanged,
+    required this.onBrandOrderChanged,
+    required this.onSpoolTypeOrderChanged,
+    required this.onMaterialOrderChanged,
     required this.onBrandAdded,
     required this.onBrandUpdated,
     required this.onSpoolTypeAdded,
@@ -35083,8 +35139,10 @@ class CatalogManagerDialog extends StatefulWidget {
     required this.onMachineTypeUpdated,
     required this.onMachineAdded,
     required this.onMachineUpdated,
+    required this.onMachineOrderChanged,
     required this.onKitAdded,
     required this.onKitUpdated,
+    required this.onKitOrderChanged,
     this.initialKitId,
     this.initialKitBom,
   });
@@ -35115,6 +35173,9 @@ class CatalogManagerDialog extends StatefulWidget {
   final ValueChanged<VendorRecord> onVendorUpdated;
   final ValueChanged<String> onVendorDeleted;
   final ValueChanged<List<VendorRecord>> onVendorOrderChanged;
+  final ValueChanged<List<BrandRecord>> onBrandOrderChanged;
+  final ValueChanged<List<SpoolTypeRecord>> onSpoolTypeOrderChanged;
+  final ValueChanged<List<MaterialRecord>> onMaterialOrderChanged;
   final ValueChanged<BrandRecord> onBrandAdded;
   final ValueChanged<BrandRecord> onBrandUpdated;
   final ValueChanged<SpoolTypeRecord> onSpoolTypeAdded;
@@ -35140,8 +35201,10 @@ class CatalogManagerDialog extends StatefulWidget {
   final ValueChanged<MachineTypeRecord> onMachineTypeUpdated;
   final ValueChanged<MachineRecord> onMachineAdded;
   final ValueChanged<MachineRecord> onMachineUpdated;
+  final ValueChanged<List<MachineRecord>> onMachineOrderChanged;
   final ValueChanged<KitRecord> onKitAdded;
   final ValueChanged<KitRecord> onKitUpdated;
+  final ValueChanged<List<KitRecord>> onKitOrderChanged;
   final String? initialKitId;
   final List<KitBomEntry>? initialKitBom;
 
@@ -35210,6 +35273,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   final List<String> draftSections = [];
   String? editingKitId;
   String? machineTypeParentId;
+  MachineTimerDisplay? machineTypeTimerDisplay;
   String? selectedMachineTypeId;
   String? selectedMachineLocationId;
   final Set<String> selectedMachineKitIds = {};
@@ -35224,6 +35288,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   String? productCustomTypeId;
   bool vendorAlsoBrand = false;
   String? _unlockedVendorId;
+  String? _unlockedBrandId;
+  final Map<String, TextEditingController> _brandNameControllers = {};
+  final Map<String, FocusNode> _brandNameFocusNodes = {};
   bool kitSectionExpanded = false;
   bool loadingInitialKit = false;
   Uint8List? vendorLogo;
@@ -35232,6 +35299,8 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   Uint8List? machineImage;
   Uint8List? kitImage;
   String customTypeIconKey = 'tune';
+  MachineTimerDisplay? customTypeTimerDisplay;
+  bool customTypeUsesTimerWidget = false;
   bool customTypeCanMarkDepleted = false;
   bool customTypeShowsStatus = false;
   bool customTypeListsMaterial = false;
@@ -35244,7 +35313,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   List<({String key, String defaultLabel, IconData icon})>
   get _allBuiltInCatalogTypes => [
-    for (final type in CatalogViewFilter.values)
+    for (final type in CatalogViewFilter.values.where(
+      (type) => type != CatalogViewFilter.tools,
+    ))
       (
         key: _catalogViewDefinitionKey(type),
         defaultLabel: _defaultCatalogViewLabel(type),
@@ -35372,6 +35443,38 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     widget.onSectionsReordered(List.unmodifiable(ordered));
   }
 
+  void _reorderCatalogRecords<T>(
+    List<T> records,
+    int oldIndex,
+    int newIndex,
+    ValueChanged<List<T>> onChanged,
+  ) {
+    setState(() {
+      final moved = records.removeAt(oldIndex);
+      records.insert(newIndex, moved);
+    });
+    onChanged(List.unmodifiable(records));
+  }
+
+  String _machineCatalogSummary(MachineRecord machine) {
+    final typeName =
+        machineTypes
+            .where((type) => type.id == machine.typeId)
+            .firstOrNull
+            ?.name ??
+        'Unknown type';
+    final kitNames = kits
+        .where((kit) => machine.kitIds.contains(kit.id))
+        .map((kit) => kit.name)
+        .join(', ');
+    final timerStatus = !machine.hasTimer
+        ? ''
+        : machine.timerFinished(DateTime.now())
+        ? ' · Timer finished'
+        : ' · Timer running';
+    return '$typeName${kitNames.isEmpty ? '' : ' · $kitNames'}$timerStatus';
+  }
+
   Widget _reorderableCatalogSection({
     required String key,
     required String label,
@@ -35380,7 +35483,14 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   }) => Stack(
     key: ValueKey('catalog-reorder-section-$key'),
     children: [
-      Padding(padding: const EdgeInsets.only(left: 34), child: child),
+      Padding(
+        padding: const EdgeInsets.only(left: 34, bottom: 8),
+        child: _ArtCraftCornerFrame(
+          outline: Theme.of(context).colorScheme.outlineVariant,
+          accent: Theme.of(context).colorScheme.primary,
+          child: child,
+        ),
+      ),
       Positioned(
         top: 14,
         left: 2,
@@ -35410,6 +35520,35 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   String _builtInTypeIconKey(
     ({String key, String defaultLabel, IconData icon}) type,
   ) => typeIconOverrides[type.key] ?? _iconKeyFor(type.icon);
+
+  bool _isCatalogViewType(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) => type.key.startsWith('catalog:');
+
+  bool _supportsTimerDisplay(
+    ({String key, String defaultLabel, IconData icon}) type,
+  ) =>
+      type.key.startsWith('item:') ||
+      type.key == _catalogViewDefinitionKey(CatalogViewFilter.machines) ||
+      type.key == _catalogViewDefinitionKey(CatalogViewFilter.printers);
+
+  List<Object> get _orderedCatalogTypeEntries {
+    final entries = <Object>[..._builtInCatalogTypes, ...customItemTypes];
+    entries.sort((left, right) {
+      final leftIndex = builtInTypeOrder.indexOf(_catalogTypeEntryKey(left));
+      final rightIndex = builtInTypeOrder.indexOf(_catalogTypeEntryKey(right));
+      final leftRank = leftIndex < 0 ? entries.length : leftIndex;
+      final rightRank = rightIndex < 0 ? entries.length : rightIndex;
+      return leftRank == rightRank ? 0 : leftRank.compareTo(rightRank);
+    });
+    return entries;
+  }
+
+  String _catalogTypeEntryKey(Object entry) => switch (entry) {
+    final CustomItemTypeRecord type => 'custom:${type.id}',
+    final ({String key, String defaultLabel, IconData icon}) type => type.key,
+    _ => throw ArgumentError.value(entry, 'entry', 'Unsupported type entry'),
+  };
 
   String _catalogInventoryTypeLabel(InventoryType type) =>
       typeLabelOverrides[_inventoryTypeDefinitionKey(type)] ?? _typeLabel(type);
@@ -35486,6 +35625,12 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     for (final focusNode in _vendorNameFocusNodes.values) {
       focusNode.dispose();
     }
+    for (final controller in _brandNameControllers.values) {
+      controller.dispose();
+    }
+    for (final focusNode in _brandNameFocusNodes.values) {
+      focusNode.dispose();
+    }
     vendorTypeSearch.dispose();
     vendorOtherTypeName.dispose();
     brandName.dispose();
@@ -35518,11 +35663,45 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   FocusNode _vendorNameFocusNode(VendorRecord vendor) => _vendorNameFocusNodes
       .putIfAbsent(vendor.id, () => FocusNode(canRequestFocus: false));
 
+  TextEditingController _brandNameController(BrandRecord brand) =>
+      _brandNameControllers.putIfAbsent(
+        brand.id,
+        () => TextEditingController(text: brand.name),
+      );
+
+  FocusNode _brandNameFocusNode(BrandRecord brand) => _brandNameFocusNodes
+      .putIfAbsent(brand.id, () => FocusNode(canRequestFocus: false));
+
   Widget _vendorLogoControl({
     required Uint8List? logo,
     required VoidCallback onPressed,
     required String tooltip,
-  }) => _VendorLogoControl(logo: logo, onPressed: onPressed, tooltip: tooltip);
+    IconData fallbackIcon = Icons.storefront_outlined,
+  }) => _VendorLogoControl(
+    logo: logo,
+    onPressed: onPressed,
+    tooltip: tooltip,
+    fallbackIcon: fallbackIcon,
+  );
+
+  Widget _catalogImagePicker({
+    required Key key,
+    required Uint8List? bytes,
+    required IconData fallbackIcon,
+    required String label,
+    required ValueChanged<Uint8List?> onChanged,
+  }) => KeyedSubtree(
+    key: key,
+    child: _vendorLogoControl(
+      logo: bytes,
+      fallbackIcon: fallbackIcon,
+      tooltip: bytes == null ? 'Choose $label' : 'Change $label',
+      onPressed: () async {
+        final picked = await _pickImageBytes();
+        if (picked != null && mounted) onChanged(picked);
+      },
+    ),
+  );
 
   Widget _manufacturerSwitch({
     required Key key,
@@ -35560,49 +35739,61 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     required String description,
     required IconData icon,
     required List<Widget> children,
-  }) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(_designRadius(context, 18)),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final card = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: _isInventoryCraft(context)
+            ? BorderRadius.zero
+            : BorderRadius.circular(_designRadius(context, 18)),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 20, color: scheme.primary),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                  Text(
-                    description,
-                    style: const TextStyle(
-                      color: Color(0xff929aac),
-                      fontSize: 12,
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        color: Color(0xff929aac),
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ...children,
-      ],
-    ),
-  );
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...children,
+        ],
+      ),
+    );
+    return _isInventoryCraft(context)
+        ? _ArtCraftCornerFrame(
+            outline: scheme.outlineVariant,
+            accent: scheme.primary,
+            child: card,
+          )
+        : card;
+  }
 
   Widget _catalogRecordCard({
     required Uint8List? logo,
@@ -35624,7 +35815,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         color: technical
             ? scheme.surface.withValues(alpha: .9)
             : const Color(0xff171c27),
-        borderRadius: BorderRadius.circular(_designRadius(context, 14)),
+        borderRadius: technical
+            ? BorderRadius.zero
+            : BorderRadius.circular(_designRadius(context, 14)),
         border: Border.all(
           color: technical
               ? scheme.outlineVariant.withValues(alpha: .72)
@@ -35907,12 +36100,44 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
     widget.onBrandUpdated(updated);
   }
 
+  void _applyBrandEdit(
+    BrandRecord brand, {
+    String? name,
+    String? vendorId,
+    Set<InventoryType>? categories,
+    Set<String>? customTypeIds,
+    Uint8List? logoBytes,
+  }) {
+    final nextName = (name ?? brand.name).trim();
+    if (nextName.isEmpty) return;
+    final nextCustomTypeIds = customTypeIds ?? brand.customTypeIds;
+    final nextCategories = {...(categories ?? brand.categories)};
+    if (nextCustomTypeIds.isEmpty) {
+      nextCategories.remove(InventoryType.custom);
+    } else {
+      nextCategories.add(InventoryType.custom);
+    }
+    final updated = BrandRecord(
+      id: brand.id,
+      name: nextName,
+      vendorIds: vendorId == null ? brand.vendorIds : {vendorId},
+      categories: nextCategories,
+      customTypeIds: nextCustomTypeIds,
+      logoBytes: logoBytes ?? brand.logoBytes,
+      archived: brand.archived,
+    );
+    setState(() {
+      final index = brands.indexWhere((candidate) => candidate.id == brand.id);
+      if (index >= 0) brands[index] = updated;
+    });
+    widget.onBrandUpdated(updated);
+  }
+
   Widget _vendorCatalogSection() => ExpansionTile(
     key: const Key('catalog-vendors-section'),
     leading: const _RgbAccentIcon(Icons.storefront_outlined),
     title: Text('Vendors (${vendors.length})'),
     subtitle: const Text('Stores and suppliers you purchase from'),
-    childrenPadding: const EdgeInsets.fromLTRB(0, 8, 0, 18),
     children: [
       _catalogFormCard(
         title: 'Add vendor',
@@ -36291,10 +36516,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   Widget _brandCatalogSection() => ExpansionTile(
     key: const Key('catalog-brands-section'),
-    leading: const Icon(Icons.sell_outlined),
+    leading: const _RgbAccentIcon(Icons.sell_outlined),
     title: Text('Brands (${brands.length})'),
     subtitle: const Text('Product makers and the types they manufacture'),
-    childrenPadding: const EdgeInsets.fromLTRB(0, 8, 0, 18),
     children: [
       _catalogFormCard(
         title: 'Add brand',
@@ -36302,37 +36526,50 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             'Create a maker, then connect it to a vendor and product types.',
         icon: Icons.new_label_outlined,
         children: [
-          TextField(
-            key: const Key('new-brand-name'),
-            controller: brandName,
-            decoration: const InputDecoration(labelText: 'Brand name'),
-          ),
-          const SizedBox(height: 12),
-          _ImagePickerButton(
-            key: const Key('brand-logo-picker'),
-            label: 'Brand logo',
-            bytes: brandLogo,
-            fallbackIcon: Icons.sell_outlined,
-            onChanged: (bytes) => setState(() => brandLogo = bytes),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            key: const Key('brand-vendor'),
-            initialValue: brandVendorId,
-            decoration: const InputDecoration(
-              labelText: 'Purchased from',
-              helperText: 'Choose the vendor that sells this brand.',
-            ),
-            items: vendors
-                .where((vendor) => !vendor.archived)
-                .map(
-                  (vendor) => DropdownMenuItem(
-                    value: vendor.id,
-                    child: Text(vendor.name),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) => setState(() => brandVendorId = value),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _catalogImagePicker(
+                key: const Key('brand-logo-picker'),
+                bytes: brandLogo,
+                fallbackIcon: Icons.sell_outlined,
+                label: 'brand logo',
+                onChanged: (bytes) => setState(() => brandLogo = bytes),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  children: [
+                    TextField(
+                      key: const Key('new-brand-name'),
+                      controller: brandName,
+                      decoration: const InputDecoration(
+                        labelText: 'Brand name',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      key: const Key('brand-vendor'),
+                      initialValue: brandVendorId,
+                      decoration: const InputDecoration(
+                        labelText: 'Purchased from',
+                      ),
+                      items: vendors
+                          .where((vendor) => !vendor.archived)
+                          .map(
+                            (vendor) => DropdownMenuItem(
+                              value: vendor.id,
+                              child: Text(vendor.name),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          setState(() => brandVendorId = value),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           const Text(
@@ -36410,46 +36647,209 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           ),
         )
       else
-        ...brands.map((brand) {
-          final linkedVendors = vendors
-              .where((vendor) => brand.vendorIds.contains(vendor.id))
-              .map((vendor) => vendor.name)
-              .join(', ');
-          final categoryLabels = brand.categories
-              .map(_catalogInventoryTypeLabel)
-              .join(', ');
-          return Padding(
-            key: Key('brand-summary-${brand.id}'),
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _catalogRecordCard(
-              logo: brand.logoBytes,
-              fallbackIcon: Icons.sell_outlined,
-              name: brand.name,
-              details: [
-                if (linkedVendors.isNotEmpty) 'Sold by $linkedVendors',
-                if (categoryLabels.isNotEmpty) 'Makes $categoryLabels',
-              ].join(' · '),
-              badge: brand.archived
-                  ? const Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text('Retired'),
-                    )
-                  : null,
-              action: IconButton(
-                key: Key('toggle-brand-archive-${brand.id}'),
-                tooltip: brand.archived ? 'Restore brand' : 'Retire brand',
-                onPressed: () => _toggleBrandArchived(brand),
-                icon: Icon(
-                  brand.archived
-                      ? Icons.unarchive_outlined
-                      : Icons.archive_outlined,
+        ReorderableListView(
+          key: const Key('reorder-brands'),
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          onReorderItem: (oldIndex, newIndex) => _reorderCatalogRecords(
+            brands,
+            oldIndex,
+            newIndex,
+            widget.onBrandOrderChanged,
+          ),
+          children: [
+            for (final (index, brand) in brands.indexed)
+              _brandSummaryTile(brand, index),
+          ],
+        ),
+    ],
+  );
+
+  Widget _brandSummaryTile(BrandRecord brand, int index) {
+    final selectedVendorId = brand.vendorIds.firstOrNull;
+    return Padding(
+      key: Key('brand-summary-${brand.id}'),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: _catalogRecordCard(
+        logo: brand.logoBytes,
+        fallbackIcon: Icons.sell_outlined,
+        name: brand.name,
+        details: '',
+        onLogoPressed: () async {
+          final bytes = await _pickImageBytes();
+          if (bytes != null && mounted) {
+            _applyBrandEdit(brand, logoBytes: bytes);
+          }
+        },
+        nameWidget: Builder(
+          builder: (context) {
+            final unlocked = _unlockedBrandId == brand.id;
+            final controller = _brandNameController(brand);
+            final focusNode = _brandNameFocusNode(brand);
+            focusNode.canRequestFocus = unlocked;
+            return TextFormField(
+              key: Key('brand-name-${brand.id}'),
+              controller: controller,
+              focusNode: focusNode,
+              autofocus: unlocked,
+              readOnly: !unlocked,
+              enableInteractiveSelection: unlocked,
+              showCursor: unlocked,
+              maxLines: 1,
+              onFieldSubmitted: (value) {
+                _applyBrandEdit(brand, name: value);
+                focusNode
+                  ..unfocus()
+                  ..canRequestFocus = false;
+                setState(() => _unlockedBrandId = null);
+              },
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontFamily: _isInventoryCraft(context) ? 'monospace' : null,
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 30,
+                  minHeight: 30,
+                ),
+                suffixIcon: IconButton(
+                  key: Key('toggle-brand-name-lock-${brand.id}'),
+                  tooltip: unlocked ? 'Lock name' : 'Edit name',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    if (unlocked) {
+                      _applyBrandEdit(brand, name: controller.text);
+                      focusNode
+                        ..unfocus()
+                        ..canRequestFocus = false;
+                    } else {
+                      focusNode.canRequestFocus = true;
+                    }
+                    setState(() {
+                      _unlockedBrandId = unlocked ? null : brand.id;
+                    });
+                    if (!unlocked) {
+                      WidgetsBinding.instance.addPostFrameCallback(
+                        (_) => focusNode.requestFocus(),
+                      );
+                    }
+                  },
+                  icon: Icon(
+                    unlocked ? Icons.check_rounded : Icons.edit_outlined,
+                    size: 17,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        detailsWidget: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 6),
+            DropdownButtonFormField<String>(
+              key: Key(
+                'brand-vendor-${brand.id}-${selectedVendorId ?? 'none'}',
+              ),
+              initialValue: selectedVendorId,
+              isDense: true,
+              decoration: const InputDecoration(
+                labelText: 'Vendor',
+                isDense: true,
+              ),
+              items: vendors
+                  .where(
+                    (vendor) =>
+                        !vendor.archived || vendor.id == selectedVendorId,
+                  )
+                  .map(
+                    (vendor) => DropdownMenuItem(
+                      value: vendor.id,
+                      child: Text(vendor.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) _applyBrandEdit(brand, vendorId: value);
+              },
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final type in InventoryType.values.where(
+                  (type) =>
+                      type != InventoryType.custom &&
+                      !deletedTypeKeys.contains(
+                        _inventoryTypeDefinitionKey(type),
+                      ),
+                ))
+                  FilterChip(
+                    key: Key('brand-${brand.id}-category-${type.name}'),
+                    label: Text(_catalogInventoryTypeLabel(type)),
+                    selected: brand.categories.contains(type),
+                    onSelected: (selected) {
+                      final categories = {...brand.categories};
+                      selected ? categories.add(type) : categories.remove(type);
+                      _applyBrandEdit(brand, categories: categories);
+                    },
+                  ),
+                for (final type in customItemTypes)
+                  FilterChip(
+                    key: Key('brand-${brand.id}-custom-type-${type.id}'),
+                    label: Text(type.name),
+                    selected: brand.customTypeIds.contains(type.id),
+                    onSelected: (selected) {
+                      final customTypeIds = {...brand.customTypeIds};
+                      selected
+                          ? customTypeIds.add(type.id)
+                          : customTypeIds.remove(type.id);
+                      _applyBrandEdit(brand, customTypeIds: customTypeIds);
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
+        badge: brand.archived
+            ? const Chip(
+                visualDensity: VisualDensity.compact,
+                label: Text('Retired'),
+              )
+            : null,
+        action: Wrap(
+          children: [
+            ReorderableDragStartListener(
+              key: Key('drag-brand-${brand.id}'),
+              index: index,
+              child: Tooltip(
+                message: 'Drag to reorder ${brand.name}',
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.drag_indicator_rounded),
                 ),
               ),
             ),
-          );
-        }),
-    ],
-  );
+            IconButton(
+              key: Key('toggle-brand-archive-${brand.id}'),
+              tooltip: brand.archived ? 'Restore brand' : 'Retire brand',
+              onPressed: () => _toggleBrandArchived(brand),
+              icon: Icon(
+                brand.archived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => Dialog(
@@ -36467,7 +36867,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        kitOnly ? 'Kit / BOM' : 'Product catalog',
+                        kitOnly ? 'Kit / BOM' : 'Catalog',
                         style: const TextStyle(
                           fontSize: 25,
                           fontWeight: FontWeight.w800,
@@ -36497,550 +36897,683 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                 ? loadingInitialKit
                       ? const _KitBomLoadingState()
                       : _kitOnlyBomList()
-                : ReorderableListView(
-                    key: const Key('catalog-list'),
-                    buildDefaultDragHandles: false,
-                    padding: const EdgeInsets.all(18),
-                    onReorderItem: _reorderCatalogSection,
-                    children: () {
-                      final sections = <String, Widget>{
-                        'types': _itemTypesSection(),
-                        'vendors': _vendorCatalogSection(),
-                        'brands': _brandCatalogSection(),
-                        'spools': ExpansionTile(
-                          key: const Key('catalog-spool-types-section'),
-                          leading: const Icon(Icons.donut_large_rounded),
-                          title: Text('Spool sizes (${spoolTypes.length})'),
-                          subtitle: const Text(
-                            'Reusable filament package weights',
-                          ),
-                          children: [
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    key: const Key('new-spool-label'),
-                                    controller: spoolLabel,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Button label',
-                                      hintText: '2.5 kg',
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(
-                                  width: 200,
-                                  child: TextField(
-                                    key: const Key('new-spool-weight'),
-                                    controller: spoolWeightGrams,
-                                    keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Filament weight',
-                                      suffixText: 'g',
-                                    ),
-                                  ),
-                                ),
-                                FilledButton(
-                                  key: const Key('add-spool-type'),
-                                  onPressed: _addSpoolType,
-                                  child: const Text('Add'),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 28),
-                            const Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                'EXISTING SPOOL SIZES',
-                                style: TextStyle(
-                                  color: Color(0xff929aac),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1.1,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: spoolTypes
-                                  .map(
-                                    (spool) => Chip(
-                                      key: Key('spool-summary-${spool.id}'),
-                                      avatar: const Icon(
-                                        Icons.scale_outlined,
-                                        size: 18,
-                                      ),
-                                      label: Text(spool.label),
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
+                : Theme(
+                    data: Theme.of(context).copyWith(
+                      expansionTileTheme: ExpansionTileThemeData(
+                        tilePadding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+                        childrenPadding: const EdgeInsets.fromLTRB(
+                          14,
+                          12,
+                          14,
+                          18,
                         ),
-                        'machines': ExpansionTile(
-                          key: const Key('catalog-machines-section'),
-                          leading: const Icon(
-                            Icons.precision_manufacturing_outlined,
+                        backgroundColor: Colors.transparent,
+                        collapsedBackgroundColor: Colors.transparent,
+                        iconColor: Theme.of(context).colorScheme.primary,
+                        collapsedIconColor: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                          side: BorderSide(
+                            color: Theme.of(context).colorScheme.outlineVariant,
                           ),
-                          title: Text('Machines (${machines.length})'),
-                          subtitle: const Text(
-                            'Equipment and compatible machine types',
+                        ),
+                        collapsedShape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                          side: BorderSide(
+                            color: Theme.of(context).colorScheme.outlineVariant,
                           ),
-                          children: [
-                            const SizedBox(height: 12),
-                            TextField(
-                              key: const Key('new-machine-type-name'),
-                              controller: machineTypeName,
-                              decoration: const InputDecoration(
-                                labelText: 'New machine type',
-                                hintText: 'Printer, FDM, Heat Insert Press…',
-                              ),
+                        ),
+                      ),
+                    ),
+                    child: ReorderableListView(
+                      key: const Key('catalog-list'),
+                      buildDefaultDragHandles: false,
+                      padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
+                      onReorderItem: _reorderCatalogSection,
+                      children: () {
+                        final sections = <String, Widget>{
+                          'types': _itemTypesSection(),
+                          'vendors': _vendorCatalogSection(),
+                          'brands': _brandCatalogSection(),
+                          'spools': ExpansionTile(
+                            key: const Key('catalog-spool-types-section'),
+                            leading: const _RgbAccentIcon(
+                              Icons.donut_large_rounded,
                             ),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String?>(
-                              key: const Key('machine-type-parent'),
-                              initialValue: machineTypeParentId,
-                              decoration: const InputDecoration(
-                                labelText: 'Parent type (optional)',
-                              ),
-                              items: [
-                                const DropdownMenuItem<String?>(
-                                  value: null,
-                                  child: Text('No parent'),
-                                ),
-                                ...machineTypes.map(
-                                  (type) => DropdownMenuItem<String?>(
-                                    value: type.id,
-                                    child: Text(type.name),
-                                  ),
-                                ),
-                              ],
-                              onChanged: (value) =>
-                                  setState(() => machineTypeParentId = value),
+                            title: Text('Spool sizes (${spoolTypes.length})'),
+                            subtitle: const Text(
+                              'Reusable filament package weights',
                             ),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: FilledButton(
-                                key: const Key('add-machine-type'),
-                                onPressed: _addMachineType,
-                                child: const Text('Add type'),
-                              ),
-                            ),
-                            const Divider(),
-                            DropdownButtonFormField<String>(
-                              key: const Key('machine-type'),
-                              initialValue: selectedMachineTypeId,
-                              decoration: const InputDecoration(
-                                labelText: 'Machine type',
-                              ),
-                              items: machineTypes
-                                  .map(
-                                    (type) => DropdownMenuItem(
-                                      value: type.id,
-                                      child: Text(type.name),
+                            children: [
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      key: const Key('new-spool-label'),
+                                      controller: spoolLabel,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Button label',
+                                        hintText: '2.5 kg',
+                                      ),
                                     ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) =>
-                                  setState(() => selectedMachineTypeId = value),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              key: const Key('new-machine-name'),
-                              controller: machineName,
-                              decoration: const InputDecoration(
-                                labelText: 'Name',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: machineModel,
-                              decoration: const InputDecoration(
-                                labelText: 'Model',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: machineAddress,
-                              decoration: const InputDecoration(
-                                labelText: 'Hostname / IP',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String?>(
-                              key: const Key('machine-storage-location'),
-                              initialValue: selectedMachineLocationId,
-                              decoration: const InputDecoration(
-                                labelText: 'Assigned location',
-                                helperText:
-                                    'Loaded items move to this location.',
-                              ),
-                              items: [
-                                const DropdownMenuItem<String?>(
-                                  value: null,
-                                  child: Text('No assigned location'),
-                                ),
-                                for (final location in widget.locations)
-                                  DropdownMenuItem<String?>(
-                                    value: location.id,
-                                    child: Text(location.name),
                                   ),
-                              ],
-                              onChanged: (value) => setState(
-                                () => selectedMachineLocationId = value,
+                                  const SizedBox(width: 10),
+                                  SizedBox(
+                                    width: 200,
+                                    child: TextField(
+                                      key: const Key('new-spool-weight'),
+                                      controller: spoolWeightGrams,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Filament weight',
+                                        suffixText: 'g',
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  FilledButton(
+                                    key: const Key('add-spool-type'),
+                                    onPressed: _addSpoolType,
+                                    child: const Text('Add'),
+                                  ),
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              key: const Key('machine-filament-slots'),
-                              controller: machineFilamentSlots,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                labelText: 'Filament slots (optional)',
-                                helperText: 'Leave blank for unlimited colors.',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            _ImagePickerButton(
-                              key: const Key('machine-image-picker'),
-                              label: 'Machine image',
-                              bytes: machineImage,
-                              fallbackIcon:
-                                  Icons.precision_manufacturing_outlined,
-                              onChanged: (bytes) =>
-                                  setState(() => machineImage = bytes),
-                            ),
-                            const SizedBox(height: 10),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                'Associated kits',
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            if (kits.isEmpty)
+                              const Divider(height: 28),
                               const Align(
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  'Define a kit below before associating it.',
-                                  style: TextStyle(color: Color(0xff929aac)),
+                                  'EXISTING SPOOL SIZES',
+                                  style: TextStyle(
+                                    color: Color(0xff929aac),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.1,
+                                  ),
                                 ),
-                              )
-                            else
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: kits
+                              ),
+                              const SizedBox(height: 8),
+                              ReorderableListView(
+                                key: const Key('reorder-spool-types'),
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                buildDefaultDragHandles: false,
+                                onReorderItem: (oldIndex, newIndex) =>
+                                    _reorderCatalogRecords(
+                                      spoolTypes,
+                                      oldIndex,
+                                      newIndex,
+                                      widget.onSpoolTypeOrderChanged,
+                                    ),
+                                children: [
+                                  for (final (index, spool)
+                                      in spoolTypes.indexed)
+                                    ListTile(
+                                      key: Key('spool-summary-${spool.id}'),
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: const Icon(Icons.scale_outlined),
+                                      title: Text(spool.label),
+                                      trailing: ReorderableDragStartListener(
+                                        key: Key('drag-spool-${spool.id}'),
+                                        index: index,
+                                        child: Tooltip(
+                                          message:
+                                              'Drag to reorder ${spool.label}',
+                                          child: const Padding(
+                                            padding: EdgeInsets.all(10),
+                                            child: Icon(
+                                              Icons.drag_indicator_rounded,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                          'machines': ExpansionTile(
+                            key: const Key('catalog-machines-section'),
+                            leading: const _RgbAccentIcon(
+                              Icons.precision_manufacturing_outlined,
+                            ),
+                            title: Text('Machines (${machines.length})'),
+                            subtitle: const Text(
+                              'Equipment and compatible machine types',
+                            ),
+                            children: [
+                              const SizedBox(height: 12),
+                              TextField(
+                                key: const Key('new-machine-type-name'),
+                                controller: machineTypeName,
+                                decoration: const InputDecoration(
+                                  labelText: 'New machine type',
+                                  hintText: 'Printer, FDM, Heat Insert Press…',
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<String?>(
+                                key: const Key('machine-type-parent'),
+                                initialValue: machineTypeParentId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Parent type (optional)',
+                                ),
+                                items: [
+                                  const DropdownMenuItem<String?>(
+                                    value: null,
+                                    child: Text('No parent'),
+                                  ),
+                                  ...machineTypes.map(
+                                    (type) => DropdownMenuItem<String?>(
+                                      value: type.id,
+                                      child: Text(type.name),
+                                    ),
+                                  ),
+                                ],
+                                onChanged: (value) =>
+                                    setState(() => machineTypeParentId = value),
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<MachineTimerDisplay?>(
+                                key: const Key('machine-type-timer-display'),
+                                initialValue: machineTypeTimerDisplay,
+                                isExpanded: true,
+                                decoration: const InputDecoration(
+                                  labelText: 'Timer display',
+                                  helperText: 'Optional override for machines of this type.',
+                                ),
+                                items: [
+                                  const DropdownMenuItem<MachineTimerDisplay?>(
+                                    value: null,
+                                    child: Text('Use view default'),
+                                  ),
+                                  for (final display
+                                      in MachineTimerDisplay.values)
+                                    DropdownMenuItem<MachineTimerDisplay?>(
+                                      value: display,
+                                      child: Text(display.label),
+                                    ),
+                                ],
+                                onChanged: (value) => setState(
+                                  () => machineTypeTimerDisplay = value,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: FilledButton(
+                                  key: const Key('add-machine-type'),
+                                  onPressed: _addMachineType,
+                                  child: const Text('Add type'),
+                                ),
+                              ),
+                              const Divider(),
+                              DropdownButtonFormField<String>(
+                                key: const Key('machine-type'),
+                                initialValue: selectedMachineTypeId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Machine type',
+                                ),
+                                items: machineTypes
                                     .map(
-                                      (kit) => FilterChip(
-                                        key: Key('machine-kit-${kit.id}'),
-                                        label: Text(kit.name),
-                                        selected: selectedMachineKitIds
-                                            .contains(kit.id),
-                                        onSelected: (selected) => setState(() {
-                                          selected
-                                              ? selectedMachineKitIds.add(
-                                                  kit.id,
-                                                )
-                                              : selectedMachineKitIds.remove(
-                                                  kit.id,
-                                                );
-                                        }),
+                                      (type) => DropdownMenuItem(
+                                        value: type.id,
+                                        child: Text(type.name),
                                       ),
                                     )
                                     .toList(),
+                                onChanged: (value) => setState(
+                                  () => selectedMachineTypeId = value,
+                                ),
                               ),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Wrap(
-                                spacing: 8,
+                              const SizedBox(height: 10),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  if (editingMachineId != null)
-                                    TextButton(
-                                      key: const Key('cancel-machine-edit'),
-                                      onPressed: _clearMachineEditor,
-                                      child: const Text('Cancel'),
-                                    ),
-                                  FilledButton.icon(
-                                    key: const Key('add-machine'),
-                                    onPressed: _addMachine,
-                                    icon: Icon(
-                                      editingMachineId == null
-                                          ? Icons.add_rounded
-                                          : Icons.save_outlined,
-                                    ),
-                                    label: Text(
-                                      editingMachineId == null
-                                          ? 'Add machine'
-                                          : 'Update machine',
+                                  _catalogImagePicker(
+                                    key: const Key('machine-image-picker'),
+                                    bytes: machineImage,
+                                    fallbackIcon:
+                                        Icons.precision_manufacturing_outlined,
+                                    label: 'machine image',
+                                    onChanged: (bytes) =>
+                                        setState(() => machineImage = bytes),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        TextField(
+                                          key: const Key('new-machine-name'),
+                                          controller: machineName,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Name',
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        TextField(
+                                          controller: machineModel,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Model',
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
-                            const Divider(height: 28),
-                            const Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                'EXISTING MACHINES',
-                                style: TextStyle(
-                                  color: Color(0xff929aac),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1.1,
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: machineAddress,
+                                decoration: const InputDecoration(
+                                  labelText: 'Hostname / IP',
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Column(
-                              children: machines.map((machine) {
-                                final type = machineTypes
-                                    .where(
-                                      (value) => value.id == machine.typeId,
-                                    )
-                                    .firstOrNull;
-                                final kitNames = kits
-                                    .where(
-                                      (kit) => machine.kitIds.contains(kit.id),
-                                    )
-                                    .map((kit) => kit.name)
-                                    .join(', ');
-                                return ListTile(
-                                  key: Key('machine-summary-${machine.id}'),
-                                  leading: _LogoAvatar(
-                                    bytes: machine.imageBytes,
-                                    fallbackIcon: Icons.memory_rounded,
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<String?>(
+                                key: const Key('machine-storage-location'),
+                                initialValue: selectedMachineLocationId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Assigned location',
+                                  helperText:
+                                      'Loaded items move to this location.',
+                                ),
+                                items: [
+                                  const DropdownMenuItem<String?>(
+                                    value: null,
+                                    child: Text('No assigned location'),
                                   ),
-                                  title: Text(machine.name),
-                                  subtitle: Text(
-                                    '${type?.name ?? 'Unknown type'}${kitNames.isEmpty ? '' : ' · $kitNames'}${machine.hasTimer
-                                        ? machine.timerFinished(DateTime.now())
-                                              ? ' · Timer finished'
-                                              : ' · Timer running'
-                                        : ''}',
-                                  ),
-                                  trailing: IconButton(
-                                    key: Key('edit-machine-${machine.id}'),
-                                    tooltip: 'Edit machine',
-                                    onPressed: () =>
-                                        _startEditingMachine(machine),
-                                    icon: const Icon(Icons.edit_outlined),
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
-                        ),
-                        'products': ExpansionTile(
-                          key: const Key('catalog-products-section'),
-                          leading: const Icon(Icons.category_outlined),
-                          title: Text('Product templates (${products.length})'),
-                          subtitle: const Text(
-                            'Named products and reusable defaults; these are not filters',
-                          ),
-                          children: [
-                            DropdownButtonFormField<String>(
-                              key: const Key('product-brand'),
-                              initialValue: productBrandId,
-                              decoration: const InputDecoration(
-                                labelText: 'Brand',
-                              ),
-                              items: brands
-                                  .where((brand) => !brand.archived)
-                                  .map(
-                                    (brand) => DropdownMenuItem(
-                                      value: brand.id,
-                                      child: Text(brand.name),
+                                  for (final location in widget.locations)
+                                    DropdownMenuItem<String?>(
+                                      value: location.id,
+                                      child: Text(location.name),
                                     ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) => setState(() {
-                                productBrandId = value;
-                                productCategory = null;
-                                productCustomTypeId = null;
-                              }),
-                            ),
-                            if (_productBrand != null) ...[
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 8,
-                                children:
-                                    _productBrand!.categories
-                                        .where(
-                                          (category) =>
-                                              category != InventoryType.custom,
-                                        )
-                                        .map(
-                                          (category) => ChoiceChip(
+                                ],
+                                onChanged: (value) => setState(
+                                  () => selectedMachineLocationId = value,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                key: const Key('machine-filament-slots'),
+                                controller: machineFilamentSlots,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'Filament slots (optional)',
+                                  helperText:
+                                      'Leave blank for unlimited colors.',
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Associated kits',
+                                  style: Theme.of(context).textTheme.labelLarge,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              if (kits.isEmpty)
+                                const Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    'Define a kit below before associating it.',
+                                    style: TextStyle(color: Color(0xff929aac)),
+                                  ),
+                                )
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: kits
+                                      .map(
+                                        (kit) => FilterChip(
+                                          key: Key('machine-kit-${kit.id}'),
+                                          label: Text(kit.name),
+                                          selected: selectedMachineKitIds
+                                              .contains(kit.id),
+                                          onSelected: (selected) =>
+                                              setState(() {
+                                                selected
+                                                    ? selectedMachineKitIds.add(
+                                                        kit.id,
+                                                      )
+                                                    : selectedMachineKitIds
+                                                          .remove(kit.id);
+                                              }),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    if (editingMachineId != null)
+                                      TextButton(
+                                        key: const Key('cancel-machine-edit'),
+                                        onPressed: _clearMachineEditor,
+                                        child: const Text('Cancel'),
+                                      ),
+                                    FilledButton.icon(
+                                      key: const Key('add-machine'),
+                                      onPressed: _addMachine,
+                                      icon: Icon(
+                                        editingMachineId == null
+                                            ? Icons.add_rounded
+                                            : Icons.save_outlined,
+                                      ),
+                                      label: Text(
+                                        editingMachineId == null
+                                            ? 'Add machine'
+                                            : 'Update machine',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Divider(height: 28),
+                              const Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'EXISTING MACHINES',
+                                  style: TextStyle(
+                                    color: Color(0xff929aac),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.1,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              ReorderableListView(
+                                key: const Key('reorder-machines'),
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                buildDefaultDragHandles: false,
+                                onReorderItem: (oldIndex, newIndex) =>
+                                    _reorderCatalogRecords(
+                                      machines,
+                                      oldIndex,
+                                      newIndex,
+                                      widget.onMachineOrderChanged,
+                                    ),
+                                children: [
+                                  for (final (index, machine)
+                                      in machines.indexed)
+                                    ListTile(
+                                      key: Key('machine-summary-${machine.id}'),
+                                      leading: _LogoAvatar(
+                                        bytes: machine.imageBytes,
+                                        fallbackIcon: Icons.memory_rounded,
+                                      ),
+                                      title: Text(machine.name),
+                                      subtitle: Text(
+                                        _machineCatalogSummary(machine),
+                                      ),
+                                      trailing: Wrap(
+                                        spacing: 2,
+                                        children: [
+                                          ReorderableDragStartListener(
                                             key: Key(
-                                              'product-category-${category.name}',
+                                              'drag-machine-${machine.id}',
                                             ),
-                                            label: Text(
-                                              _catalogInventoryTypeLabel(
-                                                category,
+                                            index: index,
+                                            child: Tooltip(
+                                              message:
+                                                  'Drag to reorder ${machine.name}',
+                                              child: const Padding(
+                                                padding: EdgeInsets.all(10),
+                                                child: Icon(
+                                                  Icons.drag_indicator_rounded,
+                                                ),
                                               ),
                                             ),
-                                            selected:
-                                                productCategory == category,
-                                            onSelected: (_) => setState(() {
-                                              productCategory = category;
-                                              productCustomTypeId = null;
-                                            }),
                                           ),
-                                        )
-                                        .toList()
-                                      ..addAll([
-                                        for (final customType
-                                            in customItemTypes.where(
-                                              (type) => _productBrand!
-                                                  .customTypeIds
-                                                  .contains(type.id),
-                                            ))
-                                          ChoiceChip(
+                                          IconButton(
                                             key: Key(
-                                              'product-custom-type-${customType.id}',
+                                              'edit-machine-${machine.id}',
                                             ),
-                                            label: Text(customType.name),
-                                            selected:
-                                                productCategory ==
-                                                    InventoryType.custom &&
-                                                productCustomTypeId ==
-                                                    customType.id,
-                                            onSelected: (_) => setState(() {
-                                              productCategory =
-                                                  InventoryType.custom;
-                                              productCustomTypeId =
-                                                  customType.id;
-                                            }),
+                                            tooltip: 'Edit machine',
+                                            onPressed: () =>
+                                                _startEditingMachine(machine),
+                                            icon: const Icon(
+                                              Icons.edit_outlined,
+                                            ),
                                           ),
-                                      ]),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            TextField(
-                              key: const Key('new-product-name'),
-                              controller: productName,
-                              decoration: const InputDecoration(
-                                labelText: 'Product name',
-                                hintText: 'PolyLite PLA Pro',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            _ImagePickerButton(
-                              key: const Key('product-image-picker'),
-                              label: 'Product icon / image',
-                              bytes: productImage,
-                              fallbackIcon: Icons.inventory_2_outlined,
-                              onChanged: (bytes) =>
-                                  setState(() => productImage = bytes),
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: productCost,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
-                                        ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Default cost',
-                                      prefixText: r'$ ',
+                                        ],
+                                      ),
                                     ),
-                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                          'products': ExpansionTile(
+                            key: const Key('catalog-products-section'),
+                            leading: const _RgbAccentIcon(
+                              Icons.category_outlined,
+                            ),
+                            title: Text(
+                              'Product templates (${products.length})',
+                            ),
+                            subtitle: const Text(
+                              'Named products and reusable defaults; these are not filters',
+                            ),
+                            children: [
+                              DropdownButtonFormField<String>(
+                                key: const Key('product-brand'),
+                                initialValue: productBrandId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Brand',
                                 ),
-                                if (productCategory?.supportsDrying ==
-                                    true) ...[
-                                  const SizedBox(width: 10),
+                                items: brands
+                                    .where((brand) => !brand.archived)
+                                    .map(
+                                      (brand) => DropdownMenuItem(
+                                        value: brand.id,
+                                        child: Text(brand.name),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) => setState(() {
+                                  productBrandId = value;
+                                  productCategory = null;
+                                  productCustomTypeId = null;
+                                }),
+                              ),
+                              if (_productBrand != null) ...[
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 8,
+                                  children:
+                                      _productBrand!.categories
+                                          .where(
+                                            (category) =>
+                                                category !=
+                                                InventoryType.custom,
+                                          )
+                                          .map(
+                                            (category) => ChoiceChip(
+                                              key: Key(
+                                                'product-category-${category.name}',
+                                              ),
+                                              label: Text(
+                                                _catalogInventoryTypeLabel(
+                                                  category,
+                                                ),
+                                              ),
+                                              selected:
+                                                  productCategory == category,
+                                              onSelected: (_) => setState(() {
+                                                productCategory = category;
+                                                productCustomTypeId = null;
+                                              }),
+                                            ),
+                                          )
+                                          .toList()
+                                        ..addAll([
+                                          for (final customType
+                                              in customItemTypes.where(
+                                                (type) => _productBrand!
+                                                    .customTypeIds
+                                                    .contains(type.id),
+                                              ))
+                                            ChoiceChip(
+                                              key: Key(
+                                                'product-custom-type-${customType.id}',
+                                              ),
+                                              label: Text(customType.name),
+                                              selected:
+                                                  productCategory ==
+                                                      InventoryType.custom &&
+                                                  productCustomTypeId ==
+                                                      customType.id,
+                                              onSelected: (_) => setState(() {
+                                                productCategory =
+                                                    InventoryType.custom;
+                                                productCustomTypeId =
+                                                    customType.id;
+                                              }),
+                                            ),
+                                        ]),
+                                ),
+                              ],
+                              const SizedBox(height: 12),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _catalogImagePicker(
+                                    key: const Key('product-image-picker'),
+                                    bytes: productImage,
+                                    fallbackIcon: Icons.inventory_2_outlined,
+                                    label: 'product image',
+                                    onChanged: (bytes) =>
+                                        setState(() => productImage = bytes),
+                                  ),
+                                  const SizedBox(width: 12),
                                   Expanded(
                                     child: TextField(
-                                      controller: productDrying,
-                                      keyboardType: TextInputType.number,
+                                      key: const Key('new-product-name'),
+                                      controller: productName,
                                       decoration: const InputDecoration(
-                                        labelText: 'Drying duration',
-                                        suffixText: 'min',
+                                        labelText: 'Product name',
+                                        hintText: 'PolyLite PLA Pro',
                                       ),
                                     ),
                                   ),
                                 ],
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: productCost,
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      decoration: const InputDecoration(
+                                        labelText: 'Default cost',
+                                        prefixText: r'$ ',
+                                      ),
+                                    ),
+                                  ),
+                                  if (productCategory?.supportsDrying ==
+                                      true) ...[
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: productDrying,
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Drying duration',
+                                          suffixText: 'min',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              if (productCategory?.supportsPrinting ==
+                                  true) ...[
+                                const SizedBox(height: 10),
+                                TextField(
+                                  controller: printing,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Printing instructions',
+                                  ),
+                                ),
                               ],
-                            ),
-                            if (productCategory?.supportsPrinting == true) ...[
+                              if (productCategory?.supportsDrying == true) ...[
+                                const SizedBox(height: 10),
+                                TextField(
+                                  controller: drying,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Drying instructions',
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 10),
                               TextField(
-                                controller: printing,
+                                controller: storage,
                                 decoration: const InputDecoration(
-                                  labelText: 'Printing instructions',
+                                  labelText: 'Storage instructions',
                                 ),
                               ),
-                            ],
-                            if (productCategory?.supportsDrying == true) ...[
-                              const SizedBox(height: 10),
-                              TextField(
-                                controller: drying,
-                                decoration: const InputDecoration(
-                                  labelText: 'Drying instructions',
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: FilledButton.icon(
+                                  key: const Key('add-product'),
+                                  onPressed: _addProduct,
+                                  icon: const Icon(Icons.add_rounded),
+                                  label: const Text('Add product'),
                                 ),
                               ),
+                              const SizedBox(height: 20),
                             ],
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: storage,
-                              decoration: const InputDecoration(
-                                labelText: 'Storage instructions',
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: FilledButton.icon(
-                                key: const Key('add-product'),
-                                onPressed: _addProduct,
-                                icon: const Icon(Icons.add_rounded),
-                                label: const Text('Add product'),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                          ],
-                        ),
-                        'kits': ExpansionTile(
-                          key: const Key('catalog-kits-section'),
-                          onExpansionChanged: (expanded) =>
-                              setState(() => kitSectionExpanded = expanded),
-                          leading: const Icon(Icons.inventory_2_outlined),
-                          title: Text('Kits (${kits.length})'),
-                          subtitle: const Text('Reusable bills of materials'),
-                          children: _kitEditorWidgets(includeKitList: true),
-                        ),
-                        'materials': _materialsSection(),
-                      };
-                      const labels = {
-                        'types': 'Item types',
-                        'materials': 'Materials',
-                        'machines': 'Machines',
-                        'kits': 'Kits',
-                        'spools': 'Spool sizes',
-                        'vendors': 'Vendors',
-                        'brands': 'Brands',
-                        'products': 'Product templates',
-                      };
-                      return [
-                        for (final (index, key)
-                            in _orderedCatalogSectionKeys.indexed)
-                          _reorderableCatalogSection(
-                            key: key,
-                            label: labels[key]!,
-                            index: index,
-                            child: sections[key]!,
                           ),
-                      ];
-                    }(),
+                          'kits': ExpansionTile(
+                            key: const Key('catalog-kits-section'),
+                            onExpansionChanged: (expanded) =>
+                                setState(() => kitSectionExpanded = expanded),
+                            leading: const _RgbAccentIcon(
+                              Icons.inventory_2_outlined,
+                            ),
+                            title: Text('Kits (${kits.length})'),
+                            subtitle: const Text('Reusable bills of materials'),
+                            children: _kitEditorWidgets(includeKitList: true),
+                          ),
+                          'materials': _materialsSection(),
+                        };
+                        const labels = {
+                          'types': 'Item types',
+                          'materials': 'Materials',
+                          'machines': 'Machines',
+                          'kits': 'Kits',
+                          'spools': 'Spool sizes',
+                          'vendors': 'Vendors',
+                          'brands': 'Brands',
+                          'products': 'Product templates',
+                        };
+                        return [
+                          for (final (index, key)
+                              in _orderedCatalogSectionKeys.indexed)
+                            _reorderableCatalogSection(
+                              key: key,
+                              label: labels[key]!,
+                              index: index,
+                              child: sections[key]!,
+                            ),
+                        ];
+                      }(),
+                    ),
                   ),
           ),
           if (kitSectionExpanded && !loadingInitialKit)
@@ -37131,7 +37664,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   Widget _itemTypesSection() => ExpansionTile(
     key: const Key('catalog-item-types-section'),
-    leading: const Icon(Icons.tune_rounded),
+    leading: const _RgbAccentIcon(Icons.tune_rounded),
     title: Text(
       'Item types (${_builtInCatalogTypes.length + customItemTypes.length})',
     ),
@@ -37157,28 +37690,30 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
           ],
         ),
       ),
-      SizedBox(
-        height: _builtInCatalogTypes.length * 72.0,
-        child: ReorderableListView(
-          key: const Key('reorder-built-in-types'),
-          buildDefaultDragHandles: false,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          onReorderItem: (oldIndex, newIndex) {
-            final ordered = _builtInCatalogTypes
-                .map((type) => type.key)
-                .toList();
-            final moved = ordered.removeAt(oldIndex);
-            ordered.insert(newIndex, moved);
-            setState(() {
-              builtInTypeOrder
-                ..clear()
-                ..addAll(ordered);
-            });
-            widget.onBuiltInTypesReordered(List.unmodifiable(ordered));
-          },
-          children: [
-            for (final (index, type) in _builtInCatalogTypes.indexed)
+      ReorderableListView(
+        key: const Key('reorder-built-in-types'),
+        buildDefaultDragHandles: false,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        onReorderItem: (oldIndex, newIndex) {
+          final ordered = _orderedCatalogTypeEntries
+              .map(_catalogTypeEntryKey)
+              .toList();
+          if (oldIndex < newIndex) newIndex--;
+          final moved = ordered.removeAt(oldIndex);
+          ordered.insert(newIndex, moved);
+          setState(() {
+            builtInTypeOrder
+              ..clear()
+              ..addAll(ordered);
+          });
+          widget.onBuiltInTypesReordered(List.unmodifiable(ordered));
+        },
+        children: [
+          for (final (index, entry) in _orderedCatalogTypeEntries.indexed)
+            if (entry
+                case final ({String key, String defaultLabel, IconData icon})
+                    type)
               ListTile(
                 key: ValueKey('built-in-type-row-${type.key}'),
                 contentPadding: EdgeInsets.zero,
@@ -37190,12 +37725,13 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                 title: Text(_builtInTypeLabel(type)),
                 subtitle: Text(
                   [
-                    'Item type',
+                    _isCatalogViewType(type) ? 'Catalog view' : 'Item type',
                     if (_typeShowsStatus(type.key, typeStatusSettings))
                       'Shows status',
                     if (type.key.startsWith('item:') &&
                         _typeCanMarkDepleted(type.key, typeDepletionSettings))
                       'Can be marked depleted',
+                    if (_supportsTimerDisplay(type)) 'Timer style',
                   ].join(' · '),
                 ),
                 trailing: Wrap(
@@ -37218,6 +37754,21 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                       onPressed: () => _editBuiltInType(type),
                       icon: const Icon(Icons.edit_outlined),
                     ),
+                    if (_supportsTimerDisplay(type))
+                      IconButton(
+                        key: Key(
+                          'edit-built-in-type-timer-display-${type.key}',
+                        ),
+                        tooltip: 'Timer display for ${_builtInTypeLabel(type)}',
+                        onPressed: () => _editTypeTimerDisplay(
+                          typeKey: type.key,
+                          typeName: _builtInTypeLabel(type),
+                          controlKey: Key(
+                            'built-in-type-timer-display-${type.key}',
+                          ),
+                        ),
+                        icon: const Icon(Icons.timer_outlined),
+                      ),
                     IconButton(
                       key: Key('delete-built-in-type-${type.key}'),
                       tooltip: widget.canDeleteCustomItemTypes
@@ -37231,53 +37782,72 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                   ],
                 ),
               ),
-          ],
-        ),
+          for (final (index, entry) in _orderedCatalogTypeEntries.indexed)
+            if (entry case final CustomItemTypeRecord type)
+              ListTile(
+                key: Key('custom-type-row-${type.id}'),
+                contentPadding: EdgeInsets.zero,
+                leading: _typeIconVisual(
+                  type.iconKey,
+                  Icons.tune_rounded,
+                  size: 24,
+                ),
+                title: Text(type.name),
+                subtitle: Text(
+                  [
+                    'Item type',
+                    if (type.contextualFields.isNotEmpty)
+                      type.contextualFields.join(', '),
+                    if (type.canMarkDepleted) 'Can be marked depleted',
+                    if (type.showsStatus) 'Shows status',
+                    '${widget.customTypeUsageCounts[type.id] ?? 0} inventory items',
+                  ].join(' · '),
+                ),
+                trailing: Wrap(
+                  spacing: 2,
+                  children: [
+                    ReorderableDragStartListener(
+                      key: Key('drag-custom-type-${type.id}'),
+                      index: index,
+                      child: Tooltip(
+                        message: 'Drag to reorder ${type.name}',
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.drag_indicator_rounded),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      key: Key('edit-custom-type-${type.id}'),
+                      tooltip: 'Edit ${type.name}',
+                      onPressed: () => _editCustomItemType(type),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    IconButton(
+                      key: Key('edit-custom-type-timer-display-${type.id}'),
+                      tooltip: 'Timer display for ${type.name}',
+                      onPressed: () => _editTypeTimerDisplay(
+                        typeKey: 'custom:${type.id}',
+                        typeName: type.name,
+                        controlKey: Key('custom-type-timer-display-${type.id}'),
+                      ),
+                      icon: const Icon(Icons.timer_outlined),
+                    ),
+                    IconButton(
+                      key: Key('delete-custom-type-${type.id}'),
+                      tooltip: widget.canDeleteCustomItemTypes
+                          ? 'Delete ${type.name}'
+                          : 'Only the database owner can delete types',
+                      onPressed: widget.canDeleteCustomItemTypes
+                          ? () => _deleteCustomItemType(type)
+                          : null,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
+                ),
+              ),
+        ],
       ),
-      for (final type in customItemTypes)
-        ListTile(
-          key: Key('custom-type-row-${type.id}'),
-          contentPadding: EdgeInsets.zero,
-          leading: _typeIconVisual(type.iconKey, Icons.tune_rounded, size: 24),
-          title: Text(type.name),
-          subtitle: Text(
-            [
-              'Item type',
-              if (type.contextualFields.isNotEmpty)
-                type.contextualFields.join(', '),
-              if (type.canMarkDepleted) 'Can be marked depleted',
-              if (type.showsStatus) 'Shows status',
-              '${widget.customTypeUsageCounts[type.id] ?? 0} inventory items',
-            ].join(' · '),
-          ),
-          trailing: Wrap(
-            spacing: 2,
-            children: [
-              IconButton(
-                key: Key('edit-custom-type-${type.id}'),
-                tooltip: 'Edit ${type.name}',
-                onPressed: () => _editCustomItemType(type),
-                icon: const Icon(Icons.edit_outlined),
-              ),
-              IconButton(
-                key: Key('edit-custom-type-timer-display-${type.id}'),
-                tooltip: 'Timer display for ${type.name}',
-                onPressed: () => _editCustomTypeTimerDisplay(type),
-                icon: const Icon(Icons.timer_outlined),
-              ),
-              IconButton(
-                key: Key('delete-custom-type-${type.id}'),
-                tooltip: widget.canDeleteCustomItemTypes
-                    ? 'Delete ${type.name}'
-                    : 'Only the database owner can delete types',
-                onPressed: widget.canDeleteCustomItemTypes
-                    ? () => _deleteCustomItemType(type)
-                    : null,
-                icon: const Icon(Icons.delete_outline_rounded),
-              ),
-            ],
-          ),
-        ),
       const SizedBox(height: 16),
     ],
   );
@@ -37304,7 +37874,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   Widget _materialsSection() => ExpansionTile(
     key: const Key('catalog-materials-section'),
-    leading: const Icon(Icons.layers_outlined),
+    leading: const _RgbAccentIcon(Icons.layers_outlined),
     title: Text('Materials (${materials.length})'),
     subtitle: const Text('Type-specific item subtypes'),
     children: [
@@ -37349,42 +37919,62 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         ],
       ),
       const SizedBox(height: 14),
-      for (final material
-          in ([...materials]..sort((a, b) {
-            final typeOrder = _materialTypeLabel(a.typeKey)
-                .compareTo(_materialTypeLabel(b.typeKey));
-            return typeOrder != 0 ? typeOrder : a.name.compareTo(b.name);
-          })))
-        ListTile(
-          key: Key('material-row-${material.id}'),
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.layers_outlined),
-          title: Text(material.name),
-          subtitle: Text(
-            '${_materialTypeLabel(material.typeKey)} · ${_materialUsageCount(material)} items',
-          ),
-          trailing: Wrap(
-            spacing: 2,
-            children: [
-              IconButton(
-                key: Key('edit-material-${material.id}'),
-                tooltip: 'Edit ${material.name}',
-                onPressed: () => _editMaterial(material),
-                icon: const Icon(Icons.edit_outlined),
-              ),
-              IconButton(
-                key: Key('delete-material-${material.id}'),
-                tooltip: widget.canDeleteCustomItemTypes
-                    ? 'Delete ${material.name}'
-                    : 'Only the database owner can delete materials',
-                onPressed: widget.canDeleteCustomItemTypes
-                    ? () => _deleteMaterial(material)
-                    : null,
-                icon: const Icon(Icons.delete_outline_rounded),
-              ),
-            ],
-          ),
+      ReorderableListView(
+        key: const Key('reorder-materials'),
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        buildDefaultDragHandles: false,
+        onReorderItem: (oldIndex, newIndex) => _reorderCatalogRecords(
+          materials,
+          oldIndex,
+          newIndex,
+          widget.onMaterialOrderChanged,
         ),
+        children: [
+          for (final (index, material) in materials.indexed)
+            ListTile(
+              key: Key('material-row-${material.id}'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.layers_outlined),
+              title: Text(material.name),
+              subtitle: Text(
+                '${_materialTypeLabel(material.typeKey)} · ${_materialUsageCount(material)} items',
+              ),
+              trailing: Wrap(
+                spacing: 2,
+                children: [
+                  ReorderableDragStartListener(
+                    key: Key('drag-material-${material.id}'),
+                    index: index,
+                    child: Tooltip(
+                      message: 'Drag to reorder ${material.name}',
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(Icons.drag_indicator_rounded),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: Key('edit-material-${material.id}'),
+                    tooltip: 'Edit ${material.name}',
+                    onPressed: () => _editMaterial(material),
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
+                    key: Key('delete-material-${material.id}'),
+                    tooltip: widget.canDeleteCustomItemTypes
+                        ? 'Delete ${material.name}'
+                        : 'Only the database owner can delete materials',
+                    onPressed: widget.canDeleteCustomItemTypes
+                        ? () => _deleteMaterial(material)
+                        : null,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
       const SizedBox(height: 16),
     ],
   );
@@ -37397,6 +37987,39 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             item.masterSpoolMaterialId == material.id,
       )
       .length;
+
+  Widget _catalogCompactSwitch({
+    required Key key,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        _manufacturerSwitch(key: key, value: value, onChanged: onChanged),
+      ],
+    ),
+  );
 
   Widget _newCustomTypeForm() => Column(
     children: [
@@ -37467,39 +38090,54 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       ),
       const SizedBox(height: 10),
       if (customTypeLinkKey.isEmpty) ...[
-        SwitchListTile.adaptive(
+        _catalogCompactSwitch(
           key: const Key('new-custom-type-can-mark-depleted'),
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Allow “Mark depleted”'),
-          subtitle: const Text(
-            'Use for consumable item types that are exhausted rather than destroyed.',
-          ),
+          title: 'Allow “Mark depleted”',
+          subtitle: 'Use for consumable item types that are exhausted rather than destroyed.',
           value: customTypeCanMarkDepleted,
           onChanged: (value) =>
               setState(() => customTypeCanMarkDepleted = value),
         ),
-        const SizedBox(height: 10),
-        SwitchListTile.adaptive(
+        _catalogCompactSwitch(
           key: const Key('new-custom-type-shows-status'),
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Show item status'),
-          subtitle: const Text(
-            'Show Ready or Deployed status for items of this type.',
-          ),
+          title: 'Show item status',
+          subtitle: 'Show Ready or Deployed status for items of this type.',
           value: customTypeShowsStatus,
           onChanged: (value) => setState(() => customTypeShowsStatus = value),
         ),
-        const SizedBox(height: 10),
-        SwitchListTile.adaptive(
+        _catalogCompactSwitch(
           key: const Key('new-custom-type-lists-material'),
-          contentPadding: EdgeInsets.zero,
-          title: const Text('List material'),
-          subtitle: const Text(
-            'Show the Material selector for this item type.',
-          ),
+          title: 'List material',
+          subtitle: 'Show the Material selector for this item type.',
           value: customTypeListsMaterial,
           onChanged: (value) => setState(() => customTypeListsMaterial = value),
         ),
+        const SizedBox(height: 10),
+        _catalogCompactSwitch(
+          key: const Key('new-custom-type-uses-timer-widget'),
+          title: 'Uses timer widget',
+          subtitle: 'Show a timer control for items of this type.',
+          value: customTypeUsesTimerWidget,
+          onChanged: (value) => setState(() {
+            customTypeUsesTimerWidget = value;
+            if (!value) customTypeTimerDisplay = null;
+          }),
+        ),
+        if (customTypeUsesTimerWidget) ...[
+          const SizedBox(height: 10),
+          DropdownButtonFormField<MachineTimerDisplay>(
+            key: const Key('new-custom-type-timer-display'),
+            initialValue: customTypeTimerDisplay ?? MachineTimerDisplay.circle,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Timer style'),
+            items: [
+              for (final display in MachineTimerDisplay.values)
+                DropdownMenuItem(value: display, child: Text(display.label)),
+            ],
+            onChanged: (value) =>
+                setState(() => customTypeTimerDisplay = value),
+          ),
+        ],
         const SizedBox(height: 10),
       ],
       Align(
@@ -37708,19 +38346,26 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   }
 
   List<Widget> _kitEditorWidgets({required bool includeKitList}) => [
-    TextField(
-      key: const Key('new-kit-name'),
-      controller: kitName,
-      decoration: InputDecoration(
-        labelText: editingKitId == null ? 'Kit name' : 'Editing kit name',
-        errorText: kitNameError,
-      ),
-      onChanged: (_) {
-        if (kitNameError != null) setState(() => kitNameError = null);
-      },
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _kitImagePicker(),
+        const SizedBox(width: 12),
+        Expanded(
+          child: TextField(
+            key: const Key('new-kit-name'),
+            controller: kitName,
+            decoration: InputDecoration(
+              labelText: editingKitId == null ? 'Kit name' : 'Editing kit name',
+              errorText: kitNameError,
+            ),
+            onChanged: (_) {
+              if (kitNameError != null) setState(() => kitNameError = null);
+            },
+          ),
+        ),
+      ],
     ),
-    const SizedBox(height: 12),
-    _kitImagePicker(),
     const SizedBox(height: 12),
     _kitSectionsEditor(),
     Align(
@@ -37748,30 +38393,59 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         ),
       ),
       const SizedBox(height: 8),
-      ...kits.map(
-        (kit) => ListTile(
-          key: Key('kit-summary-${kit.id}'),
-          leading: _LogoAvatar(
-            bytes: kit.imageBytes,
-            fallbackIcon: Icons.inventory_2_outlined,
-          ),
-          title: Text(kit.name),
-          subtitle: Text('${kit.bom.length} BOM lines'),
-          trailing: IconButton(
-            key: Key('edit-kit-${kit.id}'),
-            tooltip: 'Edit kit',
-            onPressed: () => _startEditingKit(kit),
-            icon: const Icon(Icons.edit_outlined),
-          ),
+      ReorderableListView(
+        key: const Key('reorder-kits'),
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        buildDefaultDragHandles: false,
+        onReorderItem: (oldIndex, newIndex) => _reorderCatalogRecords(
+          kits,
+          oldIndex,
+          newIndex,
+          widget.onKitOrderChanged,
         ),
+        children: [
+          for (final (index, kit) in kits.indexed)
+            ListTile(
+              key: Key('kit-summary-${kit.id}'),
+              leading: _LogoAvatar(
+                bytes: kit.imageBytes,
+                fallbackIcon: Icons.inventory_2_outlined,
+              ),
+              title: Text(kit.name),
+              subtitle: Text('${kit.bom.length} BOM lines'),
+              trailing: Wrap(
+                spacing: 2,
+                children: [
+                  ReorderableDragStartListener(
+                    key: Key('drag-kit-${kit.id}'),
+                    index: index,
+                    child: Tooltip(
+                      message: 'Drag to reorder ${kit.name}',
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(Icons.drag_indicator_rounded),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: Key('edit-kit-${kit.id}'),
+                    tooltip: 'Edit kit',
+                    onPressed: () => _startEditingKit(kit),
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
       const SizedBox(height: 16),
     ],
   ];
 
-  Widget _kitImagePicker() => _ImagePickerButton(
+  Widget _kitImagePicker() => _catalogImagePicker(
     key: const Key('kit-image-picker'),
-    label: 'Kit image',
+    label: 'kit image',
     bytes: kitImage,
     fallbackIcon: Icons.inventory_2_outlined,
     onChanged: (bytes) => setState(() => kitImage = bytes),
@@ -38024,60 +38698,114 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   }
 
   Future<void> _editCustomItemType(CustomItemTypeRecord type) async {
-    final updated = await showDialog<CustomItemTypeRecord>(
-      context: context,
-      builder: (_) => _CustomItemTypeEditorDialog(
-        type: type,
-        existingNames: customItemTypes
-            .where((candidate) => candidate.id != type.id)
-            .map((candidate) => candidate.name)
-            .toSet(),
-      ),
-    );
+    final updated =
+        await showDialog<
+          ({
+            CustomItemTypeRecord type,
+            bool usesTimerWidget,
+            MachineTimerDisplay? timerDisplay,
+          })
+        >(
+          context: context,
+          builder: (_) => _CustomItemTypeEditorDialog(
+            type: type,
+            initialUsesTimerWidget: typeTimerDisplaySettings.containsKey(
+              'custom:${type.id}',
+            ),
+            initialTimerDisplay: MachineTimerDisplay.values
+                .where(
+                  (display) =>
+                      display.name ==
+                      typeTimerDisplaySettings['custom:${type.id}'],
+                )
+                .firstOrNull,
+            existingNames: customItemTypes
+                .where((candidate) => candidate.id != type.id)
+                .map((candidate) => candidate.name)
+                .toSet(),
+          ),
+        );
     if (updated == null || !mounted) return;
     setState(() {
       final index = customItemTypes.indexWhere(
-        (candidate) => candidate.id == updated.id,
+        (candidate) => candidate.id == updated.type.id,
       );
-      if (index >= 0) customItemTypes[index] = updated;
+      if (index >= 0) customItemTypes[index] = updated.type;
       customItemTypes.sort((a, b) => a.name.compareTo(b.name));
+      final key = 'custom:${updated.type.id}';
+      if (updated.usesTimerWidget) {
+        typeTimerDisplaySettings[key] =
+            (updated.timerDisplay ?? MachineTimerDisplay.circle).name;
+      } else {
+        typeTimerDisplaySettings.remove(key);
+      }
     });
-    widget.onCustomItemTypeUpdated(updated);
+    widget.onCustomItemTypeUpdated(updated.type);
+    widget.onBuiltInTypeTimerDisplayChanged(
+      MapEntry(
+        'custom:${updated.type.id}',
+        updated.usesTimerWidget
+            ? (updated.timerDisplay ?? MachineTimerDisplay.circle).name
+            : null,
+      ),
+    );
   }
 
-  Future<void> _editCustomTypeTimerDisplay(CustomItemTypeRecord type) async {
-    final key = 'custom:${type.id}';
+  Future<void> _editTypeTimerDisplay({
+    required String typeKey,
+    required String typeName,
+    required Key controlKey,
+  }) async {
+    final key = typeKey;
     final current = MachineTimerDisplay.values
         .where((display) => display.name == typeTimerDisplaySettings[key])
         .firstOrNull;
     final result =
-        await showDialog<({bool apply, MachineTimerDisplay? display})>(
+        await showDialog<
+          ({bool apply, bool enabled, MachineTimerDisplay display})
+        >(
           context: context,
           builder: (dialogContext) {
-            var selected = current;
+            var enabled = typeTimerDisplaySettings.containsKey(key);
+            var selected = current ?? MachineTimerDisplay.circle;
             return StatefulBuilder(
               builder: (context, setDialogState) => AlertDialog(
-                title: Text('${type.name} timer display'),
-                content: DropdownButtonFormField<MachineTimerDisplay?>(
-                  key: Key('custom-type-timer-display-${type.id}'),
-                  initialValue: selected,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Timer display',
-                    helperText: 'Use Personalization unless this type needs its own style.',
-                  ),
-                  items: [
-                    const DropdownMenuItem<MachineTimerDisplay?>(
-                      value: null,
-                      child: Text('Use Personalization'),
-                    ),
-                    for (final display in MachineTimerDisplay.values)
-                      DropdownMenuItem<MachineTimerDisplay?>(
-                        value: display,
-                        child: Text(display.label),
+                title: Text('$typeName timer display'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwitchListTile.adaptive(
+                      key: Key('$key-uses-timer-widget'),
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Uses timer widget'),
+                      subtitle: const Text(
+                        'Enable a timer widget for this type.',
                       ),
+                      value: enabled,
+                      onChanged: (value) =>
+                          setDialogState(() => enabled = value),
+                    ),
+                    if (enabled) ...[
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<MachineTimerDisplay>(
+                        key: controlKey,
+                        initialValue: selected,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Timer style',
+                        ),
+                        items: [
+                          for (final display in MachineTimerDisplay.values)
+                            DropdownMenuItem(
+                              value: display,
+                              child: Text(display.label),
+                            ),
+                        ],
+                        onChanged: (value) =>
+                            setDialogState(() => selected = value!),
+                      ),
+                    ],
                   ],
-                  onChanged: (value) => setDialogState(() => selected = value),
                 ),
                 actions: [
                   TextButton(
@@ -38087,6 +38815,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                   FilledButton(
                     onPressed: () => Navigator.pop(dialogContext, (
                       apply: true,
+                      enabled: enabled,
                       display: selected,
                     )),
                     child: const Text('Save'),
@@ -38096,16 +38825,21 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             );
           },
         );
-    if (!mounted || result == null || result.display == current) return;
+    if (!mounted ||
+        result == null ||
+        (result.enabled == typeTimerDisplaySettings.containsKey(key) &&
+            result.display == current)) {
+      return;
+    }
     setState(() {
-      if (result.display == null) {
+      if (!result.enabled) {
         typeTimerDisplaySettings.remove(key);
       } else {
-        typeTimerDisplaySettings[key] = result.display!.name;
+        typeTimerDisplaySettings[key] = result.display.name;
       }
     });
     widget.onBuiltInTypeTimerDisplayChanged(
-      MapEntry(key, result.display?.name),
+      MapEntry(key, result.enabled ? result.display.name : null),
     );
   }
 
@@ -38126,6 +38860,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             bool canMarkDepleted,
             bool showsStatus,
             bool listsMaterial,
+            bool usesTimerWidget,
             MachineTimerDisplay? timerDisplay,
           })
         >(
@@ -38148,10 +38883,13 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                       display.name == typeTimerDisplaySettings[type.key],
                 )
                 .firstOrNull,
+            initialUsesTimerWidget: typeTimerDisplaySettings.containsKey(
+              type.key,
+            ),
             showDepletionSetting: type.key.startsWith('item:'),
             showStatusSetting: type.key.startsWith('item:'),
             showMaterialListingSetting: type.key.startsWith('item:'),
-            showTimerDisplaySetting: type.key.startsWith('item:'),
+            showTimerDisplaySetting: _supportsTimerDisplay(type),
             existingNames: existingNames,
           ),
         );
@@ -38163,10 +38901,13 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         typeDepletionSettings[type.key] = updated.canMarkDepleted;
         typeStatusSettings[type.key] = updated.showsStatus;
         typeMaterialListingSettings[type.key] = updated.listsMaterial;
-        if (updated.timerDisplay == null) {
+      }
+      if (_supportsTimerDisplay(type)) {
+        if (!updated.usesTimerWidget) {
           typeTimerDisplaySettings.remove(type.key);
         } else {
-          typeTimerDisplaySettings[type.key] = updated.timerDisplay!.name;
+          typeTimerDisplaySettings[type.key] =
+              (updated.timerDisplay ?? MachineTimerDisplay.circle).name;
         }
       }
     });
@@ -38182,8 +38923,15 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       widget.onBuiltInTypeMaterialListingChanged(
         MapEntry(type.key, updated.listsMaterial),
       );
+    }
+    if (_supportsTimerDisplay(type)) {
       widget.onBuiltInTypeTimerDisplayChanged(
-        MapEntry(type.key, updated.timerDisplay?.name),
+        MapEntry(
+          type.key,
+          updated.usesTimerWidget
+              ? (updated.timerDisplay ?? MachineTimerDisplay.circle).name
+              : null,
+        ),
       );
     }
   }
@@ -38284,6 +39032,8 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         customTypeCanMarkDepleted = false;
         customTypeShowsStatus = false;
         customTypeListsMaterial = false;
+        customTypeTimerDisplay = null;
+        customTypeUsesTimerWidget = false;
         customTypeLinkKey = '';
       });
       widget.onBuiltInTypeRenamed(MapEntry(key, name));
@@ -38311,6 +39061,9 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       showsStatus: customTypeShowsStatus,
       listsMaterial: customTypeListsMaterial,
     );
+    final timerDisplay = customTypeUsesTimerWidget
+        ? (customTypeTimerDisplay ?? MachineTimerDisplay.circle)
+        : null;
     setState(() {
       customItemTypes.add(customType);
       customItemTypes.sort((a, b) => a.name.compareTo(b.name));
@@ -38320,8 +39073,15 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       customTypeCanMarkDepleted = false;
       customTypeShowsStatus = false;
       customTypeListsMaterial = false;
+      customTypeTimerDisplay = null;
+      customTypeUsesTimerWidget = false;
     });
     widget.onCustomItemTypeAdded(customType);
+    if (timerDisplay != null) {
+      widget.onBuiltInTypeTimerDisplayChanged(
+        MapEntry('custom:${customType.id}', timerDisplay.name),
+      );
+    }
   }
 
   void _addProduct() {
@@ -38369,11 +39129,13 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       id: _newCatalogId('MT'),
       name: name,
       parentId: machineTypeParentId,
+      timerDisplay: machineTypeTimerDisplay,
     );
     setState(() {
       machineTypes.add(type);
       machineTypeName.clear();
       machineTypeParentId = null;
+      machineTypeTimerDisplay = null;
       selectedMachineTypeId ??= type.id;
     });
     widget.onMachineTypeAdded(type);
@@ -39221,6 +39983,7 @@ class _TypeNameEditorDialog extends StatefulWidget {
     required this.initialShowsStatus,
     required this.initialListsMaterial,
     required this.initialTimerDisplay,
+    required this.initialUsesTimerWidget,
     required this.showDepletionSetting,
     required this.showStatusSetting,
     required this.showMaterialListingSetting,
@@ -39234,6 +39997,7 @@ class _TypeNameEditorDialog extends StatefulWidget {
   final bool initialShowsStatus;
   final bool initialListsMaterial;
   final MachineTimerDisplay? initialTimerDisplay;
+  final bool initialUsesTimerWidget;
   final bool showDepletionSetting;
   final bool showStatusSetting;
   final bool showMaterialListingSetting;
@@ -39254,6 +40018,7 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
   late bool showsStatus = widget.initialShowsStatus;
   late bool listsMaterial = widget.initialListsMaterial;
   late MachineTimerDisplay? timerDisplay = widget.initialTimerDisplay;
+  late bool usesTimerWidget = widget.initialUsesTimerWidget;
 
   @override
   void dispose() {
@@ -39335,27 +40100,36 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
             ],
             if (widget.showTimerDisplaySetting) ...[
               const SizedBox(height: 12),
-              DropdownButtonFormField<MachineTimerDisplay?>(
-                key: const Key('edit-built-in-type-timer-display'),
-                initialValue: timerDisplay,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Timer display',
-                  helperText: 'Use Personalization unless this type needs its own style.',
-                ),
-                items: [
-                  const DropdownMenuItem<MachineTimerDisplay?>(
-                    value: null,
-                    child: Text('Use Personalization'),
-                  ),
-                  for (final display in MachineTimerDisplay.values)
-                    DropdownMenuItem<MachineTimerDisplay?>(
-                      value: display,
-                      child: Text(display.label),
-                    ),
-                ],
-                onChanged: (value) => setState(() => timerDisplay = value),
+              SwitchListTile.adaptive(
+                key: const Key('edit-built-in-type-uses-timer-widget'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Uses timer widget'),
+                subtitle: const Text('Enable a timer widget for this type.'),
+                value: usesTimerWidget,
+                onChanged: (value) => setState(() {
+                  usesTimerWidget = value;
+                  if (value && timerDisplay == null) {
+                    timerDisplay = MachineTimerDisplay.circle;
+                  }
+                }),
               ),
+              if (usesTimerWidget) ...[
+                const SizedBox(height: 10),
+                DropdownButtonFormField<MachineTimerDisplay>(
+                  key: const Key('edit-built-in-type-timer-display'),
+                  initialValue: timerDisplay ?? MachineTimerDisplay.circle,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Timer style'),
+                  items: [
+                    for (final display in MachineTimerDisplay.values)
+                      DropdownMenuItem(
+                        value: display,
+                        child: Text(display.label),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => timerDisplay = value),
+                ),
+              ],
             ],
           ],
         ),
@@ -39376,6 +40150,7 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
             canMarkDepleted: canMarkDepleted,
             showsStatus: showsStatus,
             listsMaterial: listsMaterial,
+            usesTimerWidget: usesTimerWidget,
             timerDisplay: timerDisplay,
           ));
         },
@@ -39389,10 +40164,14 @@ class _TypeNameEditorDialogState extends State<_TypeNameEditorDialog> {
 class _CustomItemTypeEditorDialog extends StatefulWidget {
   const _CustomItemTypeEditorDialog({
     required this.type,
+    required this.initialUsesTimerWidget,
+    required this.initialTimerDisplay,
     required this.existingNames,
   });
 
   final CustomItemTypeRecord type;
+  final bool initialUsesTimerWidget;
+  final MachineTimerDisplay? initialTimerDisplay;
   final Set<String> existingNames;
 
   @override
@@ -39413,6 +40192,8 @@ class _CustomItemTypeEditorDialogState
   late bool canMarkDepleted = widget.type.canMarkDepleted;
   late bool showsStatus = widget.type.showsStatus;
   late bool listsMaterial = widget.type.listsMaterial;
+  late bool usesTimerWidget = widget.initialUsesTimerWidget;
+  late MachineTimerDisplay? timerDisplay = widget.initialTimerDisplay;
 
   @override
   void dispose() {
@@ -39481,6 +40262,37 @@ class _CustomItemTypeEditorDialogState
                 onChanged: (value) => setState(() => showsStatus = value),
               ),
               const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                key: const Key('edit-custom-type-uses-timer-widget'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Uses timer widget'),
+                subtitle: const Text('Enable a timer widget for this type.'),
+                value: usesTimerWidget,
+                onChanged: (value) => setState(() {
+                  usesTimerWidget = value;
+                  if (value && timerDisplay == null) {
+                    timerDisplay = MachineTimerDisplay.circle;
+                  }
+                }),
+              ),
+              if (usesTimerWidget) ...[
+                const SizedBox(height: 10),
+                DropdownButtonFormField<MachineTimerDisplay>(
+                  key: const Key('edit-custom-type-timer-display'),
+                  initialValue: timerDisplay ?? MachineTimerDisplay.circle,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Timer style'),
+                  items: [
+                    for (final display in MachineTimerDisplay.values)
+                      DropdownMenuItem(
+                        value: display,
+                        child: Text(display.label),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => timerDisplay = value),
+                ),
+              ],
+              const SizedBox(height: 12),
               _TypeIconSelector(
                 key: const Key('edit-custom-type-icon'),
                 value: iconKey,
@@ -39516,9 +40328,8 @@ class _CustomItemTypeEditorDialogState
               .where((value) => value.isNotEmpty)
               .toSet()
               .toList();
-          Navigator.pop(
-            context,
-            CustomItemTypeRecord(
+          Navigator.pop(context, (
+            type: CustomItemTypeRecord(
               id: widget.type.id,
               name: name.text.trim(),
               contextualFields: contextualFields,
@@ -39527,7 +40338,9 @@ class _CustomItemTypeEditorDialogState
               showsStatus: showsStatus,
               listsMaterial: listsMaterial,
             ),
-          );
+            usesTimerWidget: usesTimerWidget,
+            timerDisplay: timerDisplay,
+          ));
         },
         icon: const Icon(Icons.save_outlined),
         label: const Text('Save'),

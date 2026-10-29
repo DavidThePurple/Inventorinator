@@ -9449,6 +9449,114 @@ class _RgbAccentIcon extends StatelessWidget {
   }
 }
 
+class _VendorLogoControl extends StatefulWidget {
+  const _VendorLogoControl({
+    required this.logo,
+    required this.onPressed,
+    required this.tooltip,
+  });
+
+  final Uint8List? logo;
+  final VoidCallback onPressed;
+  final String tooltip;
+
+  @override
+  State<_VendorLogoControl> createState() => _VendorLogoControlState();
+}
+
+class _VendorLogoControlState extends State<_VendorLogoControl> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fallbackPalette =
+        Theme.of(context).extension<InventorinatorColors>() ??
+        InventorinatorColors.palettes[AppColorTheme.darkPurple]!;
+    final notifier = _RgbAccentScope.notifierOf(context);
+    Widget control(InventorinatorColors palette) {
+      final accent = palette.accent;
+      final radius = BorderRadius.circular(_designRadius(context, 11));
+      return Tooltip(
+        message: widget.tooltip,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hovering = true),
+          onExit: (_) => setState(() => _hovering = false),
+          child: Semantics(
+            button: true,
+            label: widget.tooltip,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onPressed,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: 64,
+                height: 64,
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: _isInventoryCraft(context)
+                      ? scheme.surfaceContainerHighest
+                      : const Color(0xff0d1119),
+                  borderRadius: radius,
+                  border: Border.all(
+                    color: _hovering ? accent : Colors.transparent,
+                  ),
+                  boxShadow: _hovering
+                      ? [
+                          BoxShadow(
+                            color: accent.withValues(alpha: .34),
+                            blurRadius: 10,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    widget.logo == null
+                        ? Icon(Icons.storefront_outlined, color: accent)
+                        : ClipRRect(
+                            borderRadius: BorderRadius.circular(7),
+                            child: Image.memory(
+                              widget.logo!,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                    IgnorePointer(
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 120),
+                        opacity: _hovering ? 1 : 0,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: scheme.surface.withValues(alpha: .78),
+                          ),
+                          child: Icon(
+                            Icons.swap_horiz_rounded,
+                            color: accent,
+                            size: 24,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (notifier == null) return control(fallbackPalette);
+    return ValueListenableBuilder<InventorinatorColors?>(
+      valueListenable: notifier,
+      builder: (context, flowingPalette, _) =>
+          control(flowingPalette ?? fallbackPalette),
+    );
+  }
+}
+
 class _AnimatedResponsiveSliverGrid extends StatefulWidget {
   const _AnimatedResponsiveSliverGrid({
     required this.itemCount,
@@ -35410,6 +35518,43 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
   FocusNode _vendorNameFocusNode(VendorRecord vendor) => _vendorNameFocusNodes
       .putIfAbsent(vendor.id, () => FocusNode(canRequestFocus: false));
 
+  Widget _vendorLogoControl({
+    required Uint8List? logo,
+    required VoidCallback onPressed,
+    required String tooltip,
+  }) => _VendorLogoControl(logo: logo, onPressed: onPressed, tooltip: tooltip);
+
+  Widget _manufacturerSwitch({
+    required Key key,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 30,
+      height: 17,
+      child: FittedBox(
+        fit: BoxFit.fill,
+        child: SwitchTheme(
+          data: SwitchThemeData(
+            trackColor: const WidgetStatePropertyAll(Colors.transparent),
+            trackOutlineColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.selected)
+                  ? scheme.primary
+                  : scheme.outlineVariant,
+            ),
+            thumbColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.selected)
+                  ? scheme.primary
+                  : scheme.onSurfaceVariant,
+            ),
+          ),
+          child: Switch(key: key, value: value, onChanged: onChanged),
+        ),
+      ),
+    );
+  }
+
   Widget _catalogFormCard({
     required String title,
     required String description,
@@ -35488,34 +35633,30 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
       ),
       child: Row(
         children: [
-          InkWell(
-            onTap: onLogoPressed,
-            child: Tooltip(
-              message: onLogoPressed == null ? '' : 'Change vendor logo',
-              child: Container(
-                width: logoSize,
-                height: logoSize,
-                padding: const EdgeInsets.all(5),
-                decoration: BoxDecoration(
-                  color: technical
-                      ? scheme.surfaceContainerHighest
-                      : const Color(0xff0d1119),
-                  borderRadius: BorderRadius.circular(
-                    _designRadius(context, 11),
-                  ),
-                ),
-                child: logo == null
-                    ? Icon(
-                        fallbackIcon,
-                        color: Theme.of(context).colorScheme.primary,
-                      )
-                    : ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: Image.memory(logo, fit: BoxFit.contain),
-                      ),
+          if (onLogoPressed != null)
+            _vendorLogoControl(
+              logo: logo,
+              onPressed: onLogoPressed,
+              tooltip: 'Change vendor logo',
+            )
+          else
+            Container(
+              width: logoSize,
+              height: logoSize,
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: technical
+                    ? scheme.surfaceContainerHighest
+                    : const Color(0xff0d1119),
+                borderRadius: BorderRadius.circular(_designRadius(context, 11)),
               ),
+              child: logo == null
+                  ? Icon(fallbackIcon, color: scheme.primary)
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(7),
+                      child: Image.memory(logo, fit: BoxFit.contain),
+                    ),
             ),
-          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -35768,7 +35909,7 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
 
   Widget _vendorCatalogSection() => ExpansionTile(
     key: const Key('catalog-vendors-section'),
-    leading: const Icon(Icons.storefront_outlined),
+    leading: const _RgbAccentIcon(Icons.storefront_outlined),
     title: Text('Vendors (${vendors.length})'),
     subtitle: const Text('Stores and suppliers you purchase from'),
     childrenPadding: const EdgeInsets.fromLTRB(0, 8, 0, 18),
@@ -35778,38 +35919,78 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
         description: 'Create a store or supplier used when sourcing products.',
         icon: Icons.add_business_outlined,
         children: [
-          TextField(
-            key: const Key('new-vendor-name'),
-            controller: vendorName,
-            decoration: const InputDecoration(
-              labelText: 'Vendor name',
-              hintText: 'Printed Solid',
-            ),
-          ),
-          const SizedBox(height: 12),
-          _ImagePickerButton(
-            key: const Key('vendor-logo-picker'),
-            label: 'Vendor logo',
-            bytes: vendorLogo,
-            fallbackIcon: Icons.storefront_outlined,
-            onChanged: (bytes) => setState(() => vendorLogo = bytes),
-          ),
-          const SizedBox(height: 6),
-          Material(
-            type: MaterialType.transparency,
-            child: SwitchListTile(
-              key: const Key('vendor-is-brand'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Manufacturer'),
-              value: vendorAlsoBrand,
-              onChanged: (value) => setState(() {
-                vendorAlsoBrand = value;
-                if (!value) {
-                  vendorBrandCategories.clear();
-                  vendorBrandCustomTypeIds.clear();
-                }
-              }),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              KeyedSubtree(
+                key: const Key('vendor-logo-picker'),
+                child: _vendorLogoControl(
+                  logo: vendorLogo,
+                  tooltip: vendorLogo == null
+                      ? 'Choose vendor logo'
+                      : 'Change vendor logo',
+                  onPressed: () async {
+                    final bytes = await _pickImageBytes();
+                    if (bytes != null && mounted) {
+                      setState(() => vendorLogo = bytes);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  children: [
+                    TextField(
+                      key: const Key('new-vendor-name'),
+                      controller: vendorName,
+                      decoration: const InputDecoration(
+                        labelText: 'Vendor name',
+                        hintText: 'Printed Solid',
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        _manufacturerSwitch(
+                          key: const Key('vendor-is-brand'),
+                          value: vendorAlsoBrand,
+                          onChanged: (value) => setState(() {
+                            vendorAlsoBrand = value;
+                            if (!value) {
+                              vendorBrandCategories.clear();
+                              vendorBrandCustomTypeIds.clear();
+                            }
+                          }),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Manufacturer',
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                            fontSize: 12,
+                            fontFamily: _isInventoryCraft(context)
+                                ? 'monospace'
+                                : null,
+                          ),
+                        ),
+                        const Spacer(),
+                        Tooltip(
+                          message: 'Save and Add Vendor',
+                          child: FilledButton(
+                            key: const Key('add-vendor'),
+                            onPressed: _addVendor,
+                            child: const Icon(Icons.save_outlined),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           if (vendorAlsoBrand) ...[
             const Text(
@@ -35895,29 +36076,21 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
             ],
             const SizedBox(height: 14),
           ],
-          Align(
-            alignment: Alignment.centerRight,
-            child: Tooltip(
-              message: 'Save and Add Vendor',
-              child: FilledButton(
-                key: const Key('add-vendor'),
-                onPressed: _addVendor,
-                child: const Icon(Icons.save_outlined),
-              ),
-            ),
-          ),
         ],
       ),
       const Divider(height: 28),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          'EXISTING VENDORS',
-          style: TextStyle(
-            color: const Color(0xff929aac),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.1,
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'EXISTING VENDORS',
+            style: TextStyle(
+              color: const Color(0xff929aac),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+            ),
           ),
         ),
       ),
@@ -36051,18 +36224,11 @@ class _CatalogManagerDialogState extends State<CatalogManagerDialog> {
                     detailsWidget: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        SizedBox(
-                          width: 30,
-                          height: 17,
-                          child: FittedBox(
-                            fit: BoxFit.fill,
-                            child: Switch(
-                              key: Key('vendor-is-brand-${vendor.id}'),
-                              value: vendor.isBrand,
-                              onChanged: (value) =>
-                                  _applyVendorEdit(vendor, isBrand: value),
-                            ),
-                          ),
+                        _manufacturerSwitch(
+                          key: Key('vendor-is-brand-${vendor.id}'),
+                          value: vendor.isBrand,
+                          onChanged: (value) =>
+                              _applyVendorEdit(vendor, isBrand: value),
                         ),
                         const SizedBox(width: 2),
                         Text(
